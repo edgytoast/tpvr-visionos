@@ -1015,6 +1015,52 @@ inline HudQuadCorners computeBillboardPose(const cXyz& smoothedWorldForward, flo
     return c;
 }
 
+// Apple Vision Pro, a menu over the room: wipes the open eye to transparent black
+// (colour and alpha 0) whatever was drawn into it, so only the menus drawn after
+// this show, over the room. A quad far wider than any view, a metre in front of
+// the eyes, written without blending.
+inline void clearEyeToTransparent() {
+    view_class* view = dComIfGd_getView();
+    assert(view != nullptr && "VR: clearEyeToTransparent() called outside gameplay?");
+
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(0);
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+
+    constexpr GXColor kTransparent = {0, 0, 0, 0};
+    GXSetNumChans(0);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColor(GX_TEVREG0, kTransparent);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, kTransparent);
+
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_SET);
+    GXSetColorUpdate(GX_ENABLE);
+    GXSetAlphaUpdate(GX_ENABLE);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+
+    const float d = 1.0f * kHudUnitsPerMetre;
+    const float h = 100.0f * kHudUnitsPerMetre;
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(-h, h, -d);
+    GXPosition3f32(h, h, -d);
+    GXPosition3f32(h, -h, -d);
+    GXPosition3f32(-h, -h, -d);
+    GXEnd();
+    GXSetAlphaUpdate(GX_DISABLE);
+}
+
 inline HudQuadCorners computeHudPose() {
     const float halfW = kHudWidthMeters * 0.5f * kHudUnitsPerMetre;
     const float halfH = kHudHeightMeters * 0.5f * kHudUnitsPerMetre;
@@ -1026,7 +1072,11 @@ inline HudQuadCorners computeHudPose() {
 // the flat mDoGph_drawHud2D() call there while in VR). Must run after the
 // eye's real scene draw (so it draws on top) and needs `hudTex` already
 // populated for this frame by mDoGph_gInf_c::captureHudBillboard().
-inline void drawHudBillboard(TGXTexObj* hudTex) {
+// `writeAlpha` (Apple Vision Pro, TP's own menu over the room): the key is
+// steeper -- only near-black reads as see-through, so dark panels stay solid
+// against the room -- and the panel's colour is premultiplied by it and its
+// alpha written into the eye, which is transparent everywhere else.
+inline void drawHudBillboard(TGXTexObj* hudTex, bool writeAlpha = false) {
     view_class* view = dComIfGd_getView();
     assert(view != nullptr && "VR: drawHudBillboard() called outside gameplay?");
 
@@ -1071,7 +1121,7 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
     GXSetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_GREEN);
     GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_BLUE);
 
-    GXSetNumTevStages(3);
+    GXSetNumTevStages(writeAlpha ? 5 : 3);
 
     // Stage 0: real color; alpha = texture's red channel (via SWAP1).
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -1095,9 +1145,33 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
     GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
     GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_TEXA, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, writeAlpha ? GX_CS_SCALE_4 : GX_CS_SCALE_1, GX_TRUE,
+                    GX_TEVPREV);
+    if (writeAlpha) {
+        // Key x8 in all (x4 above, x2 here): TP's menus are dark art -- deep blue
+        // fog, grey stone -- that only black should let the room through.
+        GXSetTevOrder(GX_TEVSTAGE3, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+        GXSetTevSwapMode(GX_TEVSTAGE3, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+        GXSetTevColorOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE3, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_2, GX_TRUE, GX_TEVPREV);
+        // Premultiply: colour * key.
+        GXSetTevOrder(GX_TEVSTAGE4, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+        GXSetTevSwapMode(GX_TEVSTAGE4, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevColorIn(GX_TEVSTAGE4, GX_CC_ZERO, GX_CC_CPREV, GX_CC_APREV, GX_CC_ZERO);
+        GXSetTevColorOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE4, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    }
 
-    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
+    if (writeAlpha) {
+        // Premultiplied "over" on colour and alpha alike.
+        GXSetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_INVSRCALPHA, GX_LO_SET);
+        GXSetAlphaUpdate(GX_ENABLE);
+    } else {
+        GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
+    }
     // Disabled Z-test/write: the panel always draws on top of the 3D world,
     // same as the flat ortho HUD it replaces (never occluded by scene
     // geometry -- getting close to a wall shouldn't make hearts disappear).
@@ -1114,6 +1188,7 @@ inline void drawHudBillboard(TGXTexObj* hudTex) {
     GXPosition3f32(c.x[2], c.y[2], c.z[2]); GXTexCoord2f32(1.0f, 1.0f);
     GXPosition3f32(c.x[3], c.y[3], c.z[3]); GXTexCoord2f32(0.0f, 1.0f);
     GXEnd();
+    GXSetAlphaUpdate(GX_DISABLE);
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,7 +1358,10 @@ inline void drawMenuBillboardBackdrop(float aspectHeightOverWidth) {
 // ensureAndCopyMenuBillboardTexture() (vr_main.cpp, pre-eye-loop window).
 // Draw drawMenuBillboardBackdrop() immediately before this for a
 // guaranteed-opaque panel background (see its own comment).
-inline void drawMenuBillboard(TGXTexObj* menuTex, float aspectHeightOverWidth) {
+// `writeAlpha` (Apple Vision Pro, a menu over the room): also write the panel's
+// premultiplied alpha into the eye, which is transparent everywhere else, so
+// the provider can blend the panel over the room.
+inline void drawMenuBillboard(TGXTexObj* menuTex, float aspectHeightOverWidth, bool writeAlpha = false) {
     view_class* view = dComIfGd_getView();
     assert(view != nullptr && "VR: drawMenuBillboard() called outside gameplay?");
 
@@ -1324,6 +1402,8 @@ inline void drawMenuBillboard(TGXTexObj* menuTex, float aspectHeightOverWidth) {
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
 
     GXLoadTexObj(menuTex, GX_TEXMAP0);
+    // ONE/INVSRCALPHA on alpha too gives premultiplied "over": a + dst * (1 - a).
+    GXSetAlphaUpdate(writeAlpha ? GX_ENABLE : GX_DISABLE);
 
     const HudQuadCorners c = computeMenuBillboardPose(aspectHeightOverWidth);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
@@ -1332,6 +1412,7 @@ inline void drawMenuBillboard(TGXTexObj* menuTex, float aspectHeightOverWidth) {
     GXPosition3f32(c.x[2], c.y[2], c.z[2]); GXTexCoord2f32(1.0f, 1.0f);
     GXPosition3f32(c.x[3], c.y[3], c.z[3]); GXTexCoord2f32(0.0f, 1.0f);
     GXEnd();
+    GXSetAlphaUpdate(GX_DISABLE);
 }
 
 // Real render-target aspect ratio (height/width), updated once per frame by

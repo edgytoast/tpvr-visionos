@@ -188,6 +188,11 @@ public:
     void onPauseWindow() { mPauseWindow = true; }
     void offPauseWindow() { mPauseWindow = false; }
     bool isPauseWindow() { return mPauseWindow != false; }
+#if TARGET_PC
+    // Which menu is up (dMw_Status). The VR layer shows the full-screen ones
+    // over the room on Apple Vision Pro (dusk::vr::isMenuPassthroughFrame()).
+    u8 getMenuProc() const { return mMenuProc; }
+#endif
     void onShowFlag() { mShowFlag |= 1; }
     void offShowFlag() { mShowFlag &= ~1; }
     bool isShowFlag() { return (mShowFlag & 1) != 0; }

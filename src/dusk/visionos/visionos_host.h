@@ -53,6 +53,22 @@ void dusk_visionos_request_quit(void);
 // The last error the bridge or the provider reported, or "".
 const char* dusk_visionos_last_error(void);
 
+// Whether the immersive space shows the room wherever the game's frames are
+// transparent (it opened mixed or progressive). The game then hides Hyrule behind
+// its menus -- Dusklight's and TP's own full-screen ones -- so they float in the
+// room. visionOS takes an immersive space's style when it opens and ignores later
+// changes, so the app decides this before the space opens. Call before starting
+// the game.
+void dusk_visionos_set_room_behind_menus(bool enabled);
+
+// A mixed space has no visionOS movement boundary. With this on, the provider
+// fades Hyrule into the room as you walk away from where you started, the way a
+// full space does. Call before starting the game.
+void dusk_visionos_set_safety_boundary(bool enabled);
+
+// Game -> bridge (not exported): dusk_visionos_set_room_behind_menus's value.
+bool dusk_visionos_room_behind_menus(void);
+
 #ifdef __cplusplus
 }
 #endif

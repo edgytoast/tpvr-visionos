@@ -2418,7 +2418,13 @@ int mDoGph_Painter() {
     #endif
 
     dComIfGp_setCurrentGrafPort(&ortho);
-    GX_DEBUG_GROUP(dComIfGd_drawCopy2D);
+    // Apple Vision Pro, a Dusklight menu over the room (dusk::vr::isMenuPassthroughFrame()):
+    // nothing of the game is drawn into the eye, which stays transparent around the
+    // menu the VR layer draws after this.
+    const bool vrMenuPassthrough = dusk::vr::isMenuPassthroughFrame();
+    if (!vrMenuPassthrough) {
+        GX_DEBUG_GROUP(dComIfGd_drawCopy2D);
+    }
 
     #if DEBUG
     // "↓↓↓↓↓↓↓↓↓↓ CPU time measuring start ↓↓↓↓↓↓↓↓↓↓"
@@ -2428,7 +2434,7 @@ int mDoGph_Painter() {
     fapGm_HIO_c::stopCpuTimer("画面キャプチャー用２Ｄ描画まで（レンダリング）");
     #endif
 
-    if (dComIfGp_getWindowNum() != 0) {
+    if (dComIfGp_getWindowNum() != 0 && !vrMenuPassthrough) {
         dDlst_window_c* window_p = dComIfGp_getWindow(0);
         int camera_id = window_p->getCameraID();
         camera_process_class* camera_p = dComIfGp_getCamera(camera_id);
@@ -3065,7 +3071,7 @@ int mDoGph_Painter() {
     #endif
 
     #if TARGET_PC
-    if (dusk::getSettings().game.enableMirrorMode)
+    if (dusk::getSettings().game.enableMirrorMode && !vrMenuPassthrough)
     #elif PLATFORM_WII
     if (data_8053a730)
     #endif
@@ -3116,6 +3122,8 @@ int mDoGph_Painter() {
     if (!dusk::vr::isRenderingToHeadset()) {
         mDoGph_drawHud2D();
     } else {
+        // Over the room, this is TP's own full-screen menu or nothing (see
+        // dusk::vr::drawHudBillboard()).
         dusk::vr::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj());
     }
 

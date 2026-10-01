@@ -40,6 +40,30 @@ struct LauncherView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
 
+            VStack(alignment: .leading, spacing: 10) {
+                if GameModel.progressiveAvailable {
+                    Picker("Immersion", selection: $model.immersion) {
+                        ForEach(GameModel.Immersion.allCases) { immersion in
+                            Text(immersion.title).tag(immersion)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+                if model.immersion == .progressive && GameModel.progressiveAvailable {
+                    Text("Hyrule opens through a portal in your room. Turn the Digital Crown to widen or narrow it.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Toggle("Show my room around menus", isOn: $model.roomBehindMenus)
+                    Text(model.roomBehindMenus
+                         ? "Pause and Dusklight menus float in your room. Walk more than about 1.2 m from where you started and Hyrule fades into the room."
+                         : "Hyrule stays around you in menus too, with visionOS's own full-immersion boundary.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .disabled(model.phase != .idle)
+
             if !model.message.isEmpty {
                 Text(model.message)
                     .font(.callout)

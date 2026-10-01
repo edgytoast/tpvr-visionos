@@ -54,6 +54,12 @@ bool isRenderingToHeadset();
 // captureMapCopy2D() (m_Do_graphic.cpp) already render into.
 bool isEyePassOpen();
 
+// Apple Vision Pro, a space that shows the room: true inside an eye pass of a frame
+// that shows a Dusklight menu over the room instead of Hyrule. mDoGph_Painter()
+// then draws neither the world nor the HUD, so the eye image stays transparent
+// (alpha 0) around the menu. Always false elsewhere.
+bool isMenuPassthroughFrame();
+
 // Only meaningful while isRenderingToHeadset() is true (returns the last
 // computed values otherwise, harmlessly stale). The smallest symmetric
 // fovy/aspect frustum that fully contains the current eye's real asymmetric

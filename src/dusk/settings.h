@@ -297,7 +297,8 @@ struct UserSettings {
         // stays one toggle away for A/B.
         ConfigVar<bool> vrSinglePassStereo;
         // Per-axis scale applied to the runtime's recommended eye image size
-        // (0.5..1.0). The standalone headset is GPU-bound on pixel count
+        // (0.5..1.0; up to 1.5 on Apple Vision Pro, where above 1.0 it
+        // supersamples). The standalone headset is GPU-bound on pixel count
         // (2026-09-20 profiling); the runtime upscales the smaller image.
         // Read once at VR startup (sizes the swapchain), so it takes effect
         // on the next launch.
@@ -572,6 +573,9 @@ struct UserSettings {
         // animated ones (dusk::interp::material::has_recorded_light_view()).
         // Default on; off trades lighting accuracy for CPU time.
         ConfigVar<bool> vrAccurateObjectLighting;
+        // Apple Vision Pro: anti-aliasing the OpenXR provider applies to the
+        // eye images as it composites them (0 off, 1 FXAA, 2 SMAA). Live.
+        ConfigVar<int> vrAntiAliasing;
 
         // Audio
         ConfigVar<bool> noLowHpSound;

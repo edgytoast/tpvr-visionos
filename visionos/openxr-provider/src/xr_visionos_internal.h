@@ -145,6 +145,42 @@ struct ComposedLayer {
     bool headLocked = false;
 };
 
+// SMAA 1x over a projection layer's image (xr_visionos_smaa.mm), before the
+// compositor draws it. One target per slot: a frame whose eyes are different
+// images smooths each into its own copy.
+class Smaa final {
+public:
+    // Encodes the passes into `commandBuffer` and returns the smoothed copy of
+    // `source`, or `source` itself when SMAA can't run.
+    id<MTLTexture> Encode(id<MTLCommandBuffer> commandBuffer, id<MTLTexture> source, size_t slot);
+
+private:
+    struct Target {
+        NSUInteger width = 0;
+        NSUInteger height = 0;
+        MTLPixelFormat format = MTLPixelFormatInvalid;
+        id<MTLRenderPipelineState> edges = nil;
+        id<MTLRenderPipelineState> weights = nil;
+        id<MTLRenderPipelineState> blend = nil;
+        id<MTLTexture> edgesTex = nil;
+        id<MTLTexture> blendTex = nil;
+        id<MTLTexture> output = nil;
+    };
+    bool Prepare(id<MTLDevice> device);
+    bool PrepareTarget(Target& target, id<MTLDevice> device, id<MTLTexture> source);
+    id<MTLTexture> GammaView(id<MTLTexture> source);
+    static void EncodePass(id<MTLCommandBuffer> commandBuffer, id<MTLRenderPipelineState> pipeline,
+                           id<MTLTexture> target, NSArray<id<MTLTexture>>* inputs, NSString* label);
+
+    id<MTLLibrary> m_library = nil;
+    bool m_failed = false;
+    id<MTLTexture> m_areaTex = nil;
+    id<MTLTexture> m_searchTex = nil;
+    std::array<Target, kViewCount> m_targets{};
+    // Each swapchain image seen through its non-sRGB format, for the edge pass.
+    std::unordered_map<void*, id<MTLTexture>> m_gammaViews;
+};
+
 class Compositor final {
 public:
     static Compositor& Get();
@@ -181,6 +217,10 @@ public:
     bool HandsAt(int64_t timeNanos, std::array<HandSample, 2>& hands) noexcept;
     bool HandTrackingAuthorized() const noexcept { return m_handTrackingAuthorized.load(); }
 
+    // 0 off, 1 FXAA, 2 SMAA: applied to projection layers as they are composited.
+    void SetAntiAliasing(int mode) noexcept { m_antiAliasing.store(mode); }
+    void SetSafetyBoundary(bool enabled) noexcept { m_safetyBoundary.store(enabled); }
+
     id<MTLDevice> Device() const noexcept { return m_device; }
     id<MTLCommandQueue> Queue() const noexcept { return m_queue; }
 
@@ -191,7 +231,12 @@ private:
     void ReadViewGeometry(cp_drawable_t drawable);
     void DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer, const std::vector<ComposedLayer>& layers,
                     bool alphaBlend, const simd_float4x4& worldFromDevice);
-    void PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alphaBlend);
+    void DrawLayersLayered(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer,
+                           const std::vector<ComposedLayer>& layers, bool alphaBlend,
+                           const simd_float4x4& worldFromDevice);
+    // `posed`: the drawable carries a device anchor, which the system's render
+    // context (the progressive portal) needs.
+    void PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alphaBlend, bool posed);
 
     mutable std::mutex m_mutex;
     cp_layer_renderer_t m_renderer = nullptr;
@@ -207,6 +252,8 @@ private:
     id<MTLCommandQueue> m_queue = nil;
     id<MTLRenderPipelineState> m_opaquePipeline = nil;
     id<MTLRenderPipelineState> m_blendPipeline = nil;
+    id<MTLRenderPipelineState> m_layeredOpaquePipeline = nil;
+    id<MTLRenderPipelineState> m_layeredBlendPipeline = nil;
     id<MTLDepthStencilState> m_depthState = nil;
     id<MTLSamplerState> m_sampler = nil;
     MTLPixelFormat m_pipelineColor = MTLPixelFormatInvalid;
@@ -224,6 +271,11 @@ private:
     ar_hand_anchor_t m_rightHandAt = nullptr;
     std::atomic_bool m_trackingStarted{false};
     std::atomic_bool m_handTrackingAuthorized{false};
+    std::atomic_int m_antiAliasing{0};
+    std::atomic_bool m_safetyBoundary{false};
+    // How much of the frame shows (1) against the room (0): the safety boundary's fade.
+    float m_visibility = 1.0f;
+    Smaa m_smaa;
 };
 
 // ---------------------------------------------------------------------------

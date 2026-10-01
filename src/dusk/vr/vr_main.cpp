@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -49,6 +50,11 @@
 #include "dusk/vr/vr_xr_submit.hpp"             // dusk::vr::Session
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
+#if DUSK_VR_XR_GRAPHICS_METAL
+#include "dusk/visionos/visionos_host.h"     // dusk_visionos_room_behind_menus
+#include "d/d_menu_window.h"                 // dMw_c -- TP's full-screen menus over the room
+#include "d/d_meter2_info.h"                 // dMeter2Info_getMenuWindowClass
+#endif
 
 // TEMP DIAGNOSTIC (VR black-screen-after-save investigation): plain,
 // unmangled, non-namespaced global mirroring g_renderedToHeadsetThisFrame
@@ -283,6 +289,14 @@ void logTickReasonOnChange(const char* reason) {
 // set true right before the per-eye draw loop runs, so the flag always
 // reflects what actually happened THIS frame, not a stale previous value.
 bool g_renderedToHeadsetThisFrame = false;
+// Apple Vision Pro, a space that shows the room (dusk_visionos_room_behind_menus):
+// this frame shows a menu over the room. The eye passes skip the world and HUD (mDoGph_Painter() checks
+// isMenuPassthroughFrame()), the menu billboard writes real alpha, and
+// submitFrame() blends the layer over the room. Reset every tick().
+bool g_menuPassthroughFrame = false;
+// ...and the menu is TP's own full-screen one (Collection, maps, save, options,
+// letters, fishing journal, skills, bugs), which is the HUD billboard.
+bool g_gameMenuPassthroughFrame = false;
 
 // NEW this session: carries per-frame state from tick() across the gap to
 // submitFrame() (called separately, after m_Do_main.cpp's aurora_end_frame()
@@ -330,6 +344,8 @@ struct PendingFrameSubmit {
     XrPosef spaceWarpDeltaPose{{0.f, 0.f, 0.f, 1.f}, {0.f, 0.f, 0.f}};
     float spaceWarpNearZ = 0.f;
     float spaceWarpFarZ = 0.f;
+    // A menu over the room (g_menuPassthroughFrame): blend by the eyes' alpha.
+    bool passthrough = false;
 };
 PendingFrameSubmit g_pendingSubmit;
 
@@ -465,11 +481,20 @@ bool isEyePassOpen() {
     return g_duskVREyePassOpen;
 }
 
+bool isMenuPassthroughFrame() {
+    return g_menuPassthroughFrame && g_duskVREyePassOpen;
+}
+
 void getEyeSymmetricFov(float* fovyDeg, float* aspect) {
     vr_render::getEyeSymmetricFov(fovyDeg, aspect);
 }
 
 void drawHudBillboard(TGXTexObj* hudTex) {
+    if (g_menuPassthroughFrame) {
+        // Over the room, tick() clears the eye after the painter and draws the
+        // HUD itself when it IS the menu (TP's own).
+        return;
+    }
     vr_render::drawHudBillboard(hudTex);
 }
 
@@ -1038,13 +1063,24 @@ bool startup() {
         // shared images, composition layer rects) reads g_eyeImageWidth/
         // Height instead of the runtime's recommended values.
         {
-            const float scale = std::clamp(dusk::getSettings().game.vrRenderScale.getValue(), 0.5f, 1.0f);
+#if DUSK_VR_XR_GRAPHICS_METAL
+            // Above 1.0 supersamples: the provider's compositor resamples the eyes
+            // into the drawable anyway, so a bigger image means cleaner edges.
+            constexpr float kMaxRenderScale = 1.5f;
+#else
+            constexpr float kMaxRenderScale = 1.0f;
+#endif
+            const float scale = std::clamp(dusk::getSettings().game.vrRenderScale.getValue(), 0.5f, kMaxRenderScale);
             const auto scaled = [scale](uint32_t v) {
                 const uint32_t s = static_cast<uint32_t>(static_cast<float>(v) * scale) & ~7u;
                 return std::max<uint32_t>(s, 64);
             };
             g_eyeImageWidth = scaled(configViews[0].recommendedImageRectWidth);
             g_eyeImageHeight = scaled(configViews[0].recommendedImageRectHeight);
+            // The swapchain holds both eyes side by side: keep it within the
+            // runtime's largest image.
+            g_eyeImageWidth = std::min<uint32_t>(g_eyeImageWidth, (configViews[0].maxImageRectWidth / 2) & ~7u);
+            g_eyeImageHeight = std::min<uint32_t>(g_eyeImageHeight, configViews[0].maxImageRectHeight & ~7u);
         }
         const uint32_t eyeWidth = g_eyeImageWidth;
         const uint32_t eyeHeight = g_eyeImageHeight;
@@ -1485,6 +1521,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_renderedToHeadsetThisFrame = false;
     g_duskVRRenderingToHeadset = false;
     g_duskVREyePassOpen = false;
+    g_menuPassthroughFrame = false;
+    g_gameMenuPassthroughFrame = false;
     // Recomputed further down on frames that read controller input; an early
     // return must not leave a stale "sword is swinging" armed.
     g_physicalSwordSwingActive = false;
@@ -1624,6 +1662,10 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // separate call/separate ConfigVar from the one above, never coupled.
     g_session->setSteamVrGammaCompensationExponent(
         dusk::getSettings().game.vrGammaCompensationSteamVr.getValue());
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // The provider smooths the eyes as it composites them (game.vrAntiAliasing).
+    xr_visionos_set_anti_aliasing(dusk::getSettings().game.vrAntiAliasing.getValue());
+#endif
 
     XrFrameBeginInfo beginInfo{XR_TYPE_FRAME_BEGIN_INFO};
     g_perfWaitFrameMs = perfMs(g_perfMark, PerfClock::now());
@@ -1847,6 +1889,30 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     // bug class that hit the hold-to-open timer and (per the user's own
     // A/B report) very likely the stick smoothing too.
     const bool menuVisible = dusk::ui::any_document_visible();
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // A menu over the room instead of Hyrule, when the space shows the room
+    // (the launcher's "Show my room around menus", or progressive immersion): a
+    // Dusklight one, or TP's own full-screen ones -- not the item ring, which
+    // belongs over the world.
+    if (dusk_visionos_room_behind_menus()) {
+        if (dMw_c* menuWindow = dMeter2Info_getMenuWindowClass()) {
+            const u8 proc = menuWindow->getMenuProc();
+            g_gameMenuPassthroughFrame = proc >= dMw_c::COLLECT_OPEN && proc <= dMw_c::INSECT_AGITHA_CLOSE;
+        }
+        g_menuPassthroughFrame = menuVisible || g_gameMenuPassthroughFrame;
+    }
+    {
+        static int s_lastPassthrough = -1;
+        const int state = (g_menuPassthroughFrame ? 1 : 0) | (g_gameMenuPassthroughFrame ? 2 : 0);
+        if (state != s_lastPassthrough) {
+            dMw_c* menuWindow = dMeter2Info_getMenuWindowClass();
+            VrLog.info("menu over the room: {} (Dusklight menu {}, game menu {}, menu proc {})",
+                       g_menuPassthroughFrame, menuVisible, g_gameMenuPassthroughFrame,
+                       menuWindow != nullptr ? static_cast<int>(menuWindow->getMenuProc()) : -1);
+            s_lastPassthrough = state;
+        }
+    }
+#endif
     {
         static bool s_menuWasVisibleLastRealFrame = false;
         if (menuVisible && !s_menuWasVisibleLastRealFrame) {
@@ -2974,16 +3040,29 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         g_perfEyePainterMs += perfMs(perfT2, perfT3);
 
         if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
-            if (link->getAimSightVisible()) {
+            if (link->getAimSightVisible() && !g_menuPassthroughFrame) {
                 vr_render::drawAimCrosshair(*link->getLineTopPosP());
             }
         }
+        if (g_menuPassthroughFrame) {
+            // A menu over the room: nothing of the game may show around it. The
+            // painter skips the world and HUD, but other passes still leave
+            // opaque pixels in the eye (TP's own menus do), so wipe it, then draw
+            // TP's menu -- the HUD -- with real alpha.
+            vr_render::clearEyeToTransparent();
+            if (g_gameMenuPassthroughFrame) {
+                vr_render::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj(), true);
+            }
+        }
         if (menuVisible) {
-            if (!dusk::ui::is_prelaunch_open()) {
+            // Over the room the panel needs no backdrop: the room is what shows
+            // around it.
+            if (!dusk::ui::is_prelaunch_open() && !g_menuPassthroughFrame) {
                 vr_render::drawMenuBillboardBackdrop(vr_render::g_menuBillboardAspectHeightOverWidth);
             }
             vr_render::drawMenuBillboard(&vr_render::g_menuBillboardTexObj,
-                                          vr_render::g_menuBillboardAspectHeightOverWidth);
+                                          vr_render::g_menuBillboardAspectHeightOverWidth,
+                                          g_menuPassthroughFrame);
         }
 
         PerfClock::time_point perfT4 = PerfClock::now();
@@ -3297,6 +3376,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_pendingSubmit.frameState = frameState;
     g_pendingSubmit.base = base;
     g_pendingSubmit.viewCount = viewCount;
+    g_pendingSubmit.passthrough = g_menuPassthroughFrame;
     g_hasPendingFrameSubmit = true;
     g_perfTickEnd = PerfClock::now();
 }
@@ -3433,13 +3513,18 @@ void submitFrame() {
     projLayer.space = g_pendingSubmit.base;
     projLayer.viewCount = g_pendingSubmit.viewCount;
     projLayer.views = g_pendingSubmit.projViews.data();
+    if (g_pendingSubmit.passthrough) {
+        // Only the menu wrote alpha (premultiplied); everywhere else is 0, the room.
+        projLayer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+    }
 
     const XrCompositionLayerBaseHeader* layers[] = {
         reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projLayer)};
 
     XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
     endInfo.displayTime = g_pendingSubmit.frameState.predictedDisplayTime;
-    endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+    endInfo.environmentBlendMode = g_pendingSubmit.passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
+                                                               : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
     endInfo.layerCount = 1;
     endInfo.layers = layers;
 

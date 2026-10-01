@@ -85,6 +85,15 @@ XrResult xr_visionos_swapchain_image_set_release_fence(XrSwapchain swapchain, ui
 // the virtual screen and the immersive window) or are opaque. Read at xrEndFrame.
 XrResult xr_visionos_set_frame_environment(XrSession session, bool alpha_blend);
 
+// Anti-aliasing the compositor applies to projection layers as it draws them
+// into the drawable: 0 off, 1 FXAA, 2 SMAA. Takes effect from the next frame.
+void xr_visionos_set_anti_aliasing(int mode);
+
+// A movement boundary for a mixed space whose frames cover the room (a mixed
+// space has none of its own): past about 1.2 m from the space's origin,
+// horizontally, every frame fades into the room, gone by 1.6 m. Off by default.
+void xr_visionos_set_safety_boundary(bool enabled);
+
 // App bridge -> provider: a spatial event of the immersive space (a pinch,
 // visionOS's look-and-pinch selection). visionOS never exposes the gaze itself,
 // but each pinch carries the ray from the eyes to where the user looked when it

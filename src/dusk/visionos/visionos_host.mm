@@ -35,6 +35,7 @@ std::string g_lastError;
 std::atomic_bool g_started{false};
 std::atomic_bool g_running{false};
 std::atomic_int g_exitCode{0};
+std::atomic_bool g_roomBehindMenus{false};
 
 void SetError(std::string message) {
     NSLog(@"[dusk::visionos] %s", message.c_str());
@@ -141,6 +142,18 @@ void dusk_visionos_request_quit(void) {
         event.type = SDL_EVENT_QUIT;
         SDL_PushEvent(&event);
     }
+}
+
+void dusk_visionos_set_room_behind_menus(bool enabled) {
+    g_roomBehindMenus.store(enabled);
+}
+
+bool dusk_visionos_room_behind_menus(void) {
+    return g_roomBehindMenus.load();
+}
+
+void dusk_visionos_set_safety_boundary(bool enabled) {
+    xr_visionos_set_safety_boundary(enabled);
 }
 
 const char* dusk_visionos_last_error(void) {

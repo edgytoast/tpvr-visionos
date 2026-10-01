@@ -1023,6 +1023,11 @@ int game_main(int argc, char* argv[]) {
                 dusk::config::save();
                 dusk::IsGameLaunched = true;
                 skipPreLaunchUI = true;
+                // The disc given on the command line replaces a saved one that no
+                // longer validates (on visionOS an update moves the app's data
+                // container, so the saved absolute path goes stale every
+                // reinstall); without this, --stage and --load-save were dropped.
+                forcePreLaunchUI = false;
             }
         } else {
             DuskLog.warn("DVD image from command line failed validation: {} (ValidationError={}), opening prelaunch UI",

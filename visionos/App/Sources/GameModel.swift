@@ -21,11 +21,68 @@ final class GameModel: ObservableObject {
         case failed(message: String)
     }
 
+    /// How the game surrounds you, picked in the launcher before Play.
+    enum Immersion: String, CaseIterable, Identifiable {
+        /// You stand in Hyrule, all around you.
+        case full
+        /// Hyrule through a portal in your room; the Digital Crown opens it wider
+        /// or closes it down (visionOS 26).
+        case progressive
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .full: "Full"
+            case .progressive: "Progressive"
+            }
+        }
+    }
+
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var disc: URL?
     @Published private(set) var importing = false
     @Published var message = ""
-    @Published var immersionStyle: any ImmersionStyle = .full
+    @Published var immersion: Immersion {
+        didSet { UserDefaults.standard.set(immersion.rawValue, forKey: Self.immersionKey) }
+    }
+    /// Full immersion with your room around the game's menus: Dusklight's and TP's
+    /// own full-screen ones float in the room, with Hyrule hidden behind them.
+    @Published var roomBehindMenus: Bool {
+        didSet { UserDefaults.standard.set(roomBehindMenus, forKey: Self.roomBehindMenusKey) }
+    }
+    /// The immersive space's style, observed by the scene (TPVRVisionApp).
+    let space = ImmersionSpaceStyle.shared
+
+    private static let immersionKey = "immersion"
+    private static let roomBehindMenusKey = "roomBehindMenus"
+
+    /// Progressive immersion needs the render context CompositorServices gained in
+    /// visionOS 26, which draws the portal's edge into the game's frames.
+    static var progressiveAvailable: Bool {
+        if #available(visionOS 26.0, *) { return true }
+        return false
+    }
+
+    /// Portrait, as in the SHAR port: the wide default portal cuts off what's below
+    /// eye level. The system's own range: a custom one showed nothing on the headset.
+    static var progressiveStyle: any ImmersionStyle {
+        if #available(visionOS 26.0, *) {
+            return ProgressiveImmersionStyle.progressive(aspectRatio: .portrait)
+        }
+        return .progressive
+    }
+
+    /// visionOS takes an immersive space's style when it opens; changing it later
+    /// is ignored. So the room behind the menus is decided here, before Play: Full
+    /// with the room is a mixed space whose game frames are opaque (as WiiCompiled
+    /// Vision opens by default), and only the menus' surroundings are see-through.
+    var playsProgressive: Bool { immersion == .progressive && Self.progressiveAvailable }
+    var playsMixed: Bool { !playsProgressive && roomBehindMenus }
+
+    func styleForPlay() -> any ImmersionStyle {
+        if playsProgressive { return Self.progressiveStyle }
+        return playsMixed ? .mixed : .full
+    }
 
     /// Disc images nod (the game's disc reader) opens; Dusklight wants GZ2E01 or GZ2P01.
     static let discExtensions: Set<String> = ["iso", "rvz", "gcm", "ciso", "gcz", "wia", "wbfs", "nfs", "tgc"]
@@ -34,6 +91,9 @@ final class GameModel: ObservableObject {
     private var watchdog: Timer?
 
     init() {
+        let saved = UserDefaults.standard.string(forKey: Self.immersionKey).flatMap(Immersion.init(rawValue:))
+        immersion = saved == .progressive && Self.progressiveAvailable ? .progressive : .full
+        roomBehindMenus = UserDefaults.standard.object(forKey: Self.roomBehindMenusKey) as? Bool ?? true
         // visionOS anchors an app's audio to its window by default, so the game
         // would fall silent once the launcher closes. Anchor it to the listener.
         try? AVAudioSession.sharedInstance().setIntendedSpatialExperience(
@@ -69,7 +129,7 @@ final class GameModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            var failure: String?
+            let failure: String?
             do {
                 if url.standardizedFileURL != destination.standardizedFileURL {
                     try? FileManager.default.removeItem(at: destination)
@@ -82,6 +142,7 @@ final class GameModel: ObservableObject {
                         try FileManager.default.copyItem(at: url, to: destination)
                     }
                 }
+                failure = nil
             } catch {
                 failure = error.localizedDescription
             }
@@ -94,7 +155,10 @@ final class GameModel: ObservableObject {
     }
 
     func markOpening() {
-        if phase == .idle { phase = .opening }
+        if phase == .idle {
+            phase = .opening
+            space.style = styleForPlay()
+        }
     }
 
     func openingFailed(_ reason: String) {
@@ -143,6 +207,12 @@ final class GameModel: ObservableObject {
     private func startGame() {
         guard phase == .opening || phase == .idle else { return }
         dusk_visionos_set_disc_path(disc?.path)
+        // Menus over the room in the mixed space (a progressive portal shows black
+        // where the game's frames are transparent, so menus stay as they were);
+        // and there, with no visionOS boundary, the provider's own: Hyrule fades
+        // into the room as you walk away from where you started.
+        dusk_visionos_set_room_behind_menus(playsMixed)
+        dusk_visionos_set_safety_boundary(playsMixed)
         if dusk_visionos_start_game() {
             phase = .running
             startWatchdog()
@@ -169,4 +239,12 @@ final class GameModel: ObservableObject {
             dusk_visionos_request_quit()
         }
     }
+}
+
+/// The immersive space's style, set at Play, before the space opens (the SHAR
+/// port's pattern).
+@Observable
+final class ImmersionSpaceStyle {
+    static let shared = ImmersionSpaceStyle()
+    var style: any ImmersionStyle = .full
 }

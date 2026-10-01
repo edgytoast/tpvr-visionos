@@ -52,10 +52,18 @@
 // Standalone VR (Quest) has no desktop window and no PC VR runtime, so the VR tab hides the
 // desktop-mirror toggle and the runtime-specific brightness sliders there. Keyed on
 // TARGET_ANDROID rather than TARGET_PC, since TARGET_PC is defined on every non-console build.
-#if defined(TARGET_ANDROID) || defined(__ANDROID__)
+#if defined(TARGET_ANDROID) || defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_VISION)
 #define VR_SETTINGS_STANDALONE true
 #else
 #define VR_SETTINGS_STANDALONE false
+#endif
+
+// Apple Vision Pro: the OpenXR provider (visionos/openxr-provider) composites the eyes
+// itself, which is where anti-aliasing and the room around menus come from.
+#if defined(__APPLE__) && TARGET_OS_VISION
+#define VR_SETTINGS_VISION_PRO true
+#else
+#define VR_SETTINGS_VISION_PRO false
 #endif
 
 namespace dusk::ui {
@@ -91,6 +99,12 @@ constexpr std::array kLetterboxModes = {
     "On",
     "Only During Gameplay",
     "Only During Cutscenes",
+};
+
+constexpr std::array kVrAntiAliasingLabels = {
+    "Off",
+    "FXAA",
+    "SMAA",
 };
 
 constexpr std::array kVrSwordHandLabels = {
@@ -957,6 +971,46 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             });
 #endif
 
+#if VR_SETTINGS_VISION_PRO
+        leftPane.add_section("Vision Pro");
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Anti-Aliasing",
+                .getValue =
+                    [] {
+                        const int mode = std::clamp(getSettings().game.vrAntiAliasing.getValue(), 0,
+                                                    static_cast<int>(kVrAntiAliasingLabels.size()) - 1);
+                        return kVrAntiAliasingLabels[mode];
+                    },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrAntiAliasing.getValue() !=
+                               getSettings().game.vrAntiAliasing.getDefaultValue();
+                    },
+            }),
+            rightPane, [](Pane& pane) {
+                for (int i = 0; i < static_cast<int>(kVrAntiAliasingLabels.size()); i++) {
+                    pane.add_button({
+                            .text = kVrAntiAliasingLabels[i],
+                            .isSelected = [i] { return getSettings().game.vrAntiAliasing.getValue() == i; },
+                        })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            getSettings().game.vrAntiAliasing.setValue(i);
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>Smooths jagged edges as the headset composites each eye. Takes effect "
+                    "immediately."
+                    "<br/><br/><b>FXAA:</b> fast, a little soft."
+                    "<br/><b>SMAA:</b> sharper and more thorough, costs more GPU time."
+                    "<br/><b>Off:</b> the game's own edges. (Default)"
+                    "<br/><br/>For the cleanest image, combine with a VR Render Resolution above "
+                    "100% (Performance).");
+            });
+#endif
+
         leftPane.add_section("Comfort");
         config_bool_select(leftPane, rightPane, getSettings().game.vrPositionalTracking,
             {
@@ -1191,6 +1245,14 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                             "the CPU work per frame, which is what the standalone headset needs to "
                             "hold a steady framerate. On by default; turn off if you see anything wrong in one eye."
             });
+#if VR_SETTINGS_VISION_PRO
+        config_percent_select(leftPane, rightPane, getSettings().game.vrRenderScale,
+            "VR Render Resolution",
+            "Renders each eye at this fraction of the headset's recommended resolution. "
+            "Above 100% supersamples: sharper, steadier edges for more GPU time. Below "
+            "100% buys GPU headroom. Takes effect the next time the game starts.",
+            50, 150, 5);
+#else
         config_percent_select(leftPane, rightPane, getSettings().game.vrRenderScale,
             "VR Render Resolution",
             "Renders each eye at this fraction of the headset's recommended resolution; "
@@ -1198,6 +1260,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             "more GPU headroom on the standalone headset -- 90% cuts the pixel count "
             "by a fifth. Takes effect the next time the game starts.",
             50, 100, 5);
+#endif
 
 #if !VR_SETTINGS_STANDALONE
         // Standalone renders through the native Quest runtime -- no SteamVR / Virtual Desktop /

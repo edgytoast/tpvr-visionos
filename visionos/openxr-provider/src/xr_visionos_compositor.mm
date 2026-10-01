@@ -111,6 +111,14 @@ const char* xr_visionos_last_error(void) {
     return copy.c_str();
 }
 
+void xr_visionos_set_anti_aliasing(int mode) {
+    mkw::vr::visionos::Compositor::Get().SetAntiAliasing(mode);
+}
+
+void xr_visionos_set_safety_boundary(bool enabled) {
+    mkw::vr::visionos::Compositor::Get().SetSafetyBoundary(enabled);
+}
+
 namespace mkw::vr::visionos {
 
 // ---------------------------------------------------------------------------
@@ -124,17 +132,34 @@ constexpr const char* kShaderSource = R"MSL(
 using namespace metal;
 
 struct Uniforms {
-    float4x4 mvp;      // layer corner (-0.5..0.5, z 0) -> clip
-    float4 uvRect;     // u0 v0 u1 v1 of the source rectangle
+    float4x4 mvp;        // layer corner (-0.5..0.5, z 0) -> clip
+    float4 uvRect;       // u0 v0 u1 v1 of the source rectangle
     float constantDepth; // NDC depth written when >= 0 (projection layers), else the transformed one
+    uint slice;          // LAYERED: the drawable slice this view renders to
+    uint viewport;       // LAYERED: the encoder viewport of this view
+};
+
+struct FragmentParams {
+    float2 texel; // 1 / source size
+    uint fxaa;    // smooth edges (projection layers, when anti-aliasing is FXAA)
+    uint opaque;  // the layer has no source-alpha flag: its alpha is not meaningful
+    float visibility; // the safety boundary's fade: 1 shows the frame, 0 the room
 };
 
 struct VertexOut {
     float4 position [[position]];
     float2 uv;
+#if LAYERED
+    uint slice [[render_target_array_index]];
+    uint viewport [[viewport_array_index]];
+#endif
 };
 
-vertex VertexOut layer_vertex(uint vid [[vertex_id]], constant Uniforms& u [[buffer(0)]]) {
+// One instance per view: `views` holds every view's uniforms, and a draw's base
+// instance picks the view (always 0 for the per-view passes).
+vertex VertexOut layer_vertex(uint vid [[vertex_id]], uint view [[instance_id]],
+                              constant Uniforms* views [[buffer(0)]]) {
+    constant Uniforms& u = views[view];
     const float2 corners[4] = { float2(-0.5, -0.5), float2(0.5, -0.5), float2(-0.5, 0.5), float2(0.5, 0.5) };
     const float2 c = corners[vid];
     VertexOut out;
@@ -144,12 +169,54 @@ vertex VertexOut layer_vertex(uint vid [[vertex_id]], constant Uniforms& u [[buf
     }
     // Texture rows run top to bottom; the layer's top edge (c.y = +0.5) samples v0.
     out.uv = float2(mix(u.uvRect.x, u.uvRect.z, c.x + 0.5), mix(u.uvRect.w, u.uvRect.y, c.y + 0.5));
+#if LAYERED
+    out.slice = u.slice;
+    out.viewport = u.viewport;
+#endif
     return out;
 }
 
+// Perceptual luma of the linear colour an sRGB texture returns.
+static float Luma(float3 colour) { return sqrt(dot(colour, float3(0.299, 0.587, 0.114))); }
+
+// FXAA 3.11, console variant (as in the SHAR port): four diagonal taps find an
+// edge, two or four along it smooth it. Cheap enough for two eyes at 90 Hz.
+static float3 Fxaa(texture2d<float> source, sampler s, float2 uv, float2 texel) {
+    const float3 rgbM = source.sample(s, uv).rgb;
+    const float lumaM = Luma(rgbM);
+    const float lumaNw = Luma(source.sample(s, uv + float2(-0.5, -0.5) * texel).rgb);
+    const float lumaSw = Luma(source.sample(s, uv + float2(-0.5, 0.5) * texel).rgb);
+    const float lumaNe = Luma(source.sample(s, uv + float2(0.5, -0.5) * texel).rgb) + 1.0 / 384.0;
+    const float lumaSe = Luma(source.sample(s, uv + float2(0.5, 0.5) * texel).rgb);
+    const float lumaMax = max(max(lumaNw, lumaSw), max(lumaNe, lumaSe));
+    const float lumaMin = min(min(lumaNw, lumaSw), min(lumaNe, lumaSe));
+    if (max(lumaMax, lumaM) - min(lumaMin, lumaM) < max(0.05, lumaMax * 0.125)) {
+        return rgbM;
+    }
+    const float swMinusNe = lumaSw - lumaNe, seMinusNw = lumaSe - lumaNw;
+    const float2 dir1 = normalize(float2(swMinusNe + seMinusNw, swMinusNe - seMinusNw));
+    const float3 rgbA = source.sample(s, uv - dir1 * texel * 0.5).rgb + source.sample(s, uv + dir1 * texel * 0.5).rgb;
+    const float2 dir2 = clamp(dir1 / (min(abs(dir1.x), abs(dir1.y)) * 8.0), -2.0, 2.0);
+    const float3 rgbB = (source.sample(s, uv - dir2 * texel * 2.0).rgb + source.sample(s, uv + dir2 * texel * 2.0).rgb) * 0.25 +
+                        rgbA * 0.25;
+    const float lumaB = Luma(rgbB);
+    return (lumaB < lumaMin || lumaB > lumaMax) ? rgbA * 0.5 : rgbB;
+}
+
 fragment float4 layer_fragment(VertexOut in [[stage_in]], texture2d<float> image [[texture(0)]],
-                               sampler s [[sampler(0)]]) {
-    return image.sample(s, in.uv);
+                               sampler s [[sampler(0)]], constant FragmentParams& p [[buffer(0)]]) {
+    float4 colour = image.sample(s, in.uv);
+    if (p.fxaa != 0) {
+        colour.rgb = Fxaa(image, s, in.uv, p.texel);
+    }
+    // OpenXR: without XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT a layer
+    // is opaque whatever its alpha holds. Games leave alpha undefined (Dusklight's
+    // is mostly 0), which a mixed or progressive space would show as see-through.
+    if (p.opaque != 0) {
+        colour.a = 1.0;
+    }
+    // Premultiplied, so scaling the whole colour fades it into what's behind.
+    return colour * p.visibility;
 }
 )MSL";
 
@@ -157,8 +224,25 @@ struct Uniforms {
     simd_float4x4 mvp;
     simd_float4 uvRect;
     float constantDepth;
-    float padding[3];
+    uint32_t slice;
+    uint32_t viewport;
+    uint32_t padding;
 };
+static_assert(sizeof(Uniforms) == 96, "Uniforms must match the shader's layout (and array stride)");
+
+struct FragmentParams {
+    simd_float2 texel;
+    uint32_t fxaa;
+    uint32_t opaque;
+    float visibility;
+    float padding;
+};
+
+// The safety boundary (xr_visionos_set_safety_boundary): horizontal distance
+// from the space's origin where the frame starts fading into the room, and
+// where it's gone. visionOS's own full-space boundary is about 1.5 m.
+constexpr float kBoundaryFadeStartMeters = 1.2f;
+constexpr float kBoundaryFadeEndMeters = 1.6f;
 
 // Distance a projection layer's pixels are said to sit at, for the compositor's
 // positional reprojection. OpenXR runtimes without a depth layer assume a fixed
@@ -280,39 +364,65 @@ bool Compositor::EnsurePipelines(MTLPixelFormat color, MTLPixelFormat depth) {
     if (m_opaquePipeline != nil && m_pipelineColor == color && m_pipelineDepth == depth) {
         return true;
     }
-    NSError* error = nil;
-    id<MTLLibrary> library = [m_device newLibraryWithSource:[NSString stringWithUTF8String:kShaderSource]
-                                                    options:nil
-                                                      error:&error];
-    if (library == nil) {
-        SetLastError(std::string("compositor shader compilation failed: ") +
-                     (error != nil ? error.localizedDescription.UTF8String : "unknown"));
+    // Two builds of the shader: per-view passes, and LAYERED for a layered drawable,
+    // where one encoder covers every slice (what the progressive portal needs).
+    const auto build = [&](bool layered, __strong id<MTLRenderPipelineState>& opaque,
+                           __strong id<MTLRenderPipelineState>& blend) {
+        NSError* error = nil;
+        MTLCompileOptions* options = [MTLCompileOptions new];
+        options.preprocessorMacros = @{@"LAYERED" : layered ? @1 : @0};
+        id<MTLLibrary> library = [m_device newLibraryWithSource:[NSString stringWithUTF8String:kShaderSource]
+                                                        options:options
+                                                          error:&error];
+        if (library == nil) {
+            SetLastError(std::string("compositor shader compilation failed: ") +
+                         (error != nil ? error.localizedDescription.UTF8String : "unknown"));
+            return false;
+        }
+        MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
+        descriptor.vertexFunction = [library newFunctionWithName:@"layer_vertex"];
+        descriptor.fragmentFunction = [library newFunctionWithName:@"layer_fragment"];
+        descriptor.colorAttachments[0].pixelFormat = color;
+        descriptor.depthAttachmentPixelFormat = depth;
+        if (layered) {
+            // Required to route primitives to a slice from the vertex shader.
+            descriptor.inputPrimitiveTopology = MTLPrimitiveTopologyClassTriangle;
+        }
+        descriptor.label = layered ? @"WiiCompiled layer (opaque, layered)" : @"WiiCompiled layer (opaque)";
+        opaque = [m_device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (opaque == nil) {
+            SetLastError(std::string("compositor pipeline failed: ") +
+                         (error != nil ? error.localizedDescription.UTF8String : "unknown"));
+            return false;
+        }
+        // Premultiplied source-alpha blending, the OpenXR layer flag's semantics.
+        descriptor.colorAttachments[0].blendingEnabled = YES;
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
+        descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        descriptor.label = layered ? @"WiiCompiled layer (blended, layered)" : @"WiiCompiled layer (blended)";
+        blend = [m_device newRenderPipelineStateWithDescriptor:descriptor error:&error];
+        if (blend == nil) {
+            SetLastError(std::string("compositor blend pipeline failed: ") +
+                         (error != nil ? error.localizedDescription.UTF8String : "unknown"));
+            return false;
+        }
+        return true;
+    };
+    m_opaquePipeline = nil;
+    if (!build(false, m_opaquePipeline, m_blendPipeline)) {
+        m_opaquePipeline = nil;
         return false;
     }
-    MTLRenderPipelineDescriptor* descriptor = [MTLRenderPipelineDescriptor new];
-    descriptor.vertexFunction = [library newFunctionWithName:@"layer_vertex"];
-    descriptor.fragmentFunction = [library newFunctionWithName:@"layer_fragment"];
-    descriptor.colorAttachments[0].pixelFormat = color;
-    descriptor.depthAttachmentPixelFormat = depth;
-    descriptor.label = @"WiiCompiled layer (opaque)";
-    m_opaquePipeline = [m_device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-    if (m_opaquePipeline == nil) {
-        SetLastError(std::string("compositor pipeline failed: ") +
-                     (error != nil ? error.localizedDescription.UTF8String : "unknown"));
-        return false;
-    }
-    // Premultiplied source-alpha blending, the OpenXR layer flag's semantics.
-    descriptor.colorAttachments[0].blendingEnabled = YES;
-    descriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorOne;
-    descriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-    descriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    descriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
-    descriptor.label = @"WiiCompiled layer (blended)";
-    m_blendPipeline = [m_device newRenderPipelineStateWithDescriptor:descriptor error:&error];
-    if (m_blendPipeline == nil) {
-        SetLastError(std::string("compositor blend pipeline failed: ") +
-                     (error != nil ? error.localizedDescription.UTF8String : "unknown"));
-        return false;
+    // Layered rendering needs Apple5 GPUs and up (every Vision Pro); without it a
+    // layered drawable falls back to a pass per slice.
+    m_layeredOpaquePipeline = nil;
+    m_layeredBlendPipeline = nil;
+    if ([m_device supportsFamily:MTLGPUFamilyApple5] &&
+        !build(true, m_layeredOpaquePipeline, m_layeredBlendPipeline)) {
+        m_layeredOpaquePipeline = nil;
+        m_layeredBlendPipeline = nil;
     }
     m_pipelineColor = color;
     m_pipelineDepth = depth;
@@ -657,13 +767,101 @@ bool Compositor::BeginFrame() {
     return true;
 }
 
-void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alphaBlend) {
+namespace {
+
+// The system's render context, which draws what the compositor adds to an app's
+// frame: on visionOS 26 the edge of the progressive-immersion portal. It needs
+// the whole drawable in one encoder (a layered drawable, or the Simulator's one
+// view) and the device anchor already set on the drawable.
+cp_drawable_render_context_t AddRenderContext(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer) {
+    if (@available(visionOS 26.0, *)) {
+        return cp_drawable_add_render_context(drawable, commandBuffer);
+    }
+    return nullptr;
+}
+
+void EndEncoding(cp_drawable_render_context_t context, id<MTLRenderCommandEncoder> encoder) {
+    if (context != nullptr) {
+        if (@available(visionOS 26.0, *)) {
+            // Takes the encoder over and ends it.
+            cp_drawable_render_context_end_encoding(context, encoder);
+            return;
+        }
+    }
+    [encoder endEncoding];
+}
+
+// Where `layer` lands in one view: `projection` and `viewFromWorld` are the
+// view's, `worldFromDevice` the pose the frame is drawn for.
+Uniforms LayerUniforms(const ComposedLayer& layer, const ComposedLayer::Image& image,
+                       const simd_float4x4& projection, const simd_float4x4& viewFromWorld,
+                       const simd_float4x4& worldFromDevice) {
+    Uniforms uniforms{};
+    const float u0 = static_cast<float>(image.rect.offset.x) / static_cast<float>(image.texture.width);
+    const float v0 = static_cast<float>(image.rect.offset.y) / static_cast<float>(image.texture.height);
+    const float u1 = static_cast<float>(image.rect.offset.x + image.rect.extent.width) /
+                     static_cast<float>(image.texture.width);
+    const float v1 = static_cast<float>(image.rect.offset.y + image.rect.extent.height) /
+                     static_cast<float>(image.texture.height);
+    uniforms.uvRect = simd_make_float4(u0, v0, u1, v1);
+    if (layer.kind == ComposedLayer::Kind::Projection) {
+        // The eye was rendered from image.worldFromLayer with image.fov. The image
+        // is placed in the world where that frustum cuts a plane
+        // kProjectionLayerDepthMeters away, and drawn from this frame's own pose:
+        // a frame the runtime shows again while the game lags the display, or one
+        // whose predicted pose the head has since left, stays where it was
+        // rendered instead of following the head (the judder of a head-locked
+        // quad). The depth written is the plane's, for the compositor's own
+        // late reprojection.
+        const float d = kProjectionLayerDepthMeters;
+        const float left = d * std::tan(image.fov.angleLeft);
+        const float right = d * std::tan(image.fov.angleRight);
+        const float down = d * std::tan(image.fov.angleDown);
+        const float up = d * std::tan(image.fov.angleUp);
+        simd_float4x4 layerFromCorner = Scale(right - left, up - down, 1.0f);
+        layerFromCorner.columns[3] = simd_make_float4((right + left) * 0.5f, (up + down) * 0.5f, -d, 1.0f);
+        uniforms.mvp = simd_mul(projection, simd_mul(viewFromWorld, simd_mul(image.worldFromLayer, layerFromCorner)));
+    } else {
+        simd_float4x4 worldFromQuad = image.worldFromLayer;
+        if (layer.headLocked) {
+            worldFromQuad = simd_mul(worldFromDevice, image.worldFromLayer);
+        }
+        const simd_float4x4 quadScale = Scale(layer.quadWidth, layer.quadHeight, 1.0f);
+        uniforms.mvp = simd_mul(projection, simd_mul(viewFromWorld, simd_mul(worldFromQuad, quadScale)));
+    }
+    uniforms.constantDepth = -1.0f;
+    return uniforms;
+}
+
+const ComposedLayer::Image& LayerImage(const ComposedLayer& layer, size_t viewIndex) {
+    return layer.kind == ComposedLayer::Kind::Projection ? layer.images[std::min<size_t>(viewIndex, kViewCount - 1)]
+                                                         : layer.images[0];
+}
+
+FragmentParams LayerFragmentParams(const ComposedLayer& layer, const ComposedLayer::Image& image, int antiAliasing,
+                                   float visibility) {
+    FragmentParams params{};
+    params.texel = simd_make_float2(1.0f / static_cast<float>(image.texture.width),
+                                    1.0f / static_cast<float>(image.texture.height));
+    // The game's eyes only: a quad is a menu or a screen, already sharp text.
+    params.fxaa = antiAliasing == 1 && layer.kind == ComposedLayer::Kind::Projection ? 1u : 0u;
+    params.opaque = layer.alphaBlend ? 0u : 1u;
+    params.visibility = visibility;
+    return params;
+}
+
+} // namespace
+
+void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alphaBlend, bool posed) {
     if (!EnsureMetal()) {
         cp_frame_end_submission(frame);
         return;
     }
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     const size_t textures = cp_drawable_get_texture_count(drawable);
+    const bool oneEncoder =
+        textures == 1 && (cp_drawable_get_view_count(drawable) == 1 ||
+                          cp_drawable_get_color_texture(drawable, 0).textureType == MTLTextureType2DArray);
     for (size_t i = 0; i < textures; ++i) {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
         id<MTLTexture> color = cp_drawable_get_color_texture(drawable, i);
@@ -671,7 +869,7 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
         pass.colorAttachments[0].texture = color;
         pass.colorAttachments[0].loadAction = MTLLoadActionClear;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : 1);
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
         if (depth != nil) {
             pass.depthAttachment.texture = depth;
             pass.depthAttachment.loadAction = MTLLoadActionClear;
@@ -681,8 +879,13 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
         if (color.textureType == MTLTextureType2DArray) {
             pass.renderTargetArrayLength = color.arrayLength;
         }
+        if (cp_drawable_get_rasterization_rate_map_count(drawable) > i) {
+            pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(drawable, i);
+        }
+        cp_drawable_render_context_t context =
+            oneEncoder && posed && depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
-        [encoder endEncoding];
+        EndEncoding(context, encoder);
     }
     cp_drawable_encode_present(drawable, commandBuffer);
     [commandBuffer commit];
@@ -723,15 +926,27 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     simd_float4x4 worldFromDevice = matrix_identity_float4x4;
     const int64_t presentation = timing != nullptr ? CpTimeToNanos(cp_frame_timing_get_presentation_time(timing))
                                                    : NowNanos();
-    const bool posed = DevicePose(presentation, worldFromDevice);
+    bool posed = DevicePose(presentation, worldFromDevice);
     {
         std::lock_guard lock(m_mutex);
         if (posed && m_deviceAnchor != nullptr) {
             cp_drawable_set_device_anchor(drawable, m_deviceAnchor);
+        } else {
+            posed = false;
         }
     }
+    // The safety boundary: away from the origin, the room shows through.
+    if (m_safetyBoundary.load() && posed) {
+        const simd_float4 position = worldFromDevice.columns[3];
+        const float distance = std::sqrt(position.x * position.x + position.z * position.z);
+        m_visibility = 1.0f - std::clamp((distance - kBoundaryFadeStartMeters) /
+                                             (kBoundaryFadeEndMeters - kBoundaryFadeStartMeters),
+                                         0.0f, 1.0f);
+    } else if (!m_safetyBoundary.load()) {
+        m_visibility = 1.0f;
+    }
     if (layers.empty() || !posed) {
-        PresentEmpty(frame, drawable, alphaBlend);
+        PresentEmpty(frame, drawable, alphaBlend, posed);
         return;
     }
     if (!EnsureMetal()) {
@@ -741,20 +956,11 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     id<MTLTexture> firstColor = cp_drawable_get_color_texture(drawable, 0);
     id<MTLTexture> firstDepth = cp_drawable_get_depth_texture(drawable, 0);
     if (!EnsurePipelines(firstColor.pixelFormat, firstDepth != nil ? firstDepth.pixelFormat : MTLPixelFormatInvalid)) {
-        PresentEmpty(frame, drawable, alphaBlend);
+        PresentEmpty(frame, drawable, alphaBlend, posed);
         return;
     }
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     commandBuffer.label = @"WiiCompiled frame";
-    DrawLayers(drawable, commandBuffer, layers, alphaBlend, worldFromDevice);
-    cp_drawable_encode_present(drawable, commandBuffer);
-    [commandBuffer commit];
-    cp_frame_end_submission(frame);
-}
-
-void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer,
-                            const std::vector<ComposedLayer>& layers, bool alphaBlend,
-                            const simd_float4x4& worldFromDevice) {
     // Every wait first: Metal orders them before the encoders that follow.
     for (const ComposedLayer& layer : layers) {
         for (const ComposedLayer::Image& image : layer.images) {
@@ -763,11 +969,71 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
             }
         }
     }
+    // SMAA: the projection layers' images are smoothed into copies first, and
+    // those are what gets drawn.
+    const std::vector<ComposedLayer>* drawn = &layers;
+    std::vector<ComposedLayer> smoothed;
+    if (m_antiAliasing.load() == 2) {
+        smoothed = layers;
+        std::array<id<MTLTexture>, kViewCount> sources{};
+        std::array<id<MTLTexture>, kViewCount> outputs{};
+        size_t used = 0;
+        for (ComposedLayer& layer : smoothed) {
+            if (layer.kind != ComposedLayer::Kind::Projection) {
+                continue;
+            }
+            for (ComposedLayer::Image& image : layer.images) {
+                if (image.texture == nil) {
+                    continue;
+                }
+                size_t slot = 0;
+                while (slot < used && sources[slot] != image.texture) {
+                    ++slot;
+                }
+                if (slot == used) {
+                    if (used == kViewCount) {
+                        continue; // more images than targets: this one is drawn as it is
+                    }
+                    sources[used] = image.texture;
+                    outputs[used] = m_smaa.Encode(commandBuffer, image.texture, used);
+                    ++used;
+                }
+                image.texture = outputs[slot];
+            }
+        }
+        drawn = &smoothed;
+    }
+    const bool layered = cp_drawable_get_texture_count(drawable) == 1 &&
+                         firstColor.textureType == MTLTextureType2DArray && m_layeredOpaquePipeline != nil;
+    if (layered) {
+        DrawLayersLayered(drawable, commandBuffer, *drawn, alphaBlend, worldFromDevice);
+    } else {
+        DrawLayers(drawable, commandBuffer, *drawn, alphaBlend, worldFromDevice);
+    }
+    // The reads are done once this command buffer has run: signal each image's
+    // read event so the writer's next copy into it waits for us.
+    for (const ComposedLayer& layer : layers) {
+        for (const ComposedLayer::Image& image : layer.images) {
+            if (image.readEvent != nil && image.readValue != 0) {
+                [commandBuffer encodeSignalEvent:image.readEvent value:image.readValue];
+            }
+        }
+    }
+    cp_drawable_encode_present(drawable, commandBuffer);
+    [commandBuffer commit];
+    cp_frame_end_submission(frame);
+}
 
+void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer,
+                            const std::vector<ComposedLayer>& layers, bool alphaBlend,
+                            const simd_float4x4& worldFromDevice) {
     const size_t viewCount = std::min<size_t>(cp_drawable_get_view_count(drawable), kViewCount);
     const size_t textureCount = cp_drawable_get_texture_count(drawable);
     std::vector<bool> cleared(textureCount, false);
     const simd_float4x4 deviceFromWorld = simd_inverse(worldFromDevice);
+    const int antiAliasing = m_antiAliasing.load();
+    // One view in one texture (the Simulator): its one encoder can carry the render context.
+    const bool singleView = viewCount == 1 && textureCount == 1;
 
     for (size_t viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
         cp_view_t view = cp_drawable_get_view(drawable, viewIndex);
@@ -796,7 +1062,7 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
         const bool firstSlice = color.textureType == MTLTextureType2DArray;
         if (first || firstSlice) {
             pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : 1);
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
             if (depth != nil) {
                 pass.depthAttachment.loadAction = MTLLoadActionClear;
                 pass.depthAttachment.clearDepth = 0.0;
@@ -810,6 +1076,8 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
                 pass.depthAttachment.loadAction = MTLLoadActionLoad;
             }
         }
+        cp_drawable_render_context_t context =
+            singleView && depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = viewIndex == 0 ? @"left eye" : @"right eye";
         [encoder setViewport:viewport];
@@ -822,64 +1090,102 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
         [encoder setCullMode:MTLCullModeNone];
 
         for (const ComposedLayer& layer : layers) {
-            const ComposedLayer::Image& image =
-                layer.kind == ComposedLayer::Kind::Projection ? layer.images[std::min<size_t>(viewIndex, kViewCount - 1)]
-                                                              : layer.images[0];
+            const ComposedLayer::Image& image = LayerImage(layer, viewIndex);
             if (image.texture == nil) {
                 continue;
             }
-            Uniforms uniforms{};
-            const float u0 = static_cast<float>(image.rect.offset.x) / static_cast<float>(image.texture.width);
-            const float v0 = static_cast<float>(image.rect.offset.y) / static_cast<float>(image.texture.height);
-            const float u1 = static_cast<float>(image.rect.offset.x + image.rect.extent.width) /
-                             static_cast<float>(image.texture.width);
-            const float v1 = static_cast<float>(image.rect.offset.y + image.rect.extent.height) /
-                             static_cast<float>(image.texture.height);
-            uniforms.uvRect = simd_make_float4(u0, v0, u1, v1);
-            if (layer.kind == ComposedLayer::Kind::Projection) {
-                // The eye was rendered from image.worldFromLayer with image.fov. The image
-                // is placed in the world where that frustum cuts a plane
-                // kProjectionLayerDepthMeters away, and drawn from this frame's own pose:
-                // a frame the runtime shows again while the game lags the display, or one
-                // whose predicted pose the head has since left, stays where it was
-                // rendered instead of following the head (the judder of a head-locked
-                // quad). The depth written is the plane's, for the compositor's own
-                // late reprojection.
-                const float d = kProjectionLayerDepthMeters;
-                const float left = d * std::tan(image.fov.angleLeft);
-                const float right = d * std::tan(image.fov.angleRight);
-                const float down = d * std::tan(image.fov.angleDown);
-                const float up = d * std::tan(image.fov.angleUp);
-                simd_float4x4 layerFromCorner = Scale(right - left, up - down, 1.0f);
-                layerFromCorner.columns[3] = simd_make_float4((right + left) * 0.5f, (up + down) * 0.5f, -d, 1.0f);
-                uniforms.mvp = simd_mul(projection, simd_mul(viewFromWorld, simd_mul(image.worldFromLayer, layerFromCorner)));
-                uniforms.constantDepth = -1.0f;
-            } else {
-                simd_float4x4 worldFromQuad = image.worldFromLayer;
-                if (layer.headLocked) {
-                    worldFromQuad = simd_mul(worldFromDevice, image.worldFromLayer);
-                }
-                const simd_float4x4 quadScale = Scale(layer.quadWidth, layer.quadHeight, 1.0f);
-                uniforms.mvp = simd_mul(projection, simd_mul(viewFromWorld, simd_mul(worldFromQuad, quadScale)));
-                uniforms.constantDepth = -1.0f;
-            }
+            const Uniforms uniforms = LayerUniforms(layer, image, projection, viewFromWorld, worldFromDevice);
+            const FragmentParams params = LayerFragmentParams(layer, image, antiAliasing, m_visibility);
             [encoder setRenderPipelineState:layer.alphaBlend ? m_blendPipeline : m_opaquePipeline];
             [encoder setVertexBytes:&uniforms length:sizeof(uniforms) atIndex:0];
+            [encoder setFragmentBytes:&params length:sizeof(params) atIndex:0];
             [encoder setFragmentTexture:image.texture atIndex:0];
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
-        [encoder endEncoding];
+        EndEncoding(context, encoder);
+    }
+}
+
+void Compositor::DrawLayersLayered(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer,
+                                   const std::vector<ComposedLayer>& layers, bool alphaBlend,
+                                   const simd_float4x4& worldFromDevice) {
+    // A layered drawable: one texture, a slice per view, drawn by one encoder so
+    // the system's render context (the progressive portal) can finish it.
+    const size_t viewCount = std::min<size_t>(cp_drawable_get_view_count(drawable), kViewCount);
+    const simd_float4x4 deviceFromWorld = simd_inverse(worldFromDevice);
+    const int antiAliasing = m_antiAliasing.load();
+    id<MTLTexture> color = cp_drawable_get_color_texture(drawable, 0);
+    id<MTLTexture> depth = cp_drawable_get_depth_texture(drawable, 0);
+
+    std::array<simd_float4x4, kViewCount> projections{};
+    std::array<simd_float4x4, kViewCount> viewsFromWorld{};
+    std::array<uint32_t, kViewCount> slices{};
+    std::array<MTLViewport, kViewCount> viewports{};
+    for (size_t viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+        cp_view_t view = cp_drawable_get_view(drawable, viewIndex);
+        cp_view_texture_map_t map = cp_view_get_view_texture_map(view);
+        slices[viewIndex] = static_cast<uint32_t>(cp_view_texture_map_get_slice_index(map));
+        viewports[viewIndex] = cp_view_texture_map_get_viewport(map);
+        projections[viewIndex] =
+            cp_drawable_compute_projection(drawable, cp_axis_direction_convention_right_up_back, viewIndex);
+        viewsFromWorld[viewIndex] = simd_mul(simd_inverse(cp_view_get_transform(view)), deviceFromWorld);
     }
 
-    // The reads are done once this command buffer has run: signal each image's
-    // read event so the writer's next copy into it waits for us.
+    MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture = color;
+    pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
+    if (depth != nil) {
+        pass.depthAttachment.texture = depth;
+        pass.depthAttachment.loadAction = MTLLoadActionClear;
+        pass.depthAttachment.storeAction = MTLStoreActionStore;
+        pass.depthAttachment.clearDepth = 0.0;
+    }
+    pass.renderTargetArrayLength = color.arrayLength;
+    if (cp_drawable_get_rasterization_rate_map_count(drawable) > 0) {
+        pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(drawable, 0);
+    }
+    cp_drawable_render_context_t context = depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
+    id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
+    encoder.label = @"both eyes";
+    [encoder setViewports:viewports.data() count:viewCount];
+    [encoder setDepthStencilState:m_depthState];
+    [encoder setFragmentSamplerState:m_sampler atIndex:0];
+    [encoder setCullMode:MTLCullModeNone];
+
     for (const ComposedLayer& layer : layers) {
-        for (const ComposedLayer::Image& image : layer.images) {
-            if (image.readEvent != nil && image.readValue != 0) {
-                [commandBuffer encodeSignalEvent:image.readEvent value:image.readValue];
+        std::array<Uniforms, kViewCount> uniforms{};
+        for (size_t viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+            const ComposedLayer::Image& image = LayerImage(layer, viewIndex);
+            if (image.texture == nil) {
+                continue;
             }
+            uniforms[viewIndex] =
+                LayerUniforms(layer, image, projections[viewIndex], viewsFromWorld[viewIndex], worldFromDevice);
+            uniforms[viewIndex].slice = slices[viewIndex];
+            uniforms[viewIndex].viewport = static_cast<uint32_t>(viewIndex);
+        }
+        [encoder setRenderPipelineState:layer.alphaBlend ? m_layeredBlendPipeline : m_layeredOpaquePipeline];
+        [encoder setVertexBytes:uniforms.data() length:sizeof(Uniforms) * viewCount atIndex:0];
+        // A draw per view, its base instance picking the view's uniforms: each eye of
+        // a projection layer may be its own texture.
+        for (size_t viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
+            const ComposedLayer::Image& image = LayerImage(layer, viewIndex);
+            if (image.texture == nil) {
+                continue;
+            }
+            const FragmentParams params = LayerFragmentParams(layer, image, antiAliasing, m_visibility);
+            [encoder setFragmentBytes:&params length:sizeof(params) atIndex:0];
+            [encoder setFragmentTexture:image.texture atIndex:0];
+            [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip
+                        vertexStart:0
+                        vertexCount:4
+                      instanceCount:1
+                       baseInstance:viewIndex];
         }
     }
+    EndEncoding(context, encoder);
 }
 
 } // namespace mkw::vr::visionos

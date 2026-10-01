@@ -116,7 +116,10 @@ if [[ ${simulator} -eq 1 ]]; then
     sim_args=(-project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision -configuration "${xcode_config}"
               -destination 'generic/platform=visionOS Simulator' -derivedDataPath "${derived}"
               ARCHS=arm64 CODE_SIGNING_ALLOWED=NO)
-    xcodebuild "${sim_args[@]}" build
+    # clean: the app is a handful of Swift files, and Xcode's incremental build
+    # (in a shared custom build location) has been seen to keep a stale embedded
+    # framework and stale Swift objects.
+    xcodebuild "${sim_args[@]}" clean build
     echo "App: $(products_dir "${sim_args[@]}")/TPVRVision.app"
     exit 0
 fi
@@ -129,7 +132,7 @@ derived="${root}/.scratch/DerivedData"
 device_args=(-project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision -configuration "${xcode_config}"
              -destination 'generic/platform=visionOS' -derivedDataPath "${derived}"
              DEVELOPMENT_TEAM="${team}" PRODUCT_BUNDLE_IDENTIFIER="${bundle_id}")
-xcodebuild "${device_args[@]}" -allowProvisioningUpdates build
+xcodebuild "${device_args[@]}" -allowProvisioningUpdates clean build
 app="$(products_dir "${device_args[@]}")/TPVRVision.app"
 echo "App: ${app}"
 

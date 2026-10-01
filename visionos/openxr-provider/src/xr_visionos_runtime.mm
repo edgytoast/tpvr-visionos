@@ -1018,6 +1018,14 @@ XRAPI_ATTR XrResult XRAPI_CALL xrEndFrame(XrSession session, const XrFrameEndInf
             }
             ComposedLayer layer{};
             layer.alphaBlend = (header->layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) != 0;
+            {
+                static int s_lastBlend = -1;
+                if (static_cast<int>(layer.alphaBlend) != s_lastBlend) {
+                    s_lastBlend = layer.alphaBlend;
+                    Log("layer blend %d (environment alpha blend %d)", static_cast<int>(layer.alphaBlend),
+                        static_cast<int>(alphaBlend));
+                }
+            }
             layer.headLocked = space->kind == Space::Kind::Reference && space->referenceType == XR_REFERENCE_SPACE_TYPE_VIEW;
             simd_float4x4 worldFromSpace = matrix_identity_float4x4;
             if (layer.headLocked) {
@@ -1161,7 +1169,8 @@ XRAPI_ATTR XrResult XRAPI_CALL xrCreateSwapchain(XrSession session, const XrSwap
                                                                width:createInfo->width
                                                               height:createInfo->height
                                                            mipmapped:NO];
-        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+        // PixelFormatView: SMAA finds edges through a non-sRGB view of the image.
+        descriptor.usage = MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget | MTLTextureUsagePixelFormatView;
         descriptor.storageMode = MTLStorageModeShared;
         image.texture = [device newTextureWithDescriptor:descriptor iosurface:image.surface plane:0];
         if (image.texture == nil) {

@@ -895,7 +895,8 @@ if (VISIONOS)
         "${_dusk_xr_provider_dir}/src/xr_visionos_input.mm"
         "${_dusk_xr_provider_dir}/src/xr_visionos_hand_tracking.mm"
         "${_dusk_xr_provider_dir}/src/xr_visionos_compositor.mm"
-        "${_dusk_xr_provider_dir}/src/xr_visionos_controllers.mm")
+        "${_dusk_xr_provider_dir}/src/xr_visionos_controllers.mm"
+        "${_dusk_xr_provider_dir}/src/xr_visionos_smaa.mm")
     target_include_directories(dusk_openxr_visionos PUBLIC "${_dusk_xr_provider_dir}/include")
     target_include_directories(dusk_openxr_visionos SYSTEM PUBLIC "${openxr_headers_SOURCE_DIR}/include")
     target_compile_features(dusk_openxr_visionos PUBLIC cxx_std_20)

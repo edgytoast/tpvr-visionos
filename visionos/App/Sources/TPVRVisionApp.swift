@@ -7,6 +7,7 @@ import SwiftUI
 @main
 struct TPVRVisionApp: App {
     @StateObject private var model = GameModel()
+    @State private var space = ImmersionSpaceStyle.shared
 
     var body: some Scene {
         WindowGroup(id: GameModel.launcherWindowID) {
@@ -19,9 +20,9 @@ struct TPVRVisionApp: App {
         ImmersiveSpace(id: GameModel.immersiveSpaceID) {
             ImmersiveGame.layer(for: model)
         }
-        // Full immersion: you stand in Hyrule. Mixed is offered for the menus
-        // and flat scenes, which the provider can show over the room.
-        .immersionStyle(selection: $model.immersionStyle, in: .full, .mixed)
+        // Full: you stand in Hyrule. Mixed: the same, with your room around the
+        // menus (GameModel.playsMixed). Progressive: Hyrule through a portal.
+        .immersionStyle(selection: $space.style, in: .full, .mixed, GameModel.progressiveStyle)
         .upperLimbVisibility(.automatic)
     }
 }
