@@ -53,7 +53,11 @@ owns the swapchain images and Dawn imports them.
 ### 1. Flat build
 - [x] CMake: visionOS platform; code mods off (symgen cannot read xrOS); the game is `DusklightGame.framework` exporting only the C bridge; host packages (Homebrew, Conda) excluded.
 - [x] aurora patches: offscreen SDL, detached CAMetalLayer, no SDL `main`, Metal sharing features, SDL virtual joystick. borealis: Documents data path, no file dialogs.
-- [ ] `DusklightGame.framework` links for `xros` (everything compiles; first link failed on a host `libfmt`, fixed, relinking).
+- [x] `DusklightGame.framework` links for `xros` and the Simulator (44 MB, exports only the 9 bridge functions).
+- [x] Signed app (`dev.tpvr.vision.<TEAM>`, increased-memory-limit) installed on the headset, 2026-09-30.
+- [x] Simulator run (visionOS 27): app, framework, game thread, SDL offscreen, Dawn Metal device with
+      SharedTextureMemoryIOSurface + SharedFenceMTLSharedEvent, RmlUi fonts, frames. Stops at Dusklight's
+      disc picker without a disc; TPVR's VR startup runs from the main game loop, so it needs the disc.
 
 ### 2. VR on Metal
 - [x] Vendor the provider; CMake branch in the VR fragment for visionOS.
