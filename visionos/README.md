@@ -73,6 +73,8 @@ The app takes a few environment variables for headless runs (pass each as
 - `TPVR_TEST_ACTIONS` scripts Sense controller input:
   `NAME[=x,y]@seconds[~duration]`, measured from the first input sync, e.g.
   `"MENU@30~0.3 B@45~0.3 LSTICK=0,1@50~2"`.
+- `TPVR_GPU_TIMING=1` logs the compositor's GPU time every 240 frames (it
+  includes waiting for the game's frame, so compare settings by difference).
 
 ## Layout
 

@@ -84,7 +84,7 @@ owns the swapchain images and Dawn imports them.
   - Full, with "Show my room around menus" (default): a mixed space with opaque game frames. Dusklight's menus and TP's full-screen ones (Collection, maps, save, options, letters, fishing journal, skills, bugs; not the item ring) float in the room with Hyrule hidden behind them. The provider adds the movement boundary a mixed space lacks: Hyrule fades into the room from 1.2 m to 1.6 m away from where you started.
   - Full without it: a full space, as before.
   - Progressive (visionOS 26): Hyrule through a portrait portal; the Digital Crown widens or narrows it. The layer is layered and the provider draws both eyes in one render pass, which the system's render context finishes with the portal's edge. A portal shows black where frames are transparent, so menus there stay as they were.
-- [x] Anti-aliasing: VR > Vision Pro > Anti-Aliasing, Off (default) / FXAA / SMAA, live. FXAA runs in the compositor's shader; SMAA 1x (from the SHAR port) on the eye image first.
+- [x] Anti-aliasing: VR > Vision Pro > Anti-Aliasing, Off / FXAA / SMAA (default), live. Measured in the Simulator (`TPVR_GPU_TIMING=1` logs the compositor's GPU time): FXAA costs nothing measurable, SMAA about 1.3 ms on 7680x2160 eyes, so well under 1 ms on the headset's 3776x1792. FXAA runs in the compositor's shader; SMAA 1x (from the SHAR port) on the eye image first.
 - [x] Render quality: VR Render Resolution reaches 150% on Vision Pro (supersampling), capped to the runtime's largest image.
 - [x] PC-only settings (VR brightness sliders, desktop mirror) hidden on Vision Pro, as on Quest.
 - [x] Opaque layers composite with alpha 1 (OpenXR semantics); TPVR's eye images carry undefined alpha.

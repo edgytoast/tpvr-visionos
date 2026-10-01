@@ -1003,9 +1003,9 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                 pane.add_rml(
                     "<br/>Smooths jagged edges as the headset composites each eye. Takes effect "
                     "immediately."
-                    "<br/><br/><b>FXAA:</b> fast, a little soft."
-                    "<br/><b>SMAA:</b> sharper and more thorough, costs more GPU time."
-                    "<br/><b>Off:</b> the game's own edges. (Default)"
+                    "<br/><br/><b>SMAA:</b> sharp and thorough; under a millisecond of GPU time. (Default)"
+                    "<br/><b>FXAA:</b> nearly free, a little soft."
+                    "<br/><b>Off:</b> the game's own edges."
                     "<br/><br/>For the cleanest image, combine with a VR Render Resolution above "
                     "100% (Performance).");
             });

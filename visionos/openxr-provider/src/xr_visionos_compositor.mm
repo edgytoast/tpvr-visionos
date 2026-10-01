@@ -25,6 +25,7 @@
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 
 namespace mkw::vr::visionos {
 
@@ -838,6 +839,32 @@ const ComposedLayer::Image& LayerImage(const ComposedLayer& layer, size_t viewIn
                                                          : layer.images[0];
 }
 
+// TPVR_GPU_TIMING=1: logs the GPU time of the compositor's frames (eye images
+// to drawable, SMAA included), averaged over every 240, to compare anti-aliasing
+// modes and render scales on the headset.
+void AddGpuTiming(id<MTLCommandBuffer> commandBuffer, int antiAliasing) {
+    static const bool enabled = std::getenv("TPVR_GPU_TIMING") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> buffer) {
+        static std::mutex mutex;
+        static double totalMs = 0.0;
+        static double maxMs = 0.0;
+        static int frames = 0;
+        const double ms = (buffer.GPUEndTime - buffer.GPUStartTime) * 1000.0;
+        std::lock_guard lock(mutex);
+        totalMs += ms;
+        maxMs = std::max(maxMs, ms);
+        if (++frames == 240) {
+            Log("compositor GPU %.3f ms average, %.3f ms worst over 240 frames (anti-aliasing %d)",
+                totalMs / frames, maxMs, antiAliasing);
+            totalMs = maxMs = 0.0;
+            frames = 0;
+        }
+    }];
+}
+
 FragmentParams LayerFragmentParams(const ComposedLayer& layer, const ComposedLayer::Image& image, int antiAliasing,
                                    float visibility) {
     FragmentParams params{};
@@ -1022,6 +1049,7 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
         }
     }
     cp_drawable_encode_present(drawable, commandBuffer);
+    AddGpuTiming(commandBuffer, m_antiAliasing.load());
     [commandBuffer commit];
     cp_frame_end_submission(frame);
 }

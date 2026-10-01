@@ -172,7 +172,9 @@ UserSettings g_userSettings = {
         .vrSunGlareDimming {"game.vrSunGlareDimming", false},
         .vrCutsceneFaceCamera {"game.vrCutsceneFaceCamera", true},
         .vrAccurateObjectLighting {"game.vrAccurateObjectLighting", true},
-        .vrAntiAliasing {"game.vrAntiAliasing", 0},
+        // SMAA by default: the eye images are only ~1888x1792 without foveation, so
+        // edges shimmer, and SMAA costs well under a millisecond there.
+        .vrAntiAliasing {"game.vrAntiAliasing", 2},
 
         // Audio
         .noLowHpSound {"game.noLowHpSound", false},
