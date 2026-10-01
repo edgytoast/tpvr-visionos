@@ -314,6 +314,19 @@ XrResult xr_visionos_set_frame_environment(XrSession session, bool alpha_blend) 
     return XR_SUCCESS;
 }
 
+XrResult xr_visionos_set_frame_opacity(XrSession session, float opacity) {
+    if (g_instance == nullptr) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    std::lock_guard lock(g_instance->mutex);
+    Session* object = GetSession(session);
+    if (object == nullptr) {
+        return XR_ERROR_HANDLE_INVALID;
+    }
+    object->opacity = std::clamp(opacity, 0.0f, 1.0f);
+    return XR_SUCCESS;
+}
+
 // ---------------------------------------------------------------------------
 // Instance
 
@@ -1018,6 +1031,7 @@ XRAPI_ATTR XrResult XRAPI_CALL xrEndFrame(XrSession session, const XrFrameEndInf
             }
             ComposedLayer layer{};
             layer.alphaBlend = (header->layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) != 0;
+            layer.opacity = object->opacity;
             {
                 static int s_lastBlend = -1;
                 if (static_cast<int>(layer.alphaBlend) != s_lastBlend) {

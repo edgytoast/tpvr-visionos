@@ -145,6 +145,7 @@ struct FragmentParams {
     uint fxaa;    // smooth edges (projection layers, when anti-aliasing is FXAA)
     uint opaque;  // the layer has no source-alpha flag: its alpha is not meaningful
     float visibility; // the safety boundary's fade: 1 shows the frame, 0 the room
+    float opacity;    // an opaque layer's alpha (xr_visionos_set_frame_opacity)
 };
 
 struct VertexOut {
@@ -214,7 +215,7 @@ fragment float4 layer_fragment(VertexOut in [[stage_in]], texture2d<float> image
     // is opaque whatever its alpha holds. Games leave alpha undefined (Dusklight's
     // is mostly 0), which a mixed or progressive space would show as see-through.
     if (p.opaque != 0) {
-        colour.a = 1.0;
+        colour.a = p.opacity;
     }
     // Premultiplied, so scaling the whole colour fades it into what's behind.
     return colour * p.visibility;
@@ -236,7 +237,7 @@ struct FragmentParams {
     uint32_t fxaa;
     uint32_t opaque;
     float visibility;
-    float padding;
+    float opacity;
 };
 
 // The safety boundary (xr_visionos_set_safety_boundary): horizontal distance
@@ -891,6 +892,7 @@ FragmentParams LayerFragmentParams(const ComposedLayer& layer, const ComposedLay
     params.fxaa = antiAliasing == 1 && layer.kind == ComposedLayer::Kind::Projection && !layer.alphaBlend ? 1u : 0u;
     params.opaque = layer.alphaBlend ? 0u : 1u;
     params.visibility = visibility;
+    params.opacity = layer.opacity;
     return params;
 }
 
@@ -1020,8 +1022,11 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     commandBuffer.label = @"WiiCompiled frame";
     m_lastContentNanos = NowNanos();
-    m_lastContentSeeThrough = std::any_of(layers.begin(), layers.end(),
-                                          [](const ComposedLayer& layer) { return layer.alphaBlend; });
+    // See-through: blended layers, or an opaque one faded out (a game's fade to
+    // black over the room) -- then empty frames after it stay see-through.
+    m_lastContentSeeThrough = std::any_of(layers.begin(), layers.end(), [](const ComposedLayer& layer) {
+        return layer.alphaBlend || layer.opacity < 0.5f;
+    });
     // Every wait first: Metal orders them before the encoders that follow.
     for (const ComposedLayer& layer : layers) {
         for (const ComposedLayer::Image& image : layer.images) {

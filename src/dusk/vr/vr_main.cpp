@@ -350,6 +350,9 @@ struct PendingFrameSubmit {
     float spaceWarpFarZ = 0.f;
     // A menu over the room (g_menuPassthroughFrame): blend by the eyes' alpha.
     bool passthrough = false;
+    // Over the room, TP's fade to black as a crossfade with the room: how much of
+    // the frame shows (see frameOpacityForFade()).
+    float opacity = 1.0f;
 };
 PendingFrameSubmit g_pendingSubmit;
 
@@ -491,6 +494,31 @@ bool isMenuPassthroughFrame() {
 
 void noteBlackMenuScreen() {
     g_blackMenuNoted = true;
+}
+
+// Over the room (Apple Vision Pro), TP's fades to black reveal the room instead:
+// the fade has already darkened the eye's colour by its rate, so a frame
+// opacity of 1 - rate turns it into a crossfade with the room, and the loading
+// frames after a full fade stay see-through (the provider's PresentEmpty). Only
+// fades to black that TP draws into the eyes -- not the ones it draws into the
+// HUD capture (mFade & 0x80, and stage F_SP127), which leave the world bright.
+static float frameOpacityForFade() {
+#if DUSK_VR_XR_GRAPHICS_METAL
+    if (!dusk_visionos_room_behind_menus()) {
+        return 1.0f;
+    }
+    const u8 fade = mDoGph_gInf_c::isFade();
+    if (fade == 0 || (fade & 0x80) != 0 || std::strcmp(dComIfGp_getStartStageName(), "F_SP127") == 0) {
+        return 1.0f;
+    }
+    const GXColor& color = mDoGph_gInf_c::getFadeColor();
+    if (color.r > 8 || color.g > 8 || color.b > 8) {
+        return 1.0f; // a white fade (warps) stays white
+    }
+    return 1.0f - std::clamp(mDoGph_gInf_c::getFadeRate(), 0.0f, 1.0f);
+#else
+    return 1.0f;
+#endif
 }
 
 // Frames with nothing to show (loading, the logo scene, a missed swapchain image):
@@ -3417,6 +3445,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_pendingSubmit.base = base;
     g_pendingSubmit.viewCount = viewCount;
     g_pendingSubmit.passthrough = g_menuPassthroughFrame;
+    g_pendingSubmit.opacity = frameOpacityForFade();
     g_hasPendingFrameSubmit = true;
     g_perfTickEnd = PerfClock::now();
 }
@@ -3565,6 +3594,9 @@ void submitFrame() {
     endInfo.displayTime = g_pendingSubmit.frameState.predictedDisplayTime;
     endInfo.environmentBlendMode = g_pendingSubmit.passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
                                                                : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+#if DUSK_VR_XR_GRAPHICS_METAL
+    xr_visionos_set_frame_opacity(g_session->session(), g_pendingSubmit.opacity);
+#endif
     endInfo.layerCount = 1;
     endInfo.layers = layers;
 

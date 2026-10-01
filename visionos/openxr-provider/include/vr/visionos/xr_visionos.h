@@ -85,6 +85,12 @@ XrResult xr_visionos_swapchain_image_set_release_fence(XrSwapchain swapchain, ui
 // the virtual screen and the immersive window) or are opaque. Read at xrEndFrame.
 XrResult xr_visionos_set_frame_environment(XrSession session, bool alpha_blend);
 
+// How opaque the next frames' opaque projection layers are, 0 to 1 (default 1),
+// for a mixed space: below 1 the room shows through them. For a game fading to
+// black, whose colour is already darkened by the fade, this turns the fade into
+// a crossfade with the room. Read at xrEndFrame.
+XrResult xr_visionos_set_frame_opacity(XrSession session, float opacity);
+
 // Anti-aliasing the compositor applies to projection layers as it draws them
 // into the drawable: 0 off, 1 FXAA, 2 SMAA. Takes effect from the next frame.
 void xr_visionos_set_anti_aliasing(int mode);

@@ -143,6 +143,8 @@ struct ComposedLayer {
     float quadHeight = 0.0f;
     // Quad only: the space the pose is given in was VIEW, so it follows the head.
     bool headLocked = false;
+    // An opaque layer's alpha (xr_visionos_set_frame_opacity); 1 is fully opaque.
+    float opacity = 1.0f;
 };
 
 // SMAA 1x over a projection layer's image (xr_visionos_smaa.mm), before the
@@ -335,6 +337,7 @@ struct Session {
     int64_t predictedDisplayNanos = 0;
     int64_t predictedPeriodNanos = kDefaultDisplayPeriodNs;
     bool alphaBlend = false;
+    float opacity = 1.0f; // xr_visionos_set_frame_opacity
     std::vector<std::unique_ptr<Space>> spaces;
     std::vector<std::unique_ptr<Swapchain>> swapchains;
     // Actions (xr_visionos_input.mm).
