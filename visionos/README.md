@@ -4,8 +4,11 @@ Twilight Princess in first person on Apple Vision Pro: Dusklight 2.0 with
 JoeyAW's TPVR mod, built natively for visionOS and rendered in a fully immersive
 space. See [PORT_PLAN.md](PORT_PLAN.md) for the design and progress.
 
-You need your own GameCube Twilight Princess disc image (GZ2E01 or GZ2P01, `.iso`
-or `.rvz`). Nothing from the game is in this repository or the app.
+You need your own Twilight Princess disc image: GameCube (GZ2E01, GZ2P01) or Wii
+(any release except Korean), as `.iso`, `.rvz` or `.wbfs`. Dusklight runs the
+GameCube code either way (the decompilation matches the GameCube release), so a
+Wii disc plays as the GameCube version, left-handed Link included. Nothing from
+the game is in this repository or the app.
 
 ## Build
 

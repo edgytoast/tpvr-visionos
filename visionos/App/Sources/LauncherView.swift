@@ -13,7 +13,7 @@ struct LauncherView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Twilight Princess VR")
                     .font(.extraLargeTitle2)
-                Text("TPVR on Dusklight, in first person. Bring your own GameCube disc.")
+                Text("TPVR on Dusklight, in first person. Bring your own disc.")
                     .foregroundStyle(.secondary)
             }
 
@@ -25,7 +25,7 @@ struct LauncherView: View {
                     } else {
                         Label("No disc yet", systemImage: "opticaldisc")
                             .font(.headline)
-                        Text("Add a GameCube Twilight Princess image (GZ2E01 or GZ2P01, .iso or .rvz): AirDrop it and open it with this app, drop it in Files › On My Apple Vision Pro › Twilight Princess VR, or import it below.")
+                        Text("Add your Twilight Princess disc image: GameCube (GZ2E01, GZ2P01) or Wii (any release but Korean), as .iso, .rvz or .wbfs. AirDrop it and open it with this app, drop it in Files › On My Apple Vision Pro › Twilight Princess VR, or import it below. Either plays as the GameCube version.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
