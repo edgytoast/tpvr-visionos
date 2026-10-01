@@ -295,6 +295,10 @@ bool g_renderedToHeadsetThisFrame = false;
 // isMenuPassthroughFrame()), the menu billboard writes real alpha, and
 // submitFrame() blends the layer over the room. Reset every tick().
 bool g_menuPassthroughFrame = false;
+// This frame fades to black over the room: the eye carries its own alpha (world
+// at 1 - fade, the HUD keyed on top), so it's submitted blended. Set where the
+// HUD is drawn (drawHudBillboard()); reset every tick().
+bool g_fadeFrame = false;
 // ...and the menu is TP's own full-screen one (Collection, maps, save, options,
 // letters, fishing journal, skills, bugs), which is the HUD billboard.
 bool g_gameMenuPassthroughFrame = false;
@@ -350,9 +354,6 @@ struct PendingFrameSubmit {
     float spaceWarpFarZ = 0.f;
     // A menu over the room (g_menuPassthroughFrame): blend by the eyes' alpha.
     bool passthrough = false;
-    // Over the room, TP's fade to black as a crossfade with the room: how much of
-    // the frame shows (see frameOpacityForFade()).
-    float opacity = 1.0f;
 };
 PendingFrameSubmit g_pendingSubmit;
 
@@ -497,11 +498,13 @@ void noteBlackMenuScreen() {
 }
 
 // Over the room (Apple Vision Pro), TP's fades to black reveal the room instead:
-// the fade has already darkened the eye's colour by its rate, so a frame
-// opacity of 1 - rate turns it into a crossfade with the room, and the loading
-// frames after a full fade stay see-through (the provider's PresentEmpty). Only
-// fades to black that TP draws into the eyes -- not the ones it draws into the
-// HUD capture (mFade & 0x80, and stage F_SP127), which leave the world bright.
+// the fade has already darkened the eye's colour by its rate, so an eye alpha of
+// 1 - rate turns it into a crossfade with the room (drawHudBillboard() writes
+// it, under the HUD so 2D shown on black stays visible), and the loading frames
+// after a full fade stay see-through (the provider's PresentEmpty). Only fades
+// to black that TP draws into the eyes -- not the ones it draws into the HUD
+// capture (mFade & 0x80, and stage F_SP127), which leave the world bright.
+// Returns 1 when there's no such fade.
 static float frameOpacityForFade() {
 #if DUSK_VR_XR_GRAPHICS_METAL
     if (!dusk_visionos_room_behind_menus()) {
@@ -566,6 +569,14 @@ void drawHudBillboard(TGXTexObj* hudTex) {
     if (g_menuPassthroughFrame) {
         // Over the room, tick() clears the eye after the painter and draws the
         // HUD itself when it IS the menu (TP's own).
+        return;
+    }
+    // A fade to black over the room: the world's alpha follows the fade, and the
+    // HUD keys its own on top (frameOpacityForFade()).
+    if (const float opacity = frameOpacityForFade(); opacity < 1.0f) {
+        vr_render::setEyeAlpha(opacity);
+        vr_render::drawHudBillboard(hudTex, true);
+        g_fadeFrame = true;
         return;
     }
     vr_render::drawHudBillboard(hudTex);
@@ -1596,6 +1607,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_duskVREyePassOpen = false;
     g_menuPassthroughFrame = false;
     g_gameMenuPassthroughFrame = false;
+    g_fadeFrame = false;
     const bool blackMenuNoted = g_blackMenuNoted;
     g_blackMenuNoted = false;
     // Recomputed further down on frames that read controller input; an early
@@ -3444,8 +3456,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_pendingSubmit.frameState = frameState;
     g_pendingSubmit.base = base;
     g_pendingSubmit.viewCount = viewCount;
-    g_pendingSubmit.passthrough = g_menuPassthroughFrame;
-    g_pendingSubmit.opacity = frameOpacityForFade();
+    // A menu over the room, or a fade to black over it: blended by the eye's alpha.
+    g_pendingSubmit.passthrough = g_menuPassthroughFrame || g_fadeFrame;
     g_hasPendingFrameSubmit = true;
     g_perfTickEnd = PerfClock::now();
 }
@@ -3594,9 +3606,6 @@ void submitFrame() {
     endInfo.displayTime = g_pendingSubmit.frameState.predictedDisplayTime;
     endInfo.environmentBlendMode = g_pendingSubmit.passthrough ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
                                                                : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-#if DUSK_VR_XR_GRAPHICS_METAL
-    xr_visionos_set_frame_opacity(g_session->session(), g_pendingSubmit.opacity);
-#endif
     endInfo.layerCount = 1;
     endInfo.layers = layers;
 

@@ -281,6 +281,8 @@ private:
     // see-through frames (loading over the room) ease in from it (PresentEmpty).
     int64_t m_lastContentNanos = 0;
     bool m_lastContentSeeThrough = false;
+    // This frame's opaque layers' opacity (the most opaque), for the clear under them.
+    float m_frameOpacity = 1.0f;
     Smaa m_smaa;
 };
 

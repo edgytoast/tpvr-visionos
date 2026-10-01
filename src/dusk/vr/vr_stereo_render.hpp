@@ -1062,6 +1062,54 @@ inline void clearEyeToTransparent() {
     GXSetAlphaUpdate(GX_DISABLE);
 }
 
+// Apple Vision Pro, a fade to black over the room: sets the open eye's alpha to
+// `alpha` everywhere, leaving its colour alone (which TP's fade has already
+// darkened by the same amount, so the result is premultiplied). The HUD drawn
+// after it keys its own alpha over this, so 2D shown on black stays visible.
+inline void setEyeAlpha(float alpha) {
+    view_class* view = dComIfGd_getView();
+    assert(view != nullptr && "VR: setEyeAlpha() called outside gameplay?");
+
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(0);
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+
+    const GXColor value = {0, 0, 0, static_cast<u8>(std::lround(std::clamp(alpha, 0.0f, 1.0f) * 255.0f))};
+    GXSetNumChans(0);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColor(GX_TEVREG0, value);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, value);
+
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_SET);
+    GXSetColorUpdate(GX_DISABLE);
+    GXSetAlphaUpdate(GX_ENABLE);
+    GXSetDstAlpha(GX_DISABLE, 0);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+
+    const float d = 1.0f * kHudUnitsPerMetre;
+    const float h = 100.0f * kHudUnitsPerMetre;
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(-h, h, -d);
+    GXPosition3f32(h, h, -d);
+    GXPosition3f32(h, -h, -d);
+    GXPosition3f32(-h, -h, -d);
+    GXEnd();
+    GXSetColorUpdate(GX_ENABLE);
+    GXSetAlphaUpdate(GX_DISABLE);
+}
+
 inline HudQuadCorners computeHudPose() {
     const float halfW = kHudWidthMeters * 0.5f * kHudUnitsPerMetre;
     const float halfH = kHudHeightMeters * 0.5f * kHudUnitsPerMetre;

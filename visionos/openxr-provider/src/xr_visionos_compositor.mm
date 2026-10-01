@@ -915,6 +915,8 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
                                                static_cast<float>(kEmptyFadeNanos),
                                            0.0f, 1.0f);
         }
+        // Never more of a cover than the safety boundary allows.
+        clearAlpha = std::min(clearAlpha, m_visibility);
     }
     for (size_t i = 0; i < textures; ++i) {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
@@ -1027,6 +1029,17 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     m_lastContentSeeThrough = std::any_of(layers.begin(), layers.end(), [](const ComposedLayer& layer) {
         return layer.alphaBlend || layer.opacity < 0.5f;
     });
+    m_frameOpacity = 0.0f;
+    bool anyOpaque = false;
+    for (const ComposedLayer& layer : layers) {
+        if (!layer.alphaBlend) {
+            m_frameOpacity = std::max(m_frameOpacity, layer.opacity);
+            anyOpaque = true;
+        }
+    }
+    if (!anyOpaque) {
+        m_frameOpacity = 1.0f;
+    }
     // Every wait first: Metal orders them before the encoders that follow.
     for (const ComposedLayer& layer : layers) {
         for (const ComposedLayer::Image& image : layer.images) {
@@ -1146,7 +1159,7 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
         const bool firstSlice = color.textureType == MTLTextureType2DArray;
         if (first || firstSlice) {
             pass.colorAttachments[0].loadAction = MTLLoadActionClear;
-            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
+            pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility * m_frameOpacity);
             if (depth != nil) {
                 pass.depthAttachment.loadAction = MTLLoadActionClear;
                 pass.depthAttachment.clearDepth = 0.0;
@@ -1217,7 +1230,7 @@ void Compositor::DrawLayersLayered(cp_drawable_t drawable, id<MTLCommandBuffer> 
     pass.colorAttachments[0].texture = color;
     pass.colorAttachments[0].loadAction = MTLLoadActionClear;
     pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
+    pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility * m_frameOpacity);
     if (depth != nil) {
         pass.depthAttachment.texture = depth;
         pass.depthAttachment.loadAction = MTLLoadActionClear;
