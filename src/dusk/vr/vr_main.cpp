@@ -3051,6 +3051,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             // TP's menu -- the HUD -- with real alpha.
             vr_render::clearEyeToTransparent();
             if (g_gameMenuPassthroughFrame) {
+                vr_render::drawHudBackdrop();
                 vr_render::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj(), true);
             }
         }

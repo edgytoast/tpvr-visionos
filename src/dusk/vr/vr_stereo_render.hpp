@@ -1046,6 +1046,7 @@ inline void clearEyeToTransparent() {
     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_SET);
     GXSetColorUpdate(GX_ENABLE);
     GXSetAlphaUpdate(GX_ENABLE);
+    GXSetDstAlpha(GX_DISABLE, 0);
     GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
     GXSetCullMode(GX_CULL_NONE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
@@ -1072,10 +1073,57 @@ inline HudQuadCorners computeHudPose() {
 // the flat mDoGph_drawHud2D() call there while in VR). Must run after the
 // eye's real scene draw (so it draws on top) and needs `hudTex` already
 // populated for this frame by mDoGph_gInf_c::captureHudBillboard().
+// Apple Vision Pro, TP's own menu over the room: a dark panel the size of the HUD
+// billboard, drawn behind it. TP lays its menus over a dimmed screenshot of the
+// game; the luma key reads the black under them as see-through, which over the
+// room left the panel ghostly. This puts the dim backdrop back, nearly opaque,
+// premultiplied, with its alpha written.
+inline void drawHudBackdrop() {
+    view_class* view = dComIfGd_getView();
+    assert(view != nullptr && "VR: drawHudBackdrop() called outside gameplay?");
+
+    GXSetProjection(view->projMtx, GX_PERSPECTIVE);
+    GXLoadPosMtxImm(cMtx_getIdentity(), GX_PNMTX0);
+    GXSetCurrentMtx(0);
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+
+    // (14, 12, 20) at 92%, premultiplied.
+    constexpr GXColor kBackdrop = {13, 11, 18, 235};
+    GXSetNumChans(0);
+    GXSetNumTexGens(0);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColor(GX_TEVREG0, kBackdrop);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, kBackdrop);
+
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_INVSRCALPHA, GX_LO_SET);
+    GXSetColorUpdate(GX_ENABLE);
+    GXSetAlphaUpdate(GX_ENABLE);
+    GXSetDstAlpha(GX_DISABLE, 0);
+    GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
+
+    const HudQuadCorners c = computeHudPose();
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    for (int i = 0; i < 4; ++i) {
+        GXPosition3f32(c.x[i], c.y[i], c.z[i]);
+    }
+    GXEnd();
+    GXSetAlphaUpdate(GX_DISABLE);
+}
+
 // `writeAlpha` (Apple Vision Pro, TP's own menu over the room): the key is
-// steeper -- only near-black reads as see-through, so dark panels stay solid
-// against the room -- and the panel's colour is premultiplied by it and its
-// alpha written into the eye, which is transparent everywhere else.
+// steeper (x4) -- only near-black reads as see-through, so dark panels stay
+// solid against the room -- and the panel's colour is premultiplied by it and
+// its alpha written into the eye, which is transparent everywhere else.
 inline void drawHudBillboard(TGXTexObj* hudTex, bool writeAlpha = false) {
     view_class* view = dComIfGd_getView();
     assert(view != nullptr && "VR: drawHudBillboard() called outside gameplay?");
@@ -1121,7 +1169,7 @@ inline void drawHudBillboard(TGXTexObj* hudTex, bool writeAlpha = false) {
     GXSetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_GREEN);
     GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_BLUE);
 
-    GXSetNumTevStages(writeAlpha ? 5 : 3);
+    GXSetNumTevStages(writeAlpha ? 4 : 3);
 
     // Stage 0: real color; alpha = texture's red channel (via SWAP1).
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -1148,27 +1196,21 @@ inline void drawHudBillboard(TGXTexObj* hudTex, bool writeAlpha = false) {
     GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, writeAlpha ? GX_CS_SCALE_4 : GX_CS_SCALE_1, GX_TRUE,
                     GX_TEVPREV);
     if (writeAlpha) {
-        // Key x8 in all (x4 above, x2 here): TP's menus are dark art -- deep blue
-        // fog, grey stone -- that only black should let the room through.
+        // Premultiply: colour * key (clamped to 1 above).
         GXSetTevOrder(GX_TEVSTAGE3, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
         GXSetTevSwapMode(GX_TEVSTAGE3, GX_TEV_SWAP0, GX_TEV_SWAP0);
-        GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+        GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_CPREV, GX_CC_APREV, GX_CC_ZERO);
         GXSetTevColorOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
         GXSetTevAlphaIn(GX_TEVSTAGE3, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-        GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_2, GX_TRUE, GX_TEVPREV);
-        // Premultiply: colour * key.
-        GXSetTevOrder(GX_TEVSTAGE4, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
-        GXSetTevSwapMode(GX_TEVSTAGE4, GX_TEV_SWAP0, GX_TEV_SWAP0);
-        GXSetTevColorIn(GX_TEVSTAGE4, GX_CC_ZERO, GX_CC_CPREV, GX_CC_APREV, GX_CC_ZERO);
-        GXSetTevColorOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaIn(GX_TEVSTAGE4, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-        GXSetTevAlphaOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     }
 
     if (writeAlpha) {
-        // Premultiplied "over" on colour and alpha alike.
+        // Premultiplied "over" on colour and alpha alike; a constant destination
+        // alpha would replace the key.
         GXSetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_INVSRCALPHA, GX_LO_SET);
         GXSetAlphaUpdate(GX_ENABLE);
+        GXSetDstAlpha(GX_DISABLE, 0);
     } else {
         GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_SET);
     }
@@ -1404,6 +1446,9 @@ inline void drawMenuBillboard(TGXTexObj* menuTex, float aspectHeightOverWidth, b
     GXLoadTexObj(menuTex, GX_TEXMAP0);
     // ONE/INVSRCALPHA on alpha too gives premultiplied "over": a + dst * (1 - a).
     GXSetAlphaUpdate(writeAlpha ? GX_ENABLE : GX_DISABLE);
+    if (writeAlpha) {
+        GXSetDstAlpha(GX_DISABLE, 0); // a constant destination alpha would replace the panel's
+    }
 
     const HudQuadCorners c = computeMenuBillboardPose(aspectHeightOverWidth);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
