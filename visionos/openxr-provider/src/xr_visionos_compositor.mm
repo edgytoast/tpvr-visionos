@@ -1052,6 +1052,11 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
         pass.colorAttachments[0].texture = color;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
         pass.colorAttachments[0].slice = slice;
+        // Foveation: the texture's own rasterization rate map, under which the
+        // viewport is in screen space and the eye images sharper where you look.
+        if (cp_drawable_get_rasterization_rate_map_count(drawable) > textureIndex) {
+            pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(drawable, textureIndex);
+        }
         if (depth != nil) {
             pass.depthAttachment.texture = depth;
             pass.depthAttachment.storeAction = MTLStoreActionStore;

@@ -44,9 +44,35 @@ Homebrew's `rustup` is keg-only; the build script puts
 1. AirDrop the disc image to the headset and open it with Twilight Princess VR,
    or put it in Files › On My Apple Vision Pro › Twilight Princess VR, or use
    Import Disc… in the app.
-2. Press Play. The game opens around you.
-3. Press the Digital Crown to leave. The game cannot restart in the same
-   process; relaunch the app to play again.
+2. Pick the immersion: Full (with or without your room around the menus) or
+   Progressive (a portal you widen with the Digital Crown).
+3. Press Play. The game opens around you and the launcher goes away.
+4. Press the Digital Crown to leave. The game saves and the app closes; open it
+   again to play again.
+
+With your room around the menus, Hyrule also fades into the room if you walk
+more than about 1.2 m from where you started, standing in for visionOS's
+full-immersion boundary.
+
+### Controls
+
+PS VR2 Sense controllers play TPVR's Touch layout. Bare hands play it too: index
+pinch = trigger, middle = A/X, ring = B/Y, little = menu, a fist = grip. Hold the
+left hand's thumb-middle pinch and move the hand to walk (a quick tap is still X).
+
+Graphics options for Vision Pro are under VR › Vision Pro (anti-aliasing) and VR
+› Performance (render resolution up to 150%).
+
+### Testing in the Simulator
+
+The app takes a few environment variables for headless runs (pass each as
+`SIMCTL_CHILD_<NAME>` to `xcrun simctl launch`):
+
+- `TPVR_AUTO_PLAY=1` presses Play.
+- `TPVR_ARGS` adds Dusklight options, e.g. `--stage F_SP103` (Ordon Ranch).
+- `TPVR_TEST_ACTIONS` scripts Sense controller input:
+  `NAME[=x,y]@seconds[~duration]`, measured from the first input sync, e.g.
+  `"MENU@30~0.3 B@45~0.3 LSTICK=0,1@50~2"`.
 
 ## Layout
 

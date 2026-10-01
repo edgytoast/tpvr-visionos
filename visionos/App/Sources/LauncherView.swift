@@ -7,6 +7,7 @@ struct LauncherView: View {
     @EnvironmentObject private var model: GameModel
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
+    @Environment(\.openWindow) private var openWindow
     @State private var pickingDisc = false
 
     var body: some View {
@@ -29,6 +30,7 @@ struct LauncherView: View {
                         Text("Add your Twilight Princess disc image: GameCube (GZ2E01, GZ2P01) or Wii (any release but Korean), as .iso, .rvz or .wbfs. AirDrop it and open it with this app, drop it in Files › On My Apple Vision Pro › Twilight Princess VR, or import it below. Either plays as the GameCube version.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     HStack {
                         Button("Import Disc…") { pickingDisc = true }
@@ -53,6 +55,7 @@ struct LauncherView: View {
                     Text("Hyrule opens through a portal in your room. Turn the Digital Crown to widen or narrow it.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Toggle("Show my room around menus", isOn: $model.roomBehindMenus)
                     Text(model.roomBehindMenus
@@ -60,7 +63,17 @@ struct LauncherView: View {
                          : "Hyrule stays around you in menus too, with visionOS's own full-immersion boundary.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+            .disabled(model.phase != .idle)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Toggle("Foveated rendering", isOn: $model.foveated)
+                Text("Sharper where you look. The game renders larger eye images, which costs GPU time: lower VR Render Resolution in the game's VR settings if it stutters.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(model.phase != .idle)
 
@@ -68,6 +81,7 @@ struct LauncherView: View {
                 Text(model.message)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             status
@@ -84,6 +98,8 @@ struct LauncherView: View {
             .disabled(!model.canPlay)
         }
         .padding(32)
+        // Wide enough that the notes wrap to a couple of lines, not a column.
+        .frame(minWidth: 680)
         .fileImporter(isPresented: $pickingDisc, allowedContentTypes: [.data]) { result in
             if case let .success(url) = result {
                 model.importDisc(from: url)
@@ -91,6 +107,10 @@ struct LauncherView: View {
         }
         .onOpenURL { url in
             model.importDisc(from: url)
+        }
+        .onAppear {
+            let openWindow = openWindow
+            model.showLauncher = { openWindow(id: GameModel.launcherWindowID) }
         }
         .task {
             // Headless runs: `SIMCTL_CHILD_TPVR_AUTO_PLAY=1 xcrun simctl launch ...` (or the
@@ -111,7 +131,9 @@ struct LauncherView: View {
         case .running:
             Label("Playing. Press the Digital Crown to leave.", systemImage: "visionpro")
         case let .ended(code):
-            Label("The game ended (code \(code)). Relaunch the app to play again.", systemImage: "stop.circle")
+            Label("The game stopped with an error (code \(code)). Quit and reopen the app to play again.",
+                  systemImage: "exclamationmark.triangle")
+                .foregroundStyle(.red)
         case let .failed(reason):
             Label(reason, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)

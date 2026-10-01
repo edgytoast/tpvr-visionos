@@ -68,10 +68,29 @@ owns the swapchain images and Dawn imports them.
 - [x] SwiftUI launcher + ImmersiveSpace + CompositorLayer; C bridge (disc path, layer renderer, spatial events, start, quit).
 - [x] Disc import into Documents (Import Disc…, AirDrop "Open with", Files); passed to the game as `--dvd`.
 
-### 4. Hands
-- [ ] Bare hands: fist = sword grip, swing detector on the grip pose, left hand shield, bow with two hands, pinch variants for buttons.
-- [ ] Walking without a thumbstick: an off-hand hold-to-walk gesture (see illixion's RAVEInput, MIT).
-- [ ] PS VR2 Sense controllers as a first-class alternative.
+### 4. Hands and controllers
+- [x] PS VR2 Sense controllers, first class: ARKit accessory tracking for grip and aim poses (predicted to display time), buttons, sticks, triggers, haptics (`xr_visionos_controllers.mm`).
+- [x] Walking without a thumbstick: the left hand's held thumb-middle pinch is a joystick (the walk clutch, after illixion's RAVEInput); a quick tap still presses X. Needs tuning on the headset.
+- [ ] Bare-hand turning (today: turn your body), and a pass over which pinch does what with bare hands.
 
-### 5. On the headset (needs the user's disc)
-- [ ] First light, frame pacing, comfort, gesture thresholds.
+### 5. On the headset
+- [x] First light, 2026-09-30: VR, the right Sense controller, gameplay. "Works perfectly."
+- [ ] Frame pacing and GPU headroom at higher render scales; comfort.
+
+### 6. Vision Pro features (2026-10-01)
+- [x] Sword hand: VR > Combat > Sword Hand, Right (default) or Left (Original). Same stored key as the old swap toggle.
+- [x] The launcher closes once the game opens; a clean quit (Digital Crown, or Quit) ends the app, so opening it again starts fresh.
+- [x] Immersion, chosen in the launcher (visionOS takes a space's style when it opens and ignores later changes, which the Simulator confirmed):
+  - Full, with "Show my room around menus" (default): a mixed space with opaque game frames. Dusklight's menus and TP's full-screen ones (Collection, maps, save, options, letters, fishing journal, skills, bugs; not the item ring) float in the room with Hyrule hidden behind them. The provider adds the movement boundary a mixed space lacks: Hyrule fades into the room from 1.2 m to 1.6 m away from where you started.
+  - Full without it: a full space, as before.
+  - Progressive (visionOS 26): Hyrule through a portrait portal; the Digital Crown widens or narrows it. The layer is layered and the provider draws both eyes in one render pass, which the system's render context finishes with the portal's edge. A portal shows black where frames are transparent, so menus there stay as they were.
+- [x] Anti-aliasing: VR > Vision Pro > Anti-Aliasing, Off (default) / FXAA / SMAA, live. FXAA runs in the compositor's shader; SMAA 1x (from the SHAR port) on the eye image first.
+- [x] Render quality: VR Render Resolution reaches 150% on Vision Pro (supersampling), capped to the runtime's largest image.
+- [x] PC-only settings (VR brightness sliders, desktop mirror) hidden on Vision Pro, as on Quest.
+- [x] Opaque layers composite with alpha 1 (OpenXR semantics); TPVR's eye images carry undefined alpha.
+- [x] Headless test hooks: `TPVR_AUTO_PLAY=1`, `TPVR_ARGS` (Dusklight options such as `--stage F_SP103`), `TPVR_TEST_ACTIONS` (scripted Sense controller input). Pass them as `SIMCTL_CHILD_*` to `xcrun simctl launch`.
+
+### Next
+- Foveation: today the drawable is uniform, about 1888x1792 per eye. A rasterization rate map would put more pixels where you look; the eye images would need to grow to match, so it trades GPU time.
+- Per-pixel depth for the compositor's reprojection (today the eyes are placed on a plane 3 m out).
+- Bare-hand turning and a full bare-hand control pass.

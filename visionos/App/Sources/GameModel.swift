@@ -50,11 +50,17 @@ final class GameModel: ObservableObject {
     @Published var roomBehindMenus: Bool {
         didSet { UserDefaults.standard.set(roomBehindMenus, forKey: Self.roomBehindMenusKey) }
     }
+    /// Foveated rendering: the system's rasterization rate map puts more of the
+    /// eye images' pixels where you look. The game renders larger images for it.
+    @Published var foveated: Bool {
+        didSet { UserDefaults.standard.set(foveated, forKey: Self.foveatedKey) }
+    }
     /// The immersive space's style, observed by the scene (TPVRVisionApp).
     let space = ImmersionSpaceStyle.shared
 
     private static let immersionKey = "immersion"
     private static let roomBehindMenusKey = "roomBehindMenus"
+    private static let foveatedKey = "foveated"
 
     /// Progressive immersion needs the render context CompositorServices gained in
     /// visionOS 26, which draws the portal's edge into the game's frames.
@@ -88,12 +94,15 @@ final class GameModel: ObservableObject {
     static let discExtensions: Set<String> = ["iso", "rvz", "gcm", "ciso", "gcz", "wia", "wbfs", "nfs", "tgc"]
 
     let documents: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    /// Reopens the launcher window (set by the launcher, which has the scene actions).
+    var showLauncher: (() -> Void)?
     private var watchdog: Timer?
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.immersionKey).flatMap(Immersion.init(rawValue:))
         immersion = saved == .progressive && Self.progressiveAvailable ? .progressive : .full
         roomBehindMenus = UserDefaults.standard.object(forKey: Self.roomBehindMenusKey) as? Bool ?? true
+        foveated = UserDefaults.standard.bool(forKey: Self.foveatedKey)
         // visionOS anchors an app's audio to its window by default, so the game
         // would fall silent once the launcher closes. Anchor it to the listener.
         try? AVAudioSession.sharedInstance().setIntendedSpatialExperience(
@@ -234,7 +243,16 @@ final class GameModel: ObservableObject {
         if !dusk_visionos_game_running() {
             watchdog?.invalidate()
             watchdog = nil
-            phase = .ended(exitCode: dusk_visionos_exit_code())
+            let code = dusk_visionos_exit_code()
+            if code == 0 {
+                // A clean quit (the Digital Crown, or Quit in the game's menu): the
+                // game saved on its way out, and it can't run twice in one process,
+                // so the app goes too. Opening it again starts afresh at the launcher.
+                exit(0)
+            }
+            phase = .ended(exitCode: code)
+            // Something went wrong: bring the launcher back to say so.
+            showLauncher?()
         } else if dusk_visionos_layer_invalidated() {
             dusk_visionos_request_quit()
         }

@@ -15,7 +15,7 @@ struct TPVRVisionApp: App {
                 .environmentObject(model)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 720, height: 560)
+        .defaultSize(width: 760, height: 640)
 
         ImmersiveSpace(id: GameModel.immersiveSpaceID) {
             ImmersiveGame.layer(for: model)
