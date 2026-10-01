@@ -275,6 +275,10 @@ private:
     std::atomic_bool m_safetyBoundary{false};
     // How much of the frame shows (1) against the room (0): the safety boundary's fade.
     float m_visibility = 1.0f;
+    // The last frame that drew layers, and whether they were see-through: empty
+    // see-through frames (loading over the room) ease in from it (PresentEmpty).
+    int64_t m_lastContentNanos = 0;
+    bool m_lastContentSeeThrough = false;
     Smaa m_smaa;
 };
 

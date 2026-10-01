@@ -15,6 +15,7 @@
 #include <cstring>
 
 #if TARGET_PC
+#include "dusk/vr/vr_main.hpp"
 #include "dusk/game_clock.h"
 #include "helpers/gx_helper.h"
 #endif
@@ -346,6 +347,11 @@ int dGameover_c::_draw() {
     IF_DUSK_BLOCK_END
 
     if (mIsDemoSave && mProc >= PROC_DISP_WAIT) {
+#if TARGET_PC
+        // The Game Over screen, faded out to black: in VR over the room, the room
+        // shows instead.
+        dusk::vr::noteBlackMenuScreen();
+#endif
         if (dgo_screen_c != NULL) {
             dComIfGd_set2DOpa(dgo_screen_c);
         }

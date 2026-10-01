@@ -245,6 +245,12 @@ struct FragmentParams {
 constexpr float kBoundaryFadeStartMeters = 1.2f;
 constexpr float kBoundaryFadeEndMeters = 1.6f;
 
+// Empty frames that let the room through (loading, while the room shows around
+// menus): after opaque content they stay black this long, so a quick scene
+// change stays black, then ease into the room over the fade.
+constexpr int64_t kEmptyHoldNanos = 250'000'000;
+constexpr int64_t kEmptyFadeNanos = 500'000'000;
+
 // Distance a projection layer's pixels are said to sit at, for the compositor's
 // positional reprojection. OpenXR runtimes without a depth layer assume a fixed
 // distance too; a diorama or a cockpit both live a few metres out.
@@ -898,6 +904,16 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     const size_t textures = cp_drawable_get_texture_count(drawable);
     const bool layered = IsLayered(drawable);
+    float clearAlpha = m_visibility;
+    if (alphaBlend) {
+        clearAlpha = 0.0f;
+        if (m_lastContentNanos != 0 && !m_lastContentSeeThrough) {
+            const int64_t since = NowNanos() - m_lastContentNanos;
+            clearAlpha = 1.0f - std::clamp(static_cast<float>(since - kEmptyHoldNanos) /
+                                               static_cast<float>(kEmptyFadeNanos),
+                                           0.0f, 1.0f);
+        }
+    }
     for (size_t i = 0; i < textures; ++i) {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
         id<MTLTexture> color = cp_drawable_get_color_texture(drawable, i);
@@ -905,7 +921,7 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
         pass.colorAttachments[0].texture = color;
         pass.colorAttachments[0].loadAction = MTLLoadActionClear;
         pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, alphaBlend ? 0 : m_visibility);
+        pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, clearAlpha);
         if (depth != nil) {
             pass.depthAttachment.texture = depth;
             pass.depthAttachment.loadAction = MTLLoadActionClear;
@@ -1003,6 +1019,9 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     }
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     commandBuffer.label = @"WiiCompiled frame";
+    m_lastContentNanos = NowNanos();
+    m_lastContentSeeThrough = std::any_of(layers.begin(), layers.end(),
+                                          [](const ComposedLayer& layer) { return layer.alphaBlend; });
     // Every wait first: Metal orders them before the encoders that follow.
     for (const ComposedLayer& layer : layers) {
         for (const ComposedLayer::Image& image : layer.images) {

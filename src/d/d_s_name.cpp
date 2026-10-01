@@ -18,6 +18,7 @@
 #include "f_op/f_op_overlap_mng.h"
 
 #if TARGET_PC
+#include "dusk/vr/vr_main.hpp"
 #include "dusk/autosave.h"
 #include "dusk/game_clock.h"
 #include "dusk/game_mode.hpp"
@@ -246,6 +247,10 @@ s32 dScnName_c::execute() {
 }
 
 s32 dScnName_c::draw() {
+#if TARGET_PC
+    // File select draws over black: in VR over the room, the room shows instead.
+    dusk::vr::noteBlackMenuScreen();
+#endif
     IF_DUSK_BLOCK(dusk::game_clock::is_sim_frame())
     dComIfGp_getVibration().Run();
     IF_DUSK_BLOCK_END

@@ -297,6 +297,9 @@ bool g_menuPassthroughFrame = false;
 // ...and the menu is TP's own full-screen one (Collection, maps, save, options,
 // letters, fishing journal, skills, bugs), which is the HUD billboard.
 bool g_gameMenuPassthroughFrame = false;
+// noteBlackMenuScreen() since the last tick(): the draws run inside the eye
+// loop, after tick() decides, so a screen counts from the frame after it draws.
+bool g_blackMenuNoted = false;
 
 // NEW this session: carries per-frame state from tick() across the gap to
 // submitFrame() (called separately, after m_Do_main.cpp's aurora_end_frame()
@@ -483,6 +486,22 @@ bool isEyePassOpen() {
 
 bool isMenuPassthroughFrame() {
     return g_menuPassthroughFrame && g_duskVREyePassOpen;
+}
+
+void noteBlackMenuScreen() {
+    g_blackMenuNoted = true;
+}
+
+// Frames with nothing to show (loading, the logo scene, a missed swapchain image):
+// over the room they're see-through rather than black, and the provider eases
+// into the room only once one has lasted a moment, so a quick door stays black.
+static XrEnvironmentBlendMode emptyFrameBlendMode() {
+#if DUSK_VR_XR_GRAPHICS_METAL
+    if (dusk_visionos_room_behind_menus()) {
+        return XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+    }
+#endif
+    return XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 }
 
 void getEyeSymmetricFov(float* fovyDeg, float* aspect) {
@@ -1548,6 +1567,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
     g_duskVREyePassOpen = false;
     g_menuPassthroughFrame = false;
     g_gameMenuPassthroughFrame = false;
+    const bool blackMenuNoted = g_blackMenuNoted;
+    g_blackMenuNoted = false;
     // Recomputed further down on frames that read controller input; an early
     // return must not leave a stale "sword is swinging" armed.
     g_physicalSwordSwingActive = false;
@@ -1707,7 +1728,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         logTickReasonOnChange("shouldRender-false");
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
-        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        endInfo.environmentBlendMode = emptyFrameBlendMode();
         endInfo.layerCount = 0;
         endInfo.layers = nullptr;
         xrEndFrame(g_session->session(), &endInfo);
@@ -1733,7 +1754,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         }
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
-        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        endInfo.environmentBlendMode = emptyFrameBlendMode();
         endInfo.layerCount = 0;
         endInfo.layers = nullptr;
         xrEndFrame(g_session->session(), &endInfo);
@@ -1924,6 +1945,8 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             const u8 proc = menuWindow->getMenuProc();
             g_gameMenuPassthroughFrame = proc >= dMw_c::COLLECT_OPEN && proc <= dMw_c::INSECT_AGITHA_CLOSE;
         }
+        // File select and Game Over (noteBlackMenuScreen()).
+        g_gameMenuPassthroughFrame = g_gameMenuPassthroughFrame || blackMenuNoted;
         g_menuPassthroughFrame = menuVisible || g_gameMenuPassthroughFrame;
     }
     {
@@ -2822,7 +2845,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         duskVrLog(msg);
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
-        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        endInfo.environmentBlendMode = emptyFrameBlendMode();
         endInfo.layerCount = 0;
         endInfo.layers = nullptr;
         xrEndFrame(g_session->session(), &endInfo);
@@ -2837,7 +2860,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         xrReleaseSwapchainImage(g_session->swapchain(), &releaseInfo);
         XrFrameEndInfo endInfo{XR_TYPE_FRAME_END_INFO};
         endInfo.displayTime = frameState.predictedDisplayTime;
-        endInfo.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        endInfo.environmentBlendMode = emptyFrameBlendMode();
         endInfo.layerCount = 0;
         endInfo.layers = nullptr;
         xrEndFrame(g_session->session(), &endInfo);

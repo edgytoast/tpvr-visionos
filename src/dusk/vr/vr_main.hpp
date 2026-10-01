@@ -60,6 +60,13 @@ bool isEyePassOpen();
 // (alpha 0) around the menu. Always false elsewhere.
 bool isMenuPassthroughFrame();
 
+// Called by TP's full-screen menus that live outside the menu window and draw
+// over black: the file select scene (dScnName_c, name entry and the brightness
+// check included) and the Game Over screen. Over the room (Apple Vision Pro),
+// the next frame shows them like the pause menu, the room around them instead
+// of the black. Harmless elsewhere.
+void noteBlackMenuScreen();
+
 // Only meaningful while isRenderingToHeadset() is true (returns the last
 // computed values otherwise, harmlessly stale). The smallest symmetric
 // fovy/aspect frustum that fully contains the current eye's real asymmetric
