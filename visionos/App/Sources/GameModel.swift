@@ -233,6 +233,8 @@ final class GameModel: ObservableObject {
             startWatchdog()
         } else {
             phase = .failed(message: String(cString: dusk_visionos_last_error()))
+            // The launcher closed when the space opened; bring it back to say why.
+            showLauncher?()
         }
     }
 

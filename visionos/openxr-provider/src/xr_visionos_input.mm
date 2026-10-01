@@ -215,8 +215,10 @@ void UpdateWalkClutch(const Session& session) noexcept {
     float pinch = 0.0f;
     if (bare) {
         pinch = Pinch(hand.thumbTip(), hand.middleTip());
-        // The middle finger only: an index pinch (the trigger) mustn't walk.
-        if (Pinch(hand.thumbTip(), hand.indexTip()) > pinch) {
+        // The middle finger only: an index pinch (the trigger) mustn't start a
+        // walk. Once walking, the neighbouring index tip wobbling closer mustn't
+        // end it either.
+        if (!clutch.active && Pinch(hand.thumbTip(), hand.indexTip()) > pinch) {
             pinch = 0.0f;
         }
     }
@@ -336,9 +338,11 @@ Gestures WithWalkClutch(Gestures g, uint32_t hand) noexcept {
     if (hand != kWalkHand || ControllerOf(kWalkHand).connected) {
         return g;
     }
-    if (g_walkClutch.active) {
-        g.pinchMiddle = 0.0f;
-    } else if (NowNanos() < g_walkClutch.tapUntilNanos) {
+    // The middle pinch is the clutch's alone, so X comes only from a tap: the
+    // pinch reaching the click threshold on its way to the clutch's start must
+    // not press it.
+    g.pinchMiddle = 0.0f;
+    if (!g_walkClutch.active && NowNanos() < g_walkClutch.tapUntilNanos) {
         g.pinchIndex = g.pinchRing = g.pinchLittle = 0.0f;
         g.pinchMiddle = 1.0f;
     }

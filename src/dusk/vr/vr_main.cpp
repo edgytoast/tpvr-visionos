@@ -489,6 +489,31 @@ void getEyeSymmetricFov(float* fovyDeg, float* aspect) {
     vr_render::getEyeSymmetricFov(fovyDeg, aspect);
 }
 
+// The menus an open eye pass shows, after the painter: a Dusklight menu (and its
+// backdrop), and over the room (g_menuPassthroughFrame) the eye wiped first and
+// TP's own menu -- the HUD -- drawn with real alpha. The painter skips the world
+// and HUD on those frames, but other passes still leave opaque pixels in the eye
+// (TP's own menus do), hence the wipe. Shared by the single-pass and per-eye
+// paths.
+static void drawEyeMenus(bool menuVisible) {
+    if (g_menuPassthroughFrame) {
+        vr_render::clearEyeToTransparent();
+        if (g_gameMenuPassthroughFrame) {
+            vr_render::drawHudBackdrop();
+            vr_render::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj(), true);
+        }
+    }
+    if (menuVisible) {
+        // Over the room the panel needs no backdrop: the room is what shows
+        // around it.
+        if (!dusk::ui::is_prelaunch_open() && !g_menuPassthroughFrame) {
+            vr_render::drawMenuBillboardBackdrop(vr_render::g_menuBillboardAspectHeightOverWidth);
+        }
+        vr_render::drawMenuBillboard(&vr_render::g_menuBillboardTexObj,
+                                      vr_render::g_menuBillboardAspectHeightOverWidth, g_menuPassthroughFrame);
+    }
+}
+
 void drawHudBillboard(TGXTexObj* hudTex) {
     if (g_menuPassthroughFrame) {
         // Over the room, tick() clears the eye after the painter and draws the
@@ -3044,27 +3069,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
                 vr_render::drawAimCrosshair(*link->getLineTopPosP());
             }
         }
-        if (g_menuPassthroughFrame) {
-            // A menu over the room: nothing of the game may show around it. The
-            // painter skips the world and HUD, but other passes still leave
-            // opaque pixels in the eye (TP's own menus do), so wipe it, then draw
-            // TP's menu -- the HUD -- with real alpha.
-            vr_render::clearEyeToTransparent();
-            if (g_gameMenuPassthroughFrame) {
-                vr_render::drawHudBackdrop();
-                vr_render::drawHudBillboard(mDoGph_gInf_c::getHudBillboardTexObj(), true);
-            }
-        }
-        if (menuVisible) {
-            // Over the room the panel needs no backdrop: the room is what shows
-            // around it.
-            if (!dusk::ui::is_prelaunch_open() && !g_menuPassthroughFrame) {
-                vr_render::drawMenuBillboardBackdrop(vr_render::g_menuBillboardAspectHeightOverWidth);
-            }
-            vr_render::drawMenuBillboard(&vr_render::g_menuBillboardTexObj,
-                                          vr_render::g_menuBillboardAspectHeightOverWidth,
-                                          g_menuPassthroughFrame);
-        }
+        drawEyeMenus(menuVisible);
 
         PerfClock::time_point perfT4 = PerfClock::now();
         aurora::gfx::ResolvedTargets targets =
@@ -3178,7 +3183,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         // boomerang 2D reticle -- see drawAimCrosshair()'s own comment
         // (vr_stereo_render.hpp) for the full "all items" scoping.
         if (auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer())) {
-            if (link->getAimSightVisible()) {
+            if (link->getAimSightVisible() && !g_menuPassthroughFrame) {
                 vr_render::drawAimCrosshair(*link->getLineTopPosP());
             }
         }
@@ -3206,13 +3211,7 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         // content (text/logo/buttons) still draws normally via
         // drawMenuBillboard() below, just without the opaque quad behind
         // it, so it reads through to the real VR surroundings.
-        if (menuVisible) {
-            if (!dusk::ui::is_prelaunch_open()) {
-                vr_render::drawMenuBillboardBackdrop(vr_render::g_menuBillboardAspectHeightOverWidth);
-            }
-            vr_render::drawMenuBillboard(&vr_render::g_menuBillboardTexObj,
-                                          vr_render::g_menuBillboardAspectHeightOverWidth);
-        }
+        drawEyeMenus(menuVisible);
 
         // TODO: inject hand mesh before resolving the pass:
         // vr_render::HandPayload payload{ eye == 0 ? leftPose : rightPose };

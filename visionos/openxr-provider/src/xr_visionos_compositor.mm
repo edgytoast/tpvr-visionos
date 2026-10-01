@@ -843,8 +843,10 @@ FragmentParams LayerFragmentParams(const ComposedLayer& layer, const ComposedLay
     FragmentParams params{};
     params.texel = simd_make_float2(1.0f / static_cast<float>(image.texture.width),
                                     1.0f / static_cast<float>(image.texture.height));
-    // The game's eyes only: a quad is a menu or a screen, already sharp text.
-    params.fxaa = antiAliasing == 1 && layer.kind == ComposedLayer::Kind::Projection ? 1u : 0u;
+    // The game's eyes only: a quad is a menu or a screen, already sharp text. And
+    // only opaque ones: FXAA smooths colour but not alpha, so on a see-through
+    // layer (menus over the room) it would leave a glowing fringe outside edges.
+    params.fxaa = antiAliasing == 1 && layer.kind == ComposedLayer::Kind::Projection && !layer.alphaBlend ? 1u : 0u;
     params.opaque = layer.alphaBlend ? 0u : 1u;
     params.visibility = visibility;
     return params;
