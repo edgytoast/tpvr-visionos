@@ -20,6 +20,13 @@ if (APPLE AND NOT TVOS AND CMAKE_SYSTEM_NAME STREQUAL tvOS)
     set(TVOS ON)
     set(IOS OFF)
 endif ()
+if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL visionOS)
+    # Apple Vision Pro (visionos/PORT_PLAN.md). ios.toolchain.cmake sets
+    # VISIONOS for PLATFORM=VISIONOS; make sure it holds here too and that the
+    # iOS branches (which assume a UIKit app with its own main) stay off.
+    set(VISIONOS ON)
+    set(IOS OFF)
+endif ()
 
 if(APPLE AND NOT CMAKE_OSX_SYSROOT)
     # If the Xcode SDK is lagging behind system version, CMake needs this done first
@@ -123,7 +130,18 @@ option(DUSK_BUILD_WARNINGS "Enable compiler warnings (off by default)")
 option(DUSK_SELECTED_OPT "If on, selected parts of the project will be compiled with optimizations on Debug, intending to make the game run at 30 FPS. Note for MSVC: you will need to remove '/RTC1' from your debug flags in CMake.")
 option(DUSK_PACKAGE_INSTALL "Install Dusklight with a Linux-native file structure" OFF)
 option(DUSK_GFX_DEBUG_GROUPS "Report debug groups to the native graphics API" ${DUSK_GFX_DEBUG_GROUPS_DEFAULT})
-option(DUSK_ENABLE_CODE_MODS "Enable code mods" ON)
+if (VISIONOS)
+    # symgen (the prebuilt that builds the mod ABI exports) cannot read xrOS
+    # Mach-O objects, and the visionOS game is a framework the SwiftUI app
+    # embeds, exporting only its C bridge (visionos/visionos_exports.txt).
+    set(_dusk_code_mods_default OFF)
+else ()
+    set(_dusk_code_mods_default ON)
+endif ()
+option(DUSK_ENABLE_CODE_MODS "Enable code mods" ${_dusk_code_mods_default})
+if (VISIONOS AND DUSK_ENABLE_CODE_MODS)
+    message(FATAL_ERROR "dusklight: code mods are not supported on visionOS; configure with -DDUSK_ENABLE_CODE_MODS=OFF")
+endif ()
 option(DUSK_ENABLE_OPUS "Enable loading Opus audio files for mods" OFF)
 
 
@@ -385,6 +403,11 @@ if (CMAKE_CXX_LINK_GROUP_USING_RESCAN_SUPPORTED OR CMAKE_LINK_GROUP_USING_RESCAN
 endif ()
 
 set(_dusklight_all_files src/dusk/main.cpp ${GAME_BASE_FILES} ${GAME_DEBUG_FILES})
+if (VISIONOS)
+    # The C bridge the SwiftUI app drives (main() is SwiftUI's; the game runs
+    # on a thread of its own). See src/dusk/visionos/visionos_host.h.
+    list(APPEND _dusklight_all_files src/dusk/visionos/visionos_host.mm)
+endif ()
 set(DUSK_INTERNAL_FILES ${_dusklight_all_files})
 list(FILTER DUSK_INTERNAL_FILES INCLUDE REGEX "^src/dusk/")
 set(GAME_FILES ${_dusklight_all_files})
@@ -399,7 +422,7 @@ target_include_directories(dusk_internal PRIVATE ${miniz_SOURCE_DIR})
 target_link_libraries(dusk_internal PRIVATE aurora::main ${GAME_LIBS} ${JSYSTEM_LIBRARIES})
 target_precompile_headers(dusk_internal PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${CMAKE_SOURCE_DIR}/include/dusk_pch.hpp>")
 
-if(ANDROID)
+if(ANDROID OR VISIONOS)
     add_library(dusklight SHARED ${GAME_FILES} ${miniz_SOURCE_DIR}/miniz.c)
 else ()
     add_executable(dusklight ${GAME_FILES} ${miniz_SOURCE_DIR}/miniz.c)
@@ -498,7 +521,24 @@ endif ()
 if (WIN32)
     target_link_libraries(dusklight PRIVATE Psapi)
 endif ()
-if (APPLE)
+if (APPLE AND VISIONOS)
+    # Only the C bridge is exported. Everything else, the game's replacement
+    # operator new/delete included, stays inside the framework: dyld would
+    # otherwise make an exported replacement process-wide and SwiftUI would
+    # allocate through the game's allocator.
+    target_link_options(dusklight PRIVATE
+        "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/visionos/visionos_exports.txt")
+    set_target_properties(dusklight PROPERTIES
+        FRAMEWORK TRUE
+        MACOSX_FRAMEWORK_IDENTIFIER "${DUSK_BUNDLE_IDENTIFIER}.game"
+        MACOSX_FRAMEWORK_BUNDLE_VERSION ${BOREALIS_APP_VERSION}
+        MACOSX_FRAMEWORK_SHORT_VERSION_STRING ${BOREALIS_APP_SHORT_VERSION}
+        OUTPUT_NAME DusklightGame
+        INSTALL_NAME_DIR "@rpath")
+    foreach (_framework UIKit Foundation Metal QuartzCore IOSurface CompositorServices ARKit GameController)
+        target_link_libraries(dusklight PRIVATE "-framework ${_framework}")
+    endforeach ()
+elseif (APPLE)
     include(cmake/AppleExports.cmake)
     setup_apple_exports(dusklight)
 elseif (ANDROID)
@@ -577,7 +617,7 @@ if (DUSK_ENABLE_CODE_MODS AND CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
     add_subdirectory(mods/audio_mod)
 endif ()
 
-if (APPLE)
+if (APPLE AND NOT VISIONOS)
     if (IOS)
         set(DUSK_RESOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/platforms/ios)
     elseif (TVOS)
@@ -817,8 +857,8 @@ install_bundled_mods()
 # The D3D12 / DXGI shared-handle path in vr_xr_submit.hpp is Windows-specific,
 # and vr_xr_bootstrap.hpp's Vulkan branch is Android-specific (see its own
 # top comment) -- no other platform has either wired up.
-if (NOT WIN32 AND NOT ANDROID)
-    message(STATUS "Dusklight VR: skipping — Windows/Android only for now")
+if (NOT WIN32 AND NOT ANDROID AND NOT VISIONOS)
+    message(STATUS "Dusklight VR: skipping — Windows/Android/visionOS only for now")
     return()
 endif ()
 
@@ -835,7 +875,41 @@ message(STATUS "Dusklight VR: configuring")
 # 1. Find OpenXR
 # ============================================================
 
-if (ANDROID)
+if (VISIONOS)
+    # Apple Vision Pro: there is no OpenXR runtime or loader on visionOS. The
+    # provider in visionos/openxr-provider implements the xr* entry points on
+    # CompositorServices and ARKit and links in place of the loader; only the
+    # Khronos headers are needed (the same pinned release the provider is
+    # built against in WiiCompiled Vision).
+    include(FetchContent)
+    FetchContent_Declare(openxr_headers
+        URL https://github.com/KhronosGroup/OpenXR-SDK/archive/refs/tags/release-1.1.61.tar.gz
+        URL_HASH SHA256=d5e2773d282642e6e250bd10266f316fc3ff3b8602c83db009a1f434205998e6
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        # No such directory: the SDK's own CMake (the loader) is never added.
+        SOURCE_SUBDIR include-only-no-cmake)
+    FetchContent_MakeAvailable(openxr_headers)
+    set(_dusk_xr_provider_dir "${CMAKE_SOURCE_DIR}/visionos/openxr-provider")
+    add_library(dusk_openxr_visionos STATIC
+        "${_dusk_xr_provider_dir}/src/xr_visionos_runtime.mm"
+        "${_dusk_xr_provider_dir}/src/xr_visionos_input.mm"
+        "${_dusk_xr_provider_dir}/src/xr_visionos_hand_tracking.mm"
+        "${_dusk_xr_provider_dir}/src/xr_visionos_compositor.mm"
+        "${_dusk_xr_provider_dir}/src/xr_visionos_controllers.mm")
+    target_include_directories(dusk_openxr_visionos PUBLIC "${_dusk_xr_provider_dir}/include")
+    target_include_directories(dusk_openxr_visionos SYSTEM PUBLIC "${openxr_headers_SOURCE_DIR}/include")
+    target_compile_features(dusk_openxr_visionos PUBLIC cxx_std_20)
+    target_compile_options(dusk_openxr_visionos PRIVATE -fobjc-arc -w)
+    set_target_properties(dusk_openxr_visionos PROPERTIES UNITY_BUILD OFF FOLDER "visionOS")
+    foreach (_framework CompositorServices ARKit Metal IOSurface QuartzCore Foundation GameController CoreHaptics)
+        target_link_libraries(dusk_openxr_visionos PUBLIC "-framework ${_framework}")
+    endforeach ()
+    add_library(OpenXR::openxr_loader ALIAS dusk_openxr_visionos)
+    # The host bridge (src/dusk/visionos/visionos_host.mm) forwards the app's
+    # layer renderer and spatial events to the provider.
+    target_link_libraries(dusk_internal PRIVATE dusk_openxr_visionos)
+    message(STATUS "Dusklight VR: visionOS OpenXR provider (no loader), OpenXR headers release-1.1.61")
+elseif (ANDROID)
     # CORRECTED 2026-09-16 (previous version of this branch assumed Meta's
     # OpenXR Mobile SDK download ships a prebuilt libopenxr_loader.so per
     # ABI -- checked the actual downloaded package this session and that's
@@ -993,7 +1067,18 @@ if (DAWN_NATIVE_INCLUDE_DIR)
     target_include_directories(dusklight_vr INTERFACE "${DAWN_NATIVE_INCLUDE_DIR}")
 endif ()
 
-if (ANDROID)
+if (VISIONOS)
+    # Graphics binding: the provider's own Metal one (XrGraphicsBindingMetalMKW,
+    # visionos/openxr-provider/include/vr/visionos/xr_visionos.h); Dawn imports
+    # its IOSurface swapchain images. DUSK_VR_XR_GRAPHICS_METAL is derived in
+    # vr_xr_bootstrap.hpp.
+    target_link_libraries(dusklight_vr INTERFACE
+        OpenXR::openxr_loader
+    )
+    target_compile_definitions(dusklight_vr INTERFACE
+        DUSK_VR_ENABLED=1
+    )
+elseif (ANDROID)
     # find_package(Vulkan) resolves against the NDK's bundled Vulkan headers
     # + libvulkan.so via the Android CMake toolchain file (same toolchain
     # the android-arm64/android-x86_64 presets already use to build

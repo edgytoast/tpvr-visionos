@@ -34,7 +34,7 @@ namespace {
 
 bool RestartProcess(int argc, char* argv[]) {
 #if defined(__ANDROID__) || (defined(TARGET_OS_IOS) && TARGET_OS_IOS) ||                           \
-    (defined(TARGET_OS_TV) && TARGET_OS_TV)
+    (defined(TARGET_OS_TV) && TARGET_OS_TV) || (defined(TARGET_OS_VISION) && TARGET_OS_VISION)
     (void)argc;
     (void)argv;
     return false;

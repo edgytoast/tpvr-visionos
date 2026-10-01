@@ -473,6 +473,26 @@ bool LocateActionSpaceInWorld(Session& session, const Space& space, int64_t time
         return false;
     }
     const bool aim = IsAimAction(instance, *action);
+    if (const ControllerSample& controller = ControllerOf(hand); controller.tracked) {
+        // A Sense controller in this hand: its own grip and aim, which also
+        // points at menus (no gaze pinch needed).
+        const simd_float4x4& worldFromPose = aim ? controller.worldFromAim : controller.worldFromGrip;
+        worldFromSpace = simd_mul(worldFromPose, MatrixFromPose(space.poseInSpace));
+        flags = XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT |
+                XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT | XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+        if (linearVelocity != nullptr) {
+            *linearVelocity = simd_make_float3(0.0f, 0.0f, 0.0f);
+            const ControllerSample& previous = PreviousControllerOf(hand);
+            if (previous.tracked && previous.timeNanos != 0 && controller.timeNanos > previous.timeNanos) {
+                const simd_float4x4& before = aim ? previous.worldFromAim : previous.worldFromGrip;
+                const float dt = static_cast<float>(controller.timeNanos - previous.timeNanos) * 1.0e-9f;
+                if (dt > 1.0e-3f) {
+                    *linearVelocity = (worldFromPose.columns[3].xyz - before.columns[3].xyz) / dt;
+                }
+            }
+        }
+        return true;
+    }
     if (aim && hand == kPointerHand) {
         // The pointer is not the hand's: pointing a hand at a screen a few metres
         // away is too coarse to land on a button. A pinch (of either hand) aims
@@ -810,6 +830,8 @@ XrResult XRAPI_CALL SyncActions(XrSession session, const XrActionsSyncInfo* sync
             target->previousHands[hand] = {};
         }
     }
+    // PS VR2 Sense controllers (xr_visionos_controllers.mm), predicted to this frame.
+    SampleControllers(target->predictedDisplayNanos);
     target->lastSyncNanos = NowNanos();
     return XR_SUCCESS;
 }
@@ -864,9 +886,17 @@ XrResult XRAPI_CALL GetActionStateBoolean(XrSession session, const XrActionState
     bool active = false;
     bool current = false;
     for (const auto& [hand, component] : bindings) {
-        const Gestures g = GesturesOfHand(*target, hand);
         float value = 0.0f;
         bool boolean = false;
+        if (const ControllerSample& controller = ControllerOf(hand); controller.connected) {
+            if (!ControllerComponentValue(controller, component, value, boolean)) {
+                continue;
+            }
+            active = true;
+            current = current || boolean;
+            continue;
+        }
+        const Gestures g = GesturesOfHand(*target, hand);
         if (!g.tracked || !ComponentValue(g, component, value, boolean)) {
             continue;
         }
@@ -904,9 +934,17 @@ XrResult XRAPI_CALL GetActionStateFloat(XrSession session, const XrActionStateGe
     bool active = false;
     float current = 0.0f;
     for (const auto& [hand, component] : bindings) {
-        const Gestures g = GesturesOfHand(*target, hand);
         float value = 0.0f;
         bool boolean = false;
+        if (const ControllerSample& controller = ControllerOf(hand); controller.connected) {
+            if (!ControllerComponentValue(controller, component, value, boolean)) {
+                continue;
+            }
+            active = true;
+            current = std::max(current, value);
+            continue;
+        }
+        const Gestures g = GesturesOfHand(*target, hand);
         if (!g.tracked || !ComponentValue(g, component, value, boolean)) {
             continue;
         }
@@ -938,14 +976,22 @@ XrResult XRAPI_CALL GetActionStateVector2f(XrSession session, const XrActionStat
         return XR_ERROR_VALIDATION_FAILURE;
     }
     bool active = false;
+    XrVector2f current{0.0f, 0.0f};
     for (const auto& [hand, component] : bindings) {
-        if (target->hands[hand].tracked && component.rfind("thumbstick", 0) == 0) {
+        if (component.rfind("thumbstick", 0) != 0) {
+            continue;
+        }
+        if (const ControllerSample& controller = ControllerOf(hand); controller.connected) {
             active = true;
+            if (simd_length(controller.stick) > std::hypot(current.x, current.y)) {
+                current = {controller.stick.x, controller.stick.y};
+            }
+        } else if (target->hands[hand].tracked) {
+            active = true; // a bare hand has no stick; it reads as centred
         }
     }
-    // The hands have no stick; it reads as centred.
     state->isActive = active ? XR_TRUE : XR_FALSE;
-    state->currentState = {0.0f, 0.0f};
+    state->currentState = current;
     state->changedSinceLastSync = XR_FALSE;
     state->lastChangeTime = target->lastSyncNanos;
     return XR_SUCCESS;
@@ -969,7 +1015,7 @@ XrResult XRAPI_CALL GetActionStatePose(XrSession session, const XrActionStateGet
     }
     bool active = false;
     for (const auto& [hand, component] : bindings) {
-        active = active || target->hands[hand].tracked;
+        active = active || target->hands[hand].tracked || ControllerOf(hand).tracked;
     }
     state->isActive = active ? XR_TRUE : XR_FALSE;
     return XR_SUCCESS;
@@ -1023,7 +1069,19 @@ XrResult XRAPI_CALL ApplyHapticFeedback(XrSession session, const XrHapticActionI
     if (GetAction(hapticActionInfo->action) == nullptr) {
         return XR_ERROR_HANDLE_INVALID;
     }
-    return XR_SUCCESS; // hands have no motor
+    // Bare hands have no motor; a Sense controller in that hand does.
+    if (hapticFeedback->type == XR_TYPE_HAPTIC_VIBRATION) {
+        const auto* vibration = reinterpret_cast<const XrHapticVibration*>(hapticFeedback);
+        const uint32_t hand = hapticActionInfo->subactionPath != XR_NULL_PATH
+                                  ? HandOfSubaction(*object, hapticActionInfo->subactionPath)
+                                  : 2u;
+        for (uint32_t h = 0; h < 2; ++h) {
+            if ((hand == h || hand > 1) && ControllerOf(h).connected) {
+                ControllerPulse(h, vibration->amplitude, vibration->duration);
+            }
+        }
+    }
+    return XR_SUCCESS;
 }
 
 XrResult XRAPI_CALL StopHapticFeedback(XrSession session, const XrHapticActionInfo* hapticActionInfo) {

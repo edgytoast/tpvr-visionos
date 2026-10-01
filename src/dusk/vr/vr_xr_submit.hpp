@@ -69,6 +69,12 @@
 // g_sharedTextureMemoryD3D12Supported), just the Android/Vulkan feature-flag
 // counterpart. Same relative path as the D3D12 branch's own include.
 #include "../../../extern/aurora/lib/webgpu/gpu.hpp"
+#elif DUSK_VR_XR_GRAPHICS_METAL
+// The provider's swapchain images are IOSurfaces Dawn imports
+// (SharedTextureMemoryIOSurface); fences are MTLSharedEvents
+// (SharedFenceMTLSharedEvent). Both come from xr_visionos.h through
+// vr_xr_bootstrap.hpp; nothing Metal-specific is included here.
+#include "../../../extern/aurora/lib/webgpu/gpu.hpp"
 #else
 #include <d3d12.h>
 #include <dxgi1_4.h>
@@ -133,6 +139,31 @@ inline int64_t toDxgiSwapchainFormat(wgpu::TextureFormat format) {
                 "toDxgiSwapchainFormat: unhandled wgpu::TextureFormat from "
                 "aurora::gfx::color_format() -- add a case rather than assume "
                 "RGBA8Unorm (see VR_MOD_HANDOFF_7.md TODO list).");
+    }
+}
+#elif DUSK_VR_XR_GRAPHICS_METAL
+// MTLPixelFormat values (the provider's swapchain formats). The name is kept so
+// vr_main.cpp's call stays branch-free.
+inline constexpr int64_t kMtlRGBA8Unorm = 70;
+inline constexpr int64_t kMtlRGBA8UnormSrgb = 71;
+inline constexpr int64_t kMtlBGRA8Unorm = 80;
+inline constexpr int64_t kMtlBGRA8UnormSrgb = 81;
+inline constexpr int64_t kMtlRGBA16Float = 115;
+
+inline int64_t toDxgiSwapchainFormat(wgpu::TextureFormat format) {
+    switch (format) {
+        case wgpu::TextureFormat::RGBA8Unorm:
+            return kMtlRGBA8Unorm;
+        case wgpu::TextureFormat::RGBA8UnormSrgb:
+            return kMtlRGBA8UnormSrgb;
+        case wgpu::TextureFormat::BGRA8Unorm:
+            return kMtlBGRA8Unorm;
+        case wgpu::TextureFormat::BGRA8UnormSrgb:
+            return kMtlBGRA8UnormSrgb;
+        case wgpu::TextureFormat::RGBA16Float:
+            return kMtlRGBA16Float;
+        default:
+            throw std::runtime_error("toDxgiSwapchainFormat: unhandled wgpu::TextureFormat on Metal");
     }
 }
 #else
@@ -287,6 +318,39 @@ inline int64_t srgbToggleCounterpart(int64_t format) {
 // -- so packR10G10B10A2Unorm()'s existing bit-packing below is reused
 // as-is, no separate Vulkan version needed).
 inline constexpr int64_t kPackedFallbackFormat = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+#elif DUSK_VR_XR_GRAPHICS_METAL
+inline int64_t channelSwapCounterpart(int64_t format) {
+    switch (format) {
+        case kMtlBGRA8Unorm:
+            return kMtlRGBA8Unorm;
+        case kMtlRGBA8Unorm:
+            return kMtlBGRA8Unorm;
+        case kMtlBGRA8UnormSrgb:
+            return kMtlRGBA8UnormSrgb;
+        case kMtlRGBA8UnormSrgb:
+            return kMtlBGRA8UnormSrgb;
+        default:
+            return 0;
+    }
+}
+
+inline int64_t srgbToggleCounterpart(int64_t format) {
+    switch (format) {
+        case kMtlBGRA8Unorm:
+            return kMtlBGRA8UnormSrgb;
+        case kMtlBGRA8UnormSrgb:
+            return kMtlBGRA8Unorm;
+        case kMtlRGBA8Unorm:
+            return kMtlRGBA8UnormSrgb;
+        case kMtlRGBA8UnormSrgb:
+            return kMtlRGBA8Unorm;
+        default:
+            return 0;
+    }
+}
+
+// The provider offers no packed 10-bit format.
+inline constexpr int64_t kPackedFallbackFormat = 0;
 #else
 inline int64_t channelSwapCounterpart(int64_t format) {
     switch (format) {
@@ -545,6 +609,15 @@ public:
           xrDevice_(xrGfx.device),
           xrQueue_(xrGfx.commandQueue),
           xrQueueFamilyIndex_(xrGfx.queueFamilyIndex) {}
+#elif DUSK_VR_XR_GRAPHICS_METAL
+    // No XR-side device: the provider renders through the system device and
+    // Dawn writes straight into its IOSurface swapchain images.
+    Session(XrInstance instance, XrSystemId systemId, XrSession session, XrSpace localSpace,
+            const vr_xr::XrGraphicsDevice&)
+        : instance_(instance),
+          systemId_(systemId),
+          session_(session),
+          localSpace_(localSpace) {}
 #else
     // xrDevice/xrQueue are the XR-side ID3D12Device/ID3D12CommandQueue
     // (from vr_xr::createXrGraphicsDevice) -- needed here to create and
@@ -732,6 +805,9 @@ public:
         // different question this new flag doesn't replace).
         swapchainIsBgra_ = chosenFormat == VK_FORMAT_B8G8R8A8_UNORM ||
                            chosenFormat == VK_FORMAT_B8G8R8A8_SRGB;
+#elif DUSK_VR_XR_GRAPHICS_METAL
+        swapchainIsSrgb_ = chosenFormat == kMtlBGRA8UnormSrgb || chosenFormat == kMtlRGBA8UnormSrgb;
+        swapchainIsBgra_ = chosenFormat == kMtlBGRA8Unorm || chosenFormat == kMtlBGRA8UnormSrgb;
 #else
         swapchainIsSrgb_ = chosenFormat == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB ||
                            chosenFormat == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
@@ -755,13 +831,17 @@ public:
         xrEnumerateSwapchainImages(swapchain_, 0, &imageCount, nullptr);
 #if DUSK_VR_XR_GRAPHICS_VULKAN
         swapchainImages_.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+#elif DUSK_VR_XR_GRAPHICS_METAL
+        swapchainImages_.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_METAL_MKW});
+        swapchainMemory_.assign(imageCount, nullptr);
+        swapchainTextures_.assign(imageCount, nullptr);
 #else
         swapchainImages_.resize(imageCount, {XR_TYPE_SWAPCHAIN_IMAGE_D3D12_KHR});
 #endif
         xrEnumerateSwapchainImages(
             swapchain_, imageCount, &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(swapchainImages_.data()));
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
         // FOUND 2026-09-17 (first real GPU-direct-path test, Virtual
         // Desktop/AMD RX 5700 XT): xrCreateSwapchain was asked for a TYPED
         // format (chosenFormat, e.g. DXGI_FORMAT_B8G8R8A8_UNORM_SRGB), but
@@ -804,7 +884,7 @@ public:
 
     XrSwapchain swapchain() const { return swapchain_; }
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
     // Lazily creates the D3D12 fence (on the XR-side device) and imports it
     // into Dawn as a wgpu::SharedFence. Called once, on first use, from
     // importSwapchainImage(). Not done at construction time because Dawn's
@@ -1049,7 +1129,151 @@ public:
         aurora::gfx::push_encoder_task(cpuCopyTaskId_, &payload, sizeof(payload));
     }
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // GPU-DIRECT ON APPLE VISION PRO. The provider's swapchain images are
+    // IOSurfaces. Dawn (Aurora's own device, the same GPU as the compositor)
+    // imports each one once, and encoderTaskCallback()'s gamma compute pass
+    // writes the eye straight into it: no XR-side device, no intermediate, no
+    // XR-side copy. Ordering against the compositor's reads is by
+    // MTLSharedEvent both ways: the provider's acquire fence (its last read of
+    // the image) before Dawn writes, and Dawn's EndAccess fence handed back in
+    // endAccessAll(), before xrReleaseSwapchainImage. xrWaitSwapchainImage does
+    // not block on this provider, so the acquire fence is the only guard.
+    void ensureSwapchainTexture(uint32_t index, uint32_t width, uint32_t height) {
+        if (metalImportFailed_ || index >= swapchainImages_.size() || swapchainTextures_[index]) {
+            return;
+        }
+        auto& device = aurora::webgpu::g_device;
+        device.PushErrorScope(wgpu::ErrorFilter::Validation);
+
+        wgpu::SharedTextureMemoryIOSurfaceDescriptor ioDesc{};
+        ioDesc.ioSurface = swapchainImages_[index].ioSurface;
+        wgpu::SharedTextureMemoryDescriptor stmDesc{};
+        stmDesc.nextInChain = &ioDesc;
+        stmDesc.label = "dusk::vr swapchain IOSurface";
+        wgpu::SharedTextureMemory memory = device.ImportSharedTextureMemory(&stmDesc);
+
+        wgpu::Texture texture;
+        if (memory) {
+            wgpu::SharedTextureMemoryProperties props{};
+            memory.GetProperties(&props);
+            wgpu::TextureDescriptor texDesc{};
+            // The IOSurface's own format. Dawn derives it from the surface's
+            // pixel code ('BGRA' -> BGRA8Unorm), never the sRGB variant the
+            // swapchain was created with, and CreateTexture wants an exact
+            // match. The bytes are the same; the compositor reads them as sRGB.
+            texDesc.format = props.format;
+            texDesc.size = {width, height, 1};
+            texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopyDst;
+            texDesc.label = "dusk::vr swapchain texture";
+            texture = memory.CreateTexture(&texDesc);
+        }
+
+        bool scopeDone = false;
+        bool scopeFailed = false;
+        std::string scopeMessage;
+        const auto future = device.PopErrorScope(
+            wgpu::CallbackMode::WaitAnyOnly,
+            [&](wgpu::PopErrorScopeStatus status, wgpu::ErrorType type, wgpu::StringView message) {
+                scopeDone = true;
+                if (status != wgpu::PopErrorScopeStatus::Success || type != wgpu::ErrorType::NoError) {
+                    scopeFailed = true;
+                    scopeMessage = std::string{std::string_view{message}};
+                }
+            });
+        aurora::webgpu::g_instance.WaitAny(future, 5000000000);
+
+        if (!scopeDone || scopeFailed || !memory || !texture) {
+            char msg[512];
+            duskVrSnprintf(msg, sizeof(msg),
+                           "[dusk::vr] ensureSwapchainTexture: Dawn could not import swapchain "
+                           "IOSurface %u (%s) -- disabling the headset copy\n",
+                           index, scopeDone ? scopeMessage.c_str() : "PopErrorScope timed out");
+            duskVrLog(msg);
+            metalImportFailed_ = true;
+            return;
+        }
+        swapchainMemory_[index] = memory;
+        swapchainTextures_[index] = texture;
+    }
+
+    // The fence the provider signals when the compositor's last read of an image
+    // completes. One MTLSharedEvent per swapchain in practice; cached by pointer.
+    wgpu::SharedFence importAcquireFence(void* event) {
+        if (event == nullptr) {
+            return nullptr;
+        }
+        if (event == metalAcquireEvent_ && metalAcquireFence_) {
+            return metalAcquireFence_;
+        }
+        wgpu::SharedFenceMTLSharedEventDescriptor eventDesc{};
+        eventDesc.sharedEvent = event;
+        wgpu::SharedFenceDescriptor fenceDesc{};
+        fenceDesc.nextInChain = &eventDesc;
+        fenceDesc.label = "dusk::vr compositor read fence";
+        metalAcquireFence_ = aurora::webgpu::g_device.ImportSharedFence(&fenceDesc);
+        metalAcquireEvent_ = event;
+        return metalAcquireFence_;
+    }
+
+    // Once per frame, right after xrAcquireSwapchainImage/xrWaitSwapchainImage
+    // (vr_main.cpp, the same call site as the D3D12 GPU-direct path).
+    void beginSwapchainAccessForFrame(uint32_t index, uint32_t width, uint32_t height) {
+        ensureSwapchainTexture(index, width, height);
+        if (metalImportFailed_ || !swapchainTextures_[index]) {
+            return;
+        }
+        void* event = nullptr;
+        uint64_t value = 0;
+        xr_visionos_swapchain_image_acquire_fence(swapchain_, index, &event, &value);
+        const wgpu::SharedFence fence = importAcquireFence(event);
+
+        wgpu::SharedTextureMemoryBeginAccessDescriptor beginDesc{};
+        beginDesc.initialized = true;
+        if (fence) {
+            beginDesc.fenceCount = 1;
+            beginDesc.fences = &fence;
+            beginDesc.signaledValueCount = 1;
+            beginDesc.signaledValues = &value;
+        }
+        if (swapchainMemory_[index].BeginAccess(swapchainTextures_[index], &beginDesc) !=
+            wgpu::Status::Success)
+        {
+            duskVrLog("[dusk::vr] beginSwapchainAccessForFrame: Dawn BeginAccess failed\n");
+            return;
+        }
+        metalFrameIndex_ = index;
+        pendingMemory_.push_back(swapchainMemory_[index]);
+        pendingTextures_.push_back(swapchainTextures_[index]);
+    }
+
+    // The GPU-direct twin of encodeEyeCopy(): the same encoder task, whose tail
+    // writes into swapchainTextures_[swapchainIndex] at dstXOffset.
+    void encodeSwapchainCopy(const wgpu::Texture& srcTexture, uint32_t eyeIndex, uint32_t swapchainIndex,
+                              uint32_t eyeWidth, uint32_t eyeHeight, uint32_t dstXOffset,
+                              wgpu::TextureFormat format) {
+        ensureCpuCopyBuffers(eyeIndex, eyeWidth, eyeHeight, format);
+        if (pendingCopySrc_.size() <= eyeIndex) {
+            pendingCopySrc_.resize(eyeIndex + 1);
+        }
+        pendingCopySrc_[eyeIndex] = srcTexture;
+        const CpuCopyTaskPayload payload{
+            .eyeIndex = eyeIndex,
+            .eyeWidth = eyeWidth,
+            .eyeHeight = eyeHeight,
+            .swapchainIndex = swapchainIndex,
+            .dstXOffset = dstXOffset,
+        };
+        static_assert(sizeof(CpuCopyTaskPayload) <= aurora::gfx::InlineDrawPayloadSize,
+                      "CpuCopyTaskPayload too large for inline encoder task payload");
+        aurora::gfx::push_encoder_task(cpuCopyTaskId_, &payload, sizeof(payload));
+    }
+
+    // Nothing to finish: Dawn wrote into the swapchain image itself.
+    void finishIntermediateSwapchainCopy(uint32_t, uint32_t, uint32_t) {}
+#endif // DUSK_VR_XR_GRAPHICS_METAL
+
+#if DUSK_VR_XR_GRAPHICS_D3D12
     // GPU-DIRECT SWAPCHAIN-COPY PATH (sameDeviceAsAurora_ / see that field's
     // comment for the full "why this exists" writeup). Only meaningful when
     // sameDeviceAsAurora_ is true -- vr_main.cpp only ever calls these two
@@ -3040,6 +3264,17 @@ public:
     // image), only offset differently via dstXOffset.
     void readbackEyeCopy(uint32_t eyeIndex, uint32_t swapchainIndex, uint32_t eyeWidth, uint32_t eyeHeight,
                           uint32_t dstXOffset, wgpu::TextureFormat format) {
+#if DUSK_VR_XR_GRAPHICS_METAL
+        // No CPU fallback on Apple Vision Pro: the headset copy is always
+        // GPU-direct (vr_main.cpp's startup() refuses VR without
+        // SharedTextureMemoryIOSurface), so nothing was read back.
+        (void)eyeIndex;
+        (void)swapchainIndex;
+        (void)eyeWidth;
+        (void)eyeHeight;
+        (void)dstXOffset;
+        (void)format;
+#else
         // Defensive, belt-and-suspenders (vr_main.cpp's submitFrame() is
         // also expected to skip calling this entirely when
         // usesGpuDirectSwapchainCopy() -- see that flag's comment): if
@@ -3380,7 +3615,7 @@ public:
         res.slotFenceValue[slot] = copyFenceValue_;
         res.slotIndex = (slot + 1) % CpuCopyBuffers::kUploadSlotCount;
 #endif
-
+#endif // DUSK_VR_XR_GRAPHICS_METAL
     }
 
 private:
@@ -3476,7 +3711,7 @@ private:
             pass.DispatchWorkgroups((p.eyeWidth + 7) / 8, (p.eyeHeight + 7) / 8, 1);
             pass.End();
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
             // GPU-DIRECT PATH (2026-09-16, see sameDeviceAsAurora_'s comment):
             // the compute pass above already wrote final, correctly-ordered,
             // gamma-corrected bytes into res.gammaStorage -- exactly the byte
@@ -3528,6 +3763,28 @@ private:
                 mutableCmd.CopyBufferToTexture(&srcBuf, &dstTex, &extent);
                 return;
             }
+#elif DUSK_VR_XR_GRAPHICS_METAL
+            // Straight into the provider's IOSurface (imported in
+            // beginSwapchainAccessForFrame); there is no CPU path to feed.
+            if (p.swapchainIndex < self->swapchainTextures_.size() &&
+                self->swapchainTextures_[p.swapchainIndex])
+            {
+                wgpu::TexelCopyBufferInfo srcBuf{};
+                srcBuf.buffer = res.gammaStorage;
+                srcBuf.layout.offset = 0;
+                srcBuf.layout.bytesPerRow = res.bytesPerRow;
+                srcBuf.layout.rowsPerImage = p.eyeHeight;
+
+                wgpu::TexelCopyTextureInfo dstTex{};
+                dstTex.texture = self->swapchainTextures_[p.swapchainIndex];
+                dstTex.mipLevel = 0;
+                dstTex.origin = {p.dstXOffset, 0, 0};
+                dstTex.aspect = wgpu::TextureAspect::All;
+
+                wgpu::Extent3D extent{p.eyeWidth, p.eyeHeight, 1};
+                mutableCmd.CopyBufferToTexture(&srcBuf, &dstTex, &extent);
+            }
+            return;
 #else
             // SHARED-IMAGE GPU-DIRECT PATH (Vulkan/Android -- see
             // ensureSharedImageResources()'s comment): same shape as the
@@ -3598,9 +3855,31 @@ public:
             wgpu::SharedTextureMemoryEndAccessState endState{};
             pendingMemory_[i].EndAccess(pendingTextures_[i], &endState);
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
             if (fenceInitialized_ && endState.signaledValueCount > 0) {
                 fenceValue_ = endState.signaledValues[0];
+            }
+#elif DUSK_VR_XR_GRAPHICS_METAL
+            // Hand Dawn's write fence to the provider: the compositor waits for
+            // it before it reads the image. Called after aurora's synchronize()
+            // and before xrReleaseSwapchainImage (vr_main.cpp's submitFrame()),
+            // which is the order the provider needs. NULL reads without waiting.
+            {
+                void* event = nullptr;
+                uint64_t value = 0;
+                for (size_t f = 0; f < endState.fenceCount; ++f) {
+                    wgpu::SharedFenceMTLSharedEventExportInfo mtlInfo{};
+                    wgpu::SharedFenceExportInfo info{};
+                    info.nextInChain = &mtlInfo;
+                    endState.fences[f].ExportInfo(&info);
+                    if (info.type == wgpu::SharedFenceType::MTLSharedEvent &&
+                        mtlInfo.sharedEvent != nullptr && f < endState.signaledValueCount)
+                    {
+                        event = mtlInfo.sharedEvent;
+                        value = std::max(value, endState.signaledValues[f]);
+                    }
+                }
+                xr_visionos_swapchain_image_set_release_fence(swapchain_, metalFrameIndex_, event, value);
             }
 #endif
             // NOTE: no manual FreeMembers() call here -- it's private on
@@ -3614,7 +3893,7 @@ public:
         pendingMemory_.clear();
         pendingTextures_.clear();
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
         if (fenceInitialized_ && xrQueue_) {
             ++fenceValue_;
             xrQueue_->Signal(d3dFence_.Get(), fenceValue_);
@@ -3732,6 +4011,9 @@ public:
     bool usesGpuDirectSwapchainCopy() const {
 #if DUSK_VR_XR_GRAPHICS_VULKAN
         return sameDeviceAsAurora_ && useGammaComputePath_ && swapchainResourceFormatUsable_;
+#elif DUSK_VR_XR_GRAPHICS_METAL
+        // "Dawn imports the provider's IOSurfaces" -- the only path there is.
+        return sameDeviceAsAurora_ && useGammaComputePath_ && !metalImportFailed_;
 #else
         if (!sameDeviceAsAurora_ || !useGammaComputePath_ || intermediateCreateFailed_) {
             return false;
@@ -3745,11 +4027,16 @@ public:
     }
 
 #if !DUSK_VR_XR_GRAPHICS_VULKAN
-    // D3D12: no shared-image render target (the intermediate/swapchain
-    // textures aren't set up as render attachments); tick() keeps the copy.
+    // D3D12 and Metal: no shared-image render target yet; tick() keeps the
+    // copy. (Metal v2: the imported IOSurface texture is a render attachment,
+    // so the eye pass could draw straight into it when gamma is 1.)
     bool sharedImageRenderTarget(aurora::gfx::ExternalPassTarget* /*out*/) const { return false; }
 #endif
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // No intermediate texture on Metal: Dawn writes into the IOSurface itself.
+    bool usesIntermediateSwapchainCopy() const { return false; }
+#endif
+#if DUSK_VR_XR_GRAPHICS_D3D12
     // 2026-09-19: the intermediate-texture variant (ensureIntermediateTexture()/
     // finishIntermediateSwapchainCopy()) is used for EVERY same-device
     // session, not just the typeless-swapchain case that forced it into
@@ -3947,6 +4234,8 @@ private:
 
 #if DUSK_VR_XR_GRAPHICS_VULKAN
     std::vector<XrSwapchainImageVulkanKHR> swapchainImages_;
+#elif DUSK_VR_XR_GRAPHICS_METAL
+    std::vector<XrSwapchainImageMetalMKW> swapchainImages_;
 #else
     std::vector<XrSwapchainImageD3D12KHR> swapchainImages_;
 #endif
@@ -3954,7 +4243,23 @@ private:
     std::vector<wgpu::SharedTextureMemory> pendingMemory_;
     std::vector<wgpu::Texture> pendingTextures_;
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // One SharedTextureMemory/Texture pair per provider IOSurface, imported on
+    // first acquire and reused (ensureSwapchainTexture()).
+    std::vector<wgpu::SharedTextureMemory> swapchainMemory_;
+    std::vector<wgpu::Texture> swapchainTextures_;
+    // The provider's compositor-read MTLSharedEvent, imported once.
+    void* metalAcquireEvent_ = nullptr;
+    wgpu::SharedFence metalAcquireFence_;
+    // The swapchain image this frame's access was opened on (endAccessAll()
+    // hands its release fence back for this index).
+    uint32_t metalFrameIndex_ = 0;
+    // One-way: an IOSurface import failed; usesGpuDirectSwapchainCopy() then
+    // reads false and the headset shows nothing rather than stale images.
+    bool metalImportFailed_ = false;
+#endif
+
+#if DUSK_VR_XR_GRAPHICS_D3D12
     // GPU-direct swapchain-copy path (sameDeviceAsAurora_) -- one
     // SharedTextureMemory/Texture pair per swapchain image, lazily created
     // by ensureSwapchainTexture() and reused every frame (BeginAccess/
@@ -4034,7 +4339,7 @@ private:
     VkDeviceMemory swDebugReadbackMemory_ = VK_NULL_HANDLE;
     uint32_t swDebugPendingSlot_ = UINT32_MAX;
     uint32_t swDebugFramesLogged_ = 0;
-#else
+#elif DUSK_VR_XR_GRAPHICS_D3D12
     // --- fence sync state ---
     Microsoft::WRL::ComPtr<ID3D12Device> xrDevice_;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> xrQueue_;
@@ -4053,7 +4358,7 @@ private:
         VkBuffer uploadBuffer = VK_NULL_HANDLE;              // XR side, HOST_VISIBLE|HOST_COHERENT
         VkDeviceMemory uploadMemory = VK_NULL_HANDLE;
         void* uploadMapped = nullptr;                        // persistently mapped, see ensureCpuCopyBuffers()
-#else
+#elif DUSK_VR_XR_GRAPHICS_D3D12
         // DOUBLE-BUFFERED (2026-09-16, "remove the second blocking wait"
         // perf follow-up -- see readbackEyeCopy()'s own comment for the
         // full reasoning): two upload heaps + command allocators/lists per
@@ -4101,7 +4406,7 @@ private:
     // freshly-reset VkFence needs no counter to track, same "block fully
     // every frame, correctness first" behavior either way.
     VkFence copyFence_ = VK_NULL_HANDLE;
-#else
+#elif DUSK_VR_XR_GRAPHICS_D3D12
     // copyCmdAlloc_/copyCmdList_ used to live here as a single pair shared
     // between both eyes and every frame -- moved into CpuCopyBuffers::
     // slotCmdAlloc/slotCmdList (double-buffered per eye) 2026-09-16, see
@@ -4142,6 +4447,9 @@ private:
 
         copyCmdListReady_ = true;
     }
+#elif DUSK_VR_XR_GRAPHICS_METAL
+    // No XR-side copy on Apple Vision Pro (see readbackEyeCopy()).
+    void ensureCpuCopyCmdList() {}
 #else
     // DOUBLE-BUFFERED (2026-09-16): per-slot command allocators/lists now
     // live inside each eye's own CpuCopyBuffers (lazily created in
@@ -4237,7 +4545,7 @@ private:
         // (always immediately re-mappable) without needing to repeat it
         // every readbackEyeCopy() call.
         vkMapMemory(xrDevice_, res.uploadMemory, 0, uploadSize, 0, &res.uploadMapped);
-#else
+#elif DUSK_VR_XR_GRAPHICS_D3D12
         D3D12_HEAP_PROPERTIES heapProps{};
         heapProps.Type = D3D12_HEAP_TYPE_UPLOAD;
 
@@ -4298,7 +4606,7 @@ private:
     }
 };
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_D3D12
 inline void getD3D12DeviceAndQueue(const wgpu::Device& wgpuDevice,
                                     Microsoft::WRL::ComPtr<ID3D12Device>& outDevice,
                                     Microsoft::WRL::ComPtr<ID3D12CommandQueue>& outQueue) {

@@ -1,0 +1,9 @@
+_dusk_visionos_set_disc_path
+_dusk_visionos_set_layer_renderer
+_dusk_visionos_spatial_event
+_dusk_visionos_layer_invalidated
+_dusk_visionos_start_game
+_dusk_visionos_game_running
+_dusk_visionos_exit_code
+_dusk_visionos_request_quit
+_dusk_visionos_last_error

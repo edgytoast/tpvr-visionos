@@ -23,6 +23,10 @@
 
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
 #include <android/log.h>
+#elif defined(__APPLE__)
+// Apple Vision Pro: the unified log, so lines show up in Console and in
+// `xcrun devicectl device process launch --console` output.
+#include <os/log.h>
 #else
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -41,6 +45,10 @@ namespace dusk::vr {
 #if defined(TARGET_ANDROID) || defined(__ANDROID__) || defined(ANDROID)
 inline void duskVrLog(const char* msg) {
     __android_log_print(ANDROID_LOG_INFO, "dusklight_vr", "%s", msg);
+}
+#elif defined(__APPLE__)
+inline void duskVrLog(const char* msg) {
+    os_log_with_type(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, "[dusklight_vr] %{public}s", msg);
 }
 #else
 inline void duskVrLog(const char* msg) { OutputDebugStringA(msg); }

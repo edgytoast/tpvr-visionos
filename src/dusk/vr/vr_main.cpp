@@ -763,7 +763,20 @@ bool startup() {
         // own comment for why "can't verify" defaults to false/fallback
         // rather than assuming a match.
         bool reusedAuroraDevice = false;
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_METAL
+        // Apple Vision Pro: one GPU, one device. Dawn (Aurora's device) writes
+        // the eyes straight into the provider's IOSurface swapchain images; with
+        // no CPU-readback fallback on this platform, VR needs both Dawn features.
+        if (!aurora::webgpu::g_metalSharedImageSupported) {
+            throw std::runtime_error(
+                "Dawn lacks SharedTextureMemoryIOSurface/SharedFenceMTLSharedEvent; "
+                "the headset copy has no other path on visionOS");
+        }
+        gfx = vr_xr::createXrGraphicsDevice(boot);
+        reusedAuroraDevice = true;
+        duskVrLog("[dusk::vr::startup] visionOS: Dawn imports the provider's IOSurface "
+                  "swapchain images (GPU-direct, MTLSharedEvent fences)\n");
+#elif DUSK_VR_XR_GRAPHICS_D3D12
         LUID actualAuroraLuid{};
         const bool adaptersMatch = dusk::vr::adapterMatchesXrRequirement(
             aurora::webgpu::g_adapterInfo, boot.d3d12Requirements.adapterLuid, &actualAuroraLuid);
@@ -911,6 +924,9 @@ bool startup() {
         // (needs gfx.physicalDevice + gfx.queueFamilyIndex too, not just
         // device/queue -- see vr_xr_submit.hpp's Session constructor
         // comment) rather than the D3D12 branch's two decomposed ComPtrs.
+        g_ownedSession = std::make_unique<Session>(boot.instance, boot.systemId, session, localSpace, gfx);
+#elif DUSK_VR_XR_GRAPHICS_METAL
+        // The Metal Session takes the (empty) XrGraphicsDevice, like Vulkan's.
         g_ownedSession = std::make_unique<Session>(boot.instance, boot.systemId, session, localSpace, gfx);
 #else
         g_ownedSession = std::make_unique<Session>(boot.instance, boot.systemId, session, localSpace, gfx.device, gfx.commandQueue);
@@ -1104,7 +1120,12 @@ bool startup() {
         // menu access.
         ensureVrMenuGamepadAttached();
 
-#if DUSK_VR_XR_GRAPHICS_VULKAN
+#if DUSK_VR_XR_GRAPHICS_VULKAN || DUSK_VR_XR_GRAPHICS_METAL
+        // Apple Vision Pro too: aurora's surface there is a CAMetalLayer that
+        // belongs to no view (extern/aurora/lib/dawn/MetalBinding.mm), so its
+        // presented drawables may never be released and nextDrawable would
+        // stall. Nobody sees it while the immersive space owns the display.
+        //
         // Standalone Android/Quest: the Activity's own window is never
         // visible while the OpenXR session owns the display, but aurora's
         // render worker still acquired+presented it every frame -- and
@@ -1113,7 +1134,7 @@ bool startup() {
         // stalling every synchronize() caller behind it. Skip it for the
         // session's lifetime; re-enabled where the session tears down.
         aurora::gfx::set_surface_present_suppressed(true);
-        duskVrLog("[dusk::vr::startup] window-surface present suppressed for the VR session (Android)\n");
+        duskVrLog("[dusk::vr::startup] window-surface present suppressed for the VR session\n");
 #endif
 
         return true;

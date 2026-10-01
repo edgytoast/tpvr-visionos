@@ -47,6 +47,24 @@
 #define DUSK_VR_XR_GRAPHICS_VULKAN 0
 #endif
 
+// Apple Vision Pro: a third graphics branch. There is no OpenXR runtime on
+// visionOS; the provider in visionos/openxr-provider answers these calls on
+// CompositorServices and ARKit. Like the Quest branch, the XR side owns the
+// swapchain images (IOSurfaces) and Dawn imports them; unlike it, there is no
+// graphics device to create: the provider renders through the system Metal
+// device, the only one there is.
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+#if defined(__APPLE__) && TARGET_OS_VISION
+#define DUSK_VR_XR_GRAPHICS_METAL 1
+#else
+#define DUSK_VR_XR_GRAPHICS_METAL 0
+#endif
+// The PC branch, named rather than implied by "not Vulkan", so a block that
+// only makes sense on D3D12 says so and stays out of the Metal build.
+#define DUSK_VR_XR_GRAPHICS_D3D12 (!DUSK_VR_XR_GRAPHICS_VULKAN && !DUSK_VR_XR_GRAPHICS_METAL)
+
 #if DUSK_VR_XR_GRAPHICS_VULKAN
 
 // Vulkan + Android headers MUST come before openxr_platform.h, same
@@ -133,6 +151,26 @@ inline bool instanceExtensionAvailable(const char* name) {
     }
     return false;
 }
+
+#elif DUSK_VR_XR_GRAPHICS_METAL
+
+#include <openxr/openxr.h>
+#include "vr/visionos/xr_visionos.h"  // XrGraphicsBindingMetalMKW, XrSwapchainImageMetalMKW
+#include <cstdint>
+#include <cstring>
+#include <stdexcept>
+#include <string>
+
+namespace vr_xr {
+
+struct Bootstrap {
+    XrInstance instance = XR_NULL_HANDLE;
+    XrSystemId systemId = XR_NULL_SYSTEM_ID;
+    // The Quest-only extensions the Vulkan branch probes; never present here.
+    bool hasPerformanceSettings = false;
+    bool hasAndroidThreadSettings = false;
+    bool hasSpaceWarp = false;
+};
 
 #else
 
@@ -308,6 +346,27 @@ inline Bootstrap initialize() {
     // boot.vulkanRequirements.minApiVersionSupported/maxApiVersionSupported -
     //   the Vulkan API version range createXrGraphicsDevice() below must
     //   request, same role as d3d12Requirements.minFeatureLevel on desktop.
+    return boot;
+}
+
+#elif DUSK_VR_XR_GRAPHICS_METAL
+
+// Creates the XrInstance and resolves the headset system. The visionOS
+// provider needs no graphics extension: its Metal binding
+// (XrGraphicsBindingMetalMKW) is its own, and it speaks OpenXR 1.0.
+inline Bootstrap initialize() {
+    Bootstrap boot;
+
+    XrInstanceCreateInfo instanceInfo{XR_TYPE_INSTANCE_CREATE_INFO};
+    std::strncpy(instanceInfo.applicationInfo.applicationName, "Dusklight VR",
+                 XR_MAX_APPLICATION_NAME_SIZE - 1);
+    instanceInfo.applicationInfo.applicationVersion = 1;
+    instanceInfo.applicationInfo.apiVersion = XR_API_VERSION_1_0;
+    checkResult(xrCreateInstance(&instanceInfo, &boot.instance), "xrCreateInstance");
+
+    XrSystemGetInfo systemInfo{XR_TYPE_SYSTEM_GET_INFO};
+    systemInfo.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+    checkResult(xrGetSystem(boot.instance, &systemInfo, &boot.systemId), "xrGetSystem");
     return boot;
 }
 
@@ -590,6 +649,19 @@ inline XrGraphicsDevice createXrGraphicsDevice(const Bootstrap& boot) {
     return gfx;
 }
 
+#elif DUSK_VR_XR_GRAPHICS_METAL
+
+// --- visionOS: nothing to create. The provider renders through the system
+// Metal device; Dawn (Aurora's device, on the same GPU) imports the
+// provider's IOSurface swapchain images, ordered by MTLSharedEvents (see
+// vr_xr_submit.hpp's Metal branch). ---
+
+struct XrGraphicsDevice {};
+
+inline XrGraphicsDevice createXrGraphicsDevice(const Bootstrap&) {
+    return {};
+}
+
 #else
 
 // --- XR-side D3D12 device + session creation (outcome 2: separate device
@@ -680,6 +752,10 @@ inline XrSession createXrSession(const Bootstrap& boot, const XrGraphicsDevice& 
     binding.device = gfx.device;
     binding.queueFamilyIndex = gfx.queueFamilyIndex;
     binding.queueIndex = gfx.queueIndex;
+#elif DUSK_VR_XR_GRAPHICS_METAL
+    (void)gfx;
+    // device NULL: the provider uses the system device, the only one there is.
+    XrGraphicsBindingMetalMKW binding{XR_TYPE_GRAPHICS_BINDING_METAL_MKW, nullptr, nullptr};
 #else
     XrGraphicsBindingD3D12KHR binding{XR_TYPE_GRAPHICS_BINDING_D3D12_KHR};
     binding.device = gfx.device.Get();

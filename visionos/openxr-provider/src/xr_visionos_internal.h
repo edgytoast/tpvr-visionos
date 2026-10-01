@@ -378,4 +378,32 @@ bool LastFrameImmersive() noexcept;
 PFN_xrVoidFunction LookupHandTrackingFunction(const char* name) noexcept;
 void DestroySessionHandTrackers(Session& session) noexcept;
 
+// PS VR2 Sense controllers (xr_visionos_controllers.mm, a TPVR addition). While a
+// hand holds one, that hand's Touch bindings and poses answer from it instead of
+// the hand skeleton.
+struct ControllerSample {
+    bool connected = false;  // a Sense half is paired for this hand
+    bool tracked = false;    // ARKit tracks its position and orientation
+    simd_float4x4 worldFromGrip = matrix_identity_float4x4;
+    simd_float4x4 worldFromAim = matrix_identity_float4x4;
+    int64_t timeNanos = 0;
+    float trigger = 0.0f;
+    float squeeze = 0.0f;
+    simd_float2 stick = {0.0f, 0.0f};
+    bool primary = false;    // A (right) / X (left)
+    bool secondary = false;  // B (right) / Y (left)
+    bool menu = false;
+    bool stickClick = false;
+};
+// Refreshes both hands; called at xrSyncActions with the frame's predicted
+// display time, which the poses are predicted to.
+void SampleControllers(int64_t displayNanos) noexcept;
+const ControllerSample& ControllerOf(uint32_t hand) noexcept;
+const ControllerSample& PreviousControllerOf(uint32_t hand) noexcept;
+// A Touch binding component ("trigger/value", "a/click", "thumbstick/click", ...)
+// read from a controller; false for components it has no answer for.
+bool ControllerComponentValue(const ControllerSample& controller, const std::string& component, float& value,
+                              bool& boolean) noexcept;
+void ControllerPulse(uint32_t hand, float amplitude, int64_t durationNanos) noexcept;
+
 } // namespace mkw::vr::visionos

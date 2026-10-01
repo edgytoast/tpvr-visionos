@@ -1,0 +1,19 @@
+Map the BC texture formats to Metal pixel formats wherever the Metal backend
+advertises TextureCompressionBC (PhysicalDeviceMTL.mm), not only on macOS.
+
+On visionOS the feature is advertised when the GPU supports BC, but every BC
+format fell into DAWN_UNREACHABLE(), aborting on the first BC texture (for
+example a BC7 texture pack). Same fix rebelancap/dusklight-ios carries.
+
+--- a/src/dawn/native/metal/UtilsMetal.mm	2026-09-30 19:38:21
++++ b/src/dawn/native/metal/UtilsMetal.mm	2026-09-30 19:38:21
+@@ -405,7 +405,8 @@
+             }
+             return MTLPixelFormatStencil8;
+ 
+-#if DAWN_PLATFORM_IS(MACOS)
++#if DAWN_PLATFORM_IS(MACOS) || \
++    (defined(__IPHONE_16_4) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_16_4)
+         case wgpu::TextureFormat::BC1RGBAUnorm:
+             return MTLPixelFormatBC1_RGBA;
+         case wgpu::TextureFormat::BC1RGBAUnormSrgb:
