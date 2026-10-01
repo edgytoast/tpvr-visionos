@@ -12,6 +12,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
+    ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
     SWIFT_VERSION: "5"
     DEVELOPMENT_TEAM: ${TPVR_TEAM}
     CODE_SIGN_STYLE: Automatic
@@ -23,6 +24,8 @@ targets:
     platform: visionOS
     sources:
       - path: Sources
+      # The app icon: three layers drawn by visionos/scripts/make-app-icon.py.
+      - path: Assets.xcassets
       - path: ../../res
         type: folder
         buildPhase: resources
