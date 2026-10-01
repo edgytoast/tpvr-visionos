@@ -103,10 +103,16 @@ final class GameModel: ObservableObject {
         immersion = saved == .progressive && Self.progressiveAvailable ? .progressive : .full
         roomBehindMenus = UserDefaults.standard.object(forKey: Self.roomBehindMenusKey) as? Bool ?? true
         foveated = UserDefaults.standard.bool(forKey: Self.foveatedKey)
-        // visionOS anchors an app's audio to its window by default, so the game
-        // would fall silent once the launcher closes. Anchor it to the listener.
-        try? AVAudioSession.sharedInstance().setIntendedSpatialExperience(
-            .headTracked(soundStageSize: .automatic, anchoringStrategy: .front))
+        // TPVR's audio listener is the headset (Z2Audience follows the HMD pose), so
+        // the game already turns every sound with the head; visionOS's head-tracked
+        // soundstage would turn the mix a second time. Bypass it and send the game's
+        // stereo straight to the speakers, as a PC headset hears it (the SHAR port's
+        // fix). Anchored to no window, it also plays on once the launcher closes.
+        do {
+            try AVAudioSession.sharedInstance().setIntendedSpatialExperience(.bypassed)
+        } catch {
+            print("[TPVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
+        }
         refreshDisc()
     }
 
