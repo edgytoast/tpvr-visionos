@@ -1164,9 +1164,22 @@ public:
             // match. The bytes are the same; the compositor reads them as sRGB.
             texDesc.format = props.format;
             texDesc.size = {width, height, 1};
-            texDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopyDst;
+            // CopySrc and TextureBinding too, when the IOSurface allows them: the
+            // eye pass then renders straight into this texture
+            // (sharedImageRenderTarget()), and mid-frame copies (GXCopyTex
+            // effects) read from their pass's target -- the Quest direct path's set.
+            const wgpu::TextureUsage directUsage = wgpu::TextureUsage::RenderAttachment |
+                                                   wgpu::TextureUsage::CopyDst | wgpu::TextureUsage::CopySrc |
+                                                   wgpu::TextureUsage::TextureBinding;
+            const bool directCapable = (props.usage & directUsage) == directUsage;
+            texDesc.usage = directCapable ? directUsage
+                                          : wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopyDst;
             texDesc.label = "dusk::vr swapchain texture";
             texture = memory.CreateTexture(&texDesc);
+            if (metalDirectCapable_.size() <= index) {
+                metalDirectCapable_.resize(index + 1, false);
+            }
+            metalDirectCapable_[index] = directCapable;
         }
 
         bool scopeDone = false;
@@ -1243,6 +1256,7 @@ public:
             return;
         }
         metalFrameIndex_ = index;
+        metalAccessOpen_ = true;
         pendingMemory_.push_back(swapchainMemory_[index]);
         pendingTextures_.push_back(swapchainTextures_[index]);
     }
@@ -3892,6 +3906,9 @@ public:
         }
         pendingMemory_.clear();
         pendingTextures_.clear();
+#if DUSK_VR_XR_GRAPHICS_METAL
+        metalAccessOpen_ = false;
+#endif
 
 #if DUSK_VR_XR_GRAPHICS_D3D12
         if (fenceInitialized_ && xrQueue_) {
@@ -4026,11 +4043,44 @@ public:
 #endif
     }
 
-#if !DUSK_VR_XR_GRAPHICS_VULKAN
-    // D3D12 and Metal: no shared-image render target yet; tick() keeps the
-    // copy. (Metal v2: the imported IOSurface texture is a render attachment,
-    // so the eye pass could draw straight into it when gamma is 1.)
+#if DUSK_VR_XR_GRAPHICS_D3D12
+    // D3D12: no shared-image render target yet; tick() keeps the copy.
     bool sharedImageRenderTarget(aurora::gfx::ExternalPassTarget* /*out*/) const { return false; }
+#elif DUSK_VR_XR_GRAPHICS_METAL
+    // Direct render on Metal: this frame's swapchain image (the provider's
+    // IOSurface, imported and BeginAccess'd in beginSwapchainAccessForFrame())
+    // as the eye pass's own colour target, so the game draws straight into what
+    // the compositor reads -- no gamma compute pass, no buffer, no copy. Only
+    // when the hand-off would be an identity anyway (gamma exponent 1, the
+    // texture in aurora's scene format, which on Apple is the IOSurface's own
+    // BGRA8Unorm). TPVR_COPY_EYES=1 forces the old copy, for comparison.
+    bool sharedImageRenderTarget(aurora::gfx::ExternalPassTarget* out) const {
+        static const bool forceCopy = std::getenv("TPVR_COPY_EYES") != nullptr;
+        if (forceCopy || !metalAccessOpen_ || !usesGpuDirectSwapchainCopy() || effectiveGammaExponent() != 1.0f) {
+            return false;
+        }
+        const uint32_t index = metalFrameIndex_;
+        if (index >= swapchainTextures_.size() || !swapchainTextures_[index] ||
+            index >= metalDirectCapable_.size() || !metalDirectCapable_[index]) {
+            return false;
+        }
+        const wgpu::Texture& texture = swapchainTextures_[index];
+        if (texture.GetFormat() != aurora::gfx::color_format()) {
+            return false;
+        }
+        if (metalRenderViews_.size() <= index) {
+            metalRenderViews_.resize(index + 1);
+        }
+        if (!metalRenderViews_[index]) {
+            metalRenderViews_[index] = texture.CreateView();
+        }
+        out->texture = texture;
+        out->view = metalRenderViews_[index];
+        out->format = aurora::gfx::color_format();
+        out->width = texture.GetWidth();
+        out->height = texture.GetHeight();
+        return true;
+    }
 #endif
 #if DUSK_VR_XR_GRAPHICS_METAL
     // No intermediate texture on Metal: Dawn writes into the IOSurface itself.
@@ -4254,6 +4304,13 @@ private:
     // The swapchain image this frame's access was opened on (endAccessAll()
     // hands its release fence back for this index).
     uint32_t metalFrameIndex_ = 0;
+    // beginSwapchainAccessForFrame() opened metalFrameIndex_ this frame (until
+    // endAccessAll()).
+    bool metalAccessOpen_ = false;
+    // Per swapchain image: imported with the usages direct render needs, and its
+    // render view (made on first use).
+    std::vector<bool> metalDirectCapable_;
+    mutable std::vector<wgpu::TextureView> metalRenderViews_;
     // One-way: an IOSurface import failed; usesGpuDirectSwapchainCopy() then
     // reads false and the headset shows nothing rather than stale images.
     bool metalImportFailed_ = false;
