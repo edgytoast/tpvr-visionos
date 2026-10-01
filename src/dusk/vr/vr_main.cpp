@@ -51,6 +51,7 @@
 #include "dusk/vr/vr_menu_gamepad.hpp"          // dusk::vr::ensureVrMenuGamepadAttached, etc.
 #include "dusk/vr/vr_main.hpp"
 #if DUSK_VR_XR_GRAPHICS_METAL
+#include <aurora/aurora.h>                    // aurora_set_external_pause
 #include "dusk/visionos/visionos_host.h"     // dusk_visionos_room_behind_menus
 #include "d/d_menu_window.h"                 // dMw_c -- TP's full-screen menus over the room
 #include "d/d_meter2_info.h"                 // dMeter2Info_getMenuWindowClass
@@ -1639,6 +1640,22 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             // real user's "VR randomly stopped working mid-play" report
             // would otherwise leave zero trace of.
             VrLog.info("session state -> {}", static_cast<int>(stateEvent.state));
+#if DUSK_VR_XR_GRAPHICS_METAL
+            // Apple Vision Pro: hold the game still whenever it isn't being seen
+            // -- the headset taken off, visionOS's own UI over the game -- and
+            // let it run on exactly where it was once focus comes back. (The
+            // provider leaves FOCUSED whenever the layer pauses.) Only after
+            // the first focus, so startup isn't held.
+            {
+                static bool s_everFocused = false;
+                const bool focused = stateEvent.state == XR_SESSION_STATE_FOCUSED;
+                s_everFocused = s_everFocused || focused;
+                if (s_everFocused) {
+                    aurora_set_external_pause(!focused);
+                    VrLog.info("game clock {}", focused ? "running" : "held: session not focused");
+                }
+            }
+#endif
             if (stateEvent.state == XR_SESSION_STATE_STOPPING) {
                 // FIXED this session: STOPPING is not permanent per the
                 // OpenXR spec -- it just means "stop submitting frames and

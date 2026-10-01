@@ -45,6 +45,43 @@ index 0000000..3511870
 +string(REPLACE "${_old}" "${_new}" _patched_source "${_source}")
 +file(WRITE "${_cmakelists}" "${_patched_source}")
 +message(STATUS "Applied SDL3 visionOS virtual-joystick patch")
+diff --git a/include/aurora/aurora.h b/include/aurora/aurora.h
+index 56c7aae..3205514 100644
+--- a/include/aurora/aurora.h
++++ b/include/aurora/aurora.h
+@@ -134,6 +134,10 @@ void aurora_end_frame();
+ 
+ void aurora_set_log_level(AuroraLogLevel level);
+ void aurora_set_pause_on_focus_lost(bool value);
++/** Holds the game clock still while true, on top of aurora's own window and
++ * background pauses: for a host that knows the game isn't being seen (a VR
++ * session that lost focus, a headset taken off). */
++void aurora_set_external_pause(bool paused);
+ void aurora_set_background_input(bool value);
+ void aurora_set_resampler(AuroraSampler sampler);
+ /** Sets the clock timescale. Default 1.0f. 0.0f is paused. Range 0.0f-16.0f. */
+diff --git a/lib/aurora.cpp b/lib/aurora.cpp
+index 5063eb1..cccf540 100644
+--- a/lib/aurora.cpp
++++ b/lib/aurora.cpp
+@@ -25,6 +25,7 @@
+ #include "internal.hpp"
+ #include "thread.hpp"
+ #include "window.hpp"
++#include "time_internal.hpp"
+ 
+ #include <SDL3/SDL_filesystem.h>
+ #include <magic_enum.hpp>
+@@ -475,6 +476,9 @@ const AuroraBackend* aurora_get_available_backends(size_t* count) {
+ }
+ void aurora_set_log_level(AuroraLogLevel level) { aurora::g_config.logLevel = level; }
+ void aurora_set_pause_on_focus_lost(bool value) { aurora::g_config.pauseOnFocusLost = value; }
++void aurora_set_external_pause(bool paused) {
++  aurora::time::internal::set_pause_reason(aurora::time::internal::PauseReason::External, paused);
++}
+ void aurora_set_background_input(bool value) {
+   aurora::g_config.allowJoystickBackgroundEvents = value;
+   aurora::window::set_background_input(value);
 diff --git a/lib/dawn/MetalBinding.mm b/lib/dawn/MetalBinding.mm
 index df01ed3..9ae5fd6 100644
 --- a/lib/dawn/MetalBinding.mm
@@ -129,6 +166,18 @@ index 8a7fbee..151e821 100644
  
  int main(int argc, char** argv) { return aurora_main(argc, argv); }
 +#endif
+diff --git a/lib/time_internal.hpp b/lib/time_internal.hpp
+index 4fe623d..fc50d99 100644
+--- a/lib/time_internal.hpp
++++ b/lib/time_internal.hpp
+@@ -10,6 +10,7 @@ enum class PauseReason : uint32_t {
+   Window = 1u << 0,
+   Surface = 1u << 1,
+   Background = 1u << 2,
++  External = 1u << 3,
+ };
+ 
+ void set_pause_reason(PauseReason reason, bool paused) noexcept;
 diff --git a/lib/webgpu/gpu.cpp b/lib/webgpu/gpu.cpp
 index 8afb5c5..1152b3e 100644
 --- a/lib/webgpu/gpu.cpp
