@@ -67,6 +67,14 @@ struct LauncherView: View {
         .onOpenURL { url in
             model.importDisc(from: url)
         }
+        .task {
+            // Headless runs: `SIMCTL_CHILD_TPVR_AUTO_PLAY=1 xcrun simctl launch ...` (or the
+            // same variable in a devicectl launch) presses Play on its own, disc or not.
+            // Synthesized taps don't reach visionOS Simulator windows.
+            if ProcessInfo.processInfo.environment["TPVR_AUTO_PLAY"] == "1", model.phase == .idle {
+                await play()
+            }
+        }
     }
 
     @ViewBuilder private var status: some View {

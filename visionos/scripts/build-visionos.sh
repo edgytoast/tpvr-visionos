@@ -103,15 +103,21 @@ echo "Game framework: ${build}/DusklightGame.framework"
 [[ ${game_only} -eq 1 ]] && exit 0
 
 # 3. The app.
+# Where xcodebuild put the product. Xcode's own "Custom" build location
+# preference (IDEBuildLocationStyle) overrides -derivedDataPath, so ask.
+products_dir() {
+    xcodebuild "$@" -showBuildSettings 2>/dev/null | awk -F' = ' '/^ *BUILT_PRODUCTS_DIR = / {print $2; exit}'
+}
 if [[ ${simulator} -eq 1 ]]; then
     app_dir="${root}/visionos/App"
     export TPVR_TEAM="${team:-NONE}" TPVR_BUNDLE_ID="${bundle_id:-dev.tpvr.vision.simulator}" TPVR_GAME_BUILD_DIR="${build}"
     (cd "${app_dir}" && xcodegen generate --quiet)
     derived="${root}/.scratch/DerivedData-simulator"
-    xcodebuild -project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision \
-        -configuration "${xcode_config}" -destination 'generic/platform=visionOS Simulator' \
-        -derivedDataPath "${derived}" CODE_SIGNING_ALLOWED=NO build
-    echo "App: ${derived}/Build/Products/${xcode_config}-xrsimulator/TPVRVision.app"
+    sim_args=(-project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision -configuration "${xcode_config}"
+              -destination 'generic/platform=visionOS Simulator' -derivedDataPath "${derived}"
+              ARCHS=arm64 CODE_SIGNING_ALLOWED=NO)
+    xcodebuild "${sim_args[@]}" build
+    echo "App: $(products_dir "${sim_args[@]}")/TPVRVision.app"
     exit 0
 fi
 [[ -n "${team}" ]] || { echo "ERROR: --team TEAMID is needed to sign the app" >&2; exit 2; }
@@ -120,17 +126,32 @@ app_dir="${root}/visionos/App"
 export TPVR_TEAM="${team}" TPVR_BUNDLE_ID="${bundle_id}" TPVR_GAME_BUILD_DIR="${build}"
 (cd "${app_dir}" && xcodegen generate --quiet)
 derived="${root}/.scratch/DerivedData"
-xcodebuild -project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision \
-    -configuration "${xcode_config}" -destination 'generic/platform=visionOS' \
-    -derivedDataPath "${derived}" -allowProvisioningUpdates \
-    DEVELOPMENT_TEAM="${team}" PRODUCT_BUNDLE_IDENTIFIER="${bundle_id}" build
-app="${derived}/Build/Products/${xcode_config}-xros/TPVRVision.app"
+device_args=(-project "${app_dir}/TPVRVision.xcodeproj" -scheme TPVRVision -configuration "${xcode_config}"
+             -destination 'generic/platform=visionOS' -derivedDataPath "${derived}"
+             DEVELOPMENT_TEAM="${team}" PRODUCT_BUNDLE_IDENTIFIER="${bundle_id}")
+xcodebuild "${device_args[@]}" -allowProvisioningUpdates build
+app="$(products_dir "${device_args[@]}")/TPVRVision.app"
 echo "App: ${app}"
 
 # 4. Install.
 if [[ ${install} -eq 1 ]]; then
     if [[ -z "${device}" ]]; then
-        device="$(xcrun devicectl list devices 2>/dev/null | awk '/Apple Vision Pro/ && /available|connected/ {print $3; exit}')"
+        devices_json="$(mktemp)"
+        xcrun devicectl list devices --json-output "${devices_json}" >/dev/null 2>&1 || true
+        device="$(python3 - "${devices_json}" <<'PY'
+import json, sys
+try:
+    devices = json.load(open(sys.argv[1]))["result"]["devices"]
+except Exception:
+    devices = []
+for d in devices:
+    hw = d.get("hardwareProperties", {})
+    if hw.get("platform") == "visionOS" and hw.get("reality") == "physical":
+        print(hw.get("udid", d.get("identifier", "")))
+        break
+PY
+)"
+        rm -f "${devices_json}"
     fi
     [[ -n "${device}" ]] || { echo "ERROR: no paired Apple Vision Pro found; pass --device UDID" >&2; exit 1; }
     xcrun devicectl device install app --device "${device}" "${app}"
