@@ -104,7 +104,9 @@ UserSettings g_userSettings = {
         .vrThirdPersonFollowCameraYaw {"game.vrThirdPersonFollowCameraYaw", true},
         .vrAttachBodyRotationToHead {"game.vrAttachBodyRotationToHead", false},
         .vrExperimentalCutsceneFirstPerson {"game.vrExperimentalCutsceneFirstPerson", false},
-        .vrSwapSwordShieldHands {"game.vrSwapSwordShieldHands", false},
+        // Default on: most players are right-handed, and the swap is what puts the sword
+        // in the right hand (shown as "Sword Hand: Right"). A saved value still wins.
+        .vrSwapSwordShieldHands {"game.vrSwapSwordShieldHands", true},
         .vrPhysicalSword {"game.vrPhysicalSword", true},
         // Key string deliberately kept as the original "game.vrSwapGripMirrorAxis"
         // (not renamed to match the C++ member) so a value the user already

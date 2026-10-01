@@ -93,6 +93,11 @@ constexpr std::array kLetterboxModes = {
     "Only During Cutscenes",
 };
 
+constexpr std::array kVrSwordHandLabels = {
+    "Left (Original)",
+    "Right",
+};
+
 constexpr std::array kVrLightingModeLabels = {
     "Original",
     "Sun/Moon",
@@ -1130,14 +1135,43 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
             });
 
         leftPane.add_section("Combat");
-        config_bool_select(leftPane, rightPane, getSettings().game.vrSwapSwordShieldHands,
-            {
-                .key = "Swap Sword/Shield Hands",
-                .helpText = "Draws the sword in your right hand and the shield in your left "
-                            "(the base game always has Link hold the sword in his left hand). "
-                            "Also swaps which hand's swing/thrust gesture triggers a sword "
-                            "attack vs. a shield bash, so the hand actually holding each item "
-                            "is the one that uses it. Off by default."
+        // Dominant hand. Stored as vrSwapSwordShieldHands (true = sword in the right
+        // hand), so a value saved under the old "Swap Sword/Shield Hands" toggle carries
+        // over. The buttons don't move: attack and the sword swing share the right
+        // controller, raise-shield and the shield bash the left.
+        leftPane.register_control(
+            leftPane.add_select_button({
+                .key = "Sword Hand",
+                .getValue =
+                    [] {
+                        return kVrSwordHandLabels[getSettings().game.vrSwapSwordShieldHands.getValue() ? 1 : 0];
+                    },
+                .isModified =
+                    [] {
+                        return getSettings().game.vrSwapSwordShieldHands.getValue() !=
+                               getSettings().game.vrSwapSwordShieldHands.getDefaultValue();
+                    },
+            }),
+            rightPane, [](Pane& pane) {
+                for (int i = 0; i < static_cast<int>(kVrSwordHandLabels.size()); i++) {
+                    pane.add_button({
+                            .text = kVrSwordHandLabels[i],
+                            .isSelected =
+                                [i] { return getSettings().game.vrSwapSwordShieldHands.getValue() == (i == 1); },
+                        })
+                        .on_pressed([i] {
+                            mDoAud_seStartMenu(kSoundItemChange);
+                            getSettings().game.vrSwapSwordShieldHands.setValue(i == 1);
+                            config::save();
+                        });
+                }
+                pane.add_rml(
+                    "<br/>Which of your hands holds the sword. The shield goes in the other "
+                    "hand, and each hand's gesture follows its item: swing the sword hand to "
+                    "attack, thrust the shield hand to bash."
+                    "<br/><br/><b>Right:</b> for right-handed players. (Default)"
+                    "<br/><b>Left (Original):</b> GameCube Link is left-handed; the base "
+                    "game always puts his sword in his left hand.");
             });
         config_bool_select(leftPane, rightPane, getSettings().game.vrPhysicalSword,
             {
@@ -1146,7 +1180,7 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
                             "Instead the sword itself deals damage: while you swing it fast, "
                             "its blade is a live hitbox that hurts whatever it touches, until "
                             "the swing slows down. Link doesn't play an attack animation. "
-                            "The real attack button still works normally. Off by default."
+                            "The real attack button still works normally. On by default."
             });
 
         leftPane.add_section("Performance");

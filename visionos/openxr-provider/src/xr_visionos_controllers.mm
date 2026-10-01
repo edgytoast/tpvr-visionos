@@ -29,7 +29,11 @@
 #import <QuartzCore/QuartzCore.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <mutex>
+#include <sstream>
+#include <string>
+#include <vector>
 
 namespace mkw::vr::visionos {
 namespace {
@@ -234,6 +238,77 @@ CHHapticEngine* HapticEngine(int hand) {
     return engine;
 }
 
+// ---------------------------------------------------------------------------
+// Scripted controller input for headless runs (the Simulator has no hands and
+// no controllers). TPVR_TEST_ACTIONS is a space-separated schedule, each entry
+// NAME[=x,y]@seconds[~duration] measured from the first xrSyncActions, e.g.
+//   TPVR_TEST_ACTIONS="A@8 MENU@12 LSTICK=0,1@20~3 RTRIG@25~0.5"
+// Names: A B (right face), X Y (left face), MENU, LTRIG RTRIG, LGRIP RGRIP,
+// LCLICK RCLICK (stick clicks), LSTICK=x,y RSTICK=x,y. Default duration 0.25 s.
+// While a scripted entry is active its hand reads as a connected, untracked
+// Sense controller, so it goes through exactly the path a real one does.
+struct TestAction {
+    int hand = kRight;
+    std::string name;
+    simd_float2 stick = {0.0f, 0.0f};
+    double start = 0.0;
+    double duration = 0.25;
+};
+
+std::vector<TestAction> g_testActions;
+bool g_testParsed = false;
+int64_t g_testOrigin = 0;
+
+void ParseTestActions() {
+    g_testParsed = true;
+    const char* spec = std::getenv("TPVR_TEST_ACTIONS");
+    if (spec == nullptr || *spec == 0) return;
+    std::istringstream tokens(spec);
+    std::string token;
+    while (tokens >> token) {
+        TestAction action;
+        const size_t at = token.find('@');
+        if (at == std::string::npos) continue;
+        std::string head = token.substr(0, at);
+        std::string when = token.substr(at + 1);
+        if (const size_t tilde = when.find('~'); tilde != std::string::npos) {
+            action.duration = std::atof(when.c_str() + tilde + 1);
+            when.resize(tilde);
+        }
+        action.start = std::atof(when.c_str());
+        if (const size_t eq = head.find('='); eq != std::string::npos) {
+            float x = 0.0f, y = 0.0f;
+            std::sscanf(head.c_str() + eq + 1, "%f,%f", &x, &y);
+            action.stick = simd_make_float2(x, y);
+            head.resize(eq);
+        }
+        action.name = head;
+        action.hand = (head == "X" || head == "Y" || head == "MENU" || head[0] == 'L') ? kLeft : kRight;
+        g_testActions.push_back(action);
+    }
+    NSLog(@"[visionos-provider] scripted controller input: %zu action(s)", g_testActions.size());
+}
+
+void ApplyTestActions(int64_t now) {
+    if (!g_testParsed) ParseTestActions();
+    if (g_testActions.empty()) return;
+    if (g_testOrigin == 0) g_testOrigin = now;
+    const double t = static_cast<double>(now - g_testOrigin) * 1.0e-9;
+    for (const TestAction& action : g_testActions) {
+        if (t < action.start || t >= action.start + action.duration) continue;
+        ControllerSample& sample = g_samples[action.hand];
+        sample.connected = true;
+        const std::string& n = action.name;
+        if (n == "A" || n == "X") sample.primary = true;
+        else if (n == "B" || n == "Y") sample.secondary = true;
+        else if (n == "MENU") sample.menu = true;
+        else if (n == "LTRIG" || n == "RTRIG") sample.trigger = 1.0f;
+        else if (n == "LGRIP" || n == "RGRIP") sample.squeeze = 1.0f;
+        else if (n == "LCLICK" || n == "RCLICK") sample.stickClick = true;
+        else if (n == "LSTICK" || n == "RSTICK") sample.stick = action.stick;
+    }
+}
+
 } // namespace
 
 void SampleControllers(int64_t displayNanos) noexcept {
@@ -251,6 +326,7 @@ void SampleControllers(int64_t displayNanos) noexcept {
         }
         LocatePoses(displayNanos);
         const int64_t now = NowNanos();
+        ApplyTestActions(now);
         for (int hand = kLeft; hand <= kRight; ++hand) {
             g_samples[hand].timeNanos = now;
             g_previous[hand] = before[hand];

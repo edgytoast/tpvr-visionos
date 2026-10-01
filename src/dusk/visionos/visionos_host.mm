@@ -13,8 +13,11 @@
 #include <pthread.h>
 
 #include <atomic>
+#include <cstdlib>
 #include <mutex>
+#include <sstream>
 #include <string>
+#include <vector>
 
 // Dusklight's main(), renamed by <aurora/main.h> (src/dusk/main.cpp). aurora's
 // own main() is compiled out on visionOS (extern/aurora/lib/main.cpp).
@@ -46,15 +49,25 @@ void* GameThreadMain(void*) {
         std::lock_guard lock(g_mutex);
         disc = g_discPath;
     }
-    std::string program = "Dusklight";
-    std::string dvdFlag = "--dvd";
-    char* argv[4] = {program.data(), nullptr, nullptr, nullptr};
-    int argc = 1;
+    std::vector<std::string> args = {"Dusklight"};
     if (!disc.empty()) {
-        argv[argc++] = dvdFlag.data();
-        argv[argc++] = disc.data();
+        args.push_back("--dvd");
+        args.push_back(disc);
     }
-    const int code = aurora_main(argc, argv);
+    // Headless runs: TPVR_ARGS adds Dusklight options, space-separated, e.g.
+    //   SIMCTL_CHILD_TPVR_ARGS="--load-save 1 --stage F_SP103"
+    if (const char* extra = std::getenv("TPVR_ARGS"); extra != nullptr) {
+        std::istringstream tokens(extra);
+        for (std::string token; tokens >> token;) {
+            args.push_back(token);
+        }
+    }
+    std::vector<char*> argv;
+    for (std::string& arg : args) {
+        argv.push_back(arg.data());
+    }
+    argv.push_back(nullptr);
+    const int code = aurora_main(static_cast<int>(args.size()), argv.data());
     g_exitCode.store(code);
     g_running.store(false);
     NSLog(@"[dusk::visionos] game returned %d", code);

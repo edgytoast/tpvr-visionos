@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct LauncherView: View {
     @EnvironmentObject private var model: GameModel
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
+    @Environment(\.dismissWindow) private var dismissWindow
     @State private var pickingDisc = false
 
     var body: some View {
@@ -97,7 +98,12 @@ struct LauncherView: View {
         model.markOpening()
         switch await openImmersiveSpace(id: GameModel.immersiveSpaceID) {
         case .opened:
-            break  // The game starts once the space's layer renderer arrives (GameModel.attach).
+            // The game starts once the space's layer renderer arrives (GameModel.attach).
+            // Out of the way while you play: visionOS lets the last window go only once the
+            // space is open, which is now. The game's audio is anchored to the listener
+            // (GameModel), so it plays on without this window; reopening the app brings
+            // the launcher back.
+            dismissWindow(id: GameModel.launcherWindowID)
         case .userCancelled:
             model.openingFailed("The immersive space was not opened.")
         case .error:
