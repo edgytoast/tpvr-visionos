@@ -142,7 +142,7 @@ struct LauncherView: View {
 
     private func play() async {
         model.markOpening()
-        switch await openImmersiveSpace(id: GameModel.immersiveSpaceID) {
+        switch await openImmersiveSpace(id: model.spaceIDForPlay) {
         case .opened:
             // The game starts once the space's layer renderer arrives (GameModel.attach).
             // Out of the way while you play: visionOS lets the last window go only once the

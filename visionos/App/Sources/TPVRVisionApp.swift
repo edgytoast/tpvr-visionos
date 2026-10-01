@@ -17,12 +17,23 @@ struct TPVRVisionApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 760, height: 640)
 
-        ImmersiveSpace(id: GameModel.immersiveSpaceID) {
-            ImmersiveGame.layer(for: model)
-        }
+        // Two spaces, because a space that lists the progressive style makes every
+        // drawable "support progressive": each present then needs the system's
+        // render context, which only a layered layout can carry (the headset
+        // aborted otherwise; the Simulator's single view hid it).
         // Full: you stand in Hyrule. Mixed: the same, with your room around the
-        // menus (GameModel.playsMixed). Progressive: Hyrule through a portal.
-        .immersionStyle(selection: $space.style, in: .full, .mixed, GameModel.progressiveStyle)
+        // menus (GameModel.playsMixed).
+        ImmersiveSpace(id: GameModel.immersiveSpaceID) {
+            ImmersiveGame.layer(for: model, progressive: false)
+        }
+        .immersionStyle(selection: $space.style, in: .full, .mixed)
+        .upperLimbVisibility(.automatic)
+
+        // Progressive: Hyrule through a portal the Digital Crown widens.
+        ImmersiveSpace(id: GameModel.progressiveSpaceID) {
+            ImmersiveGame.layer(for: model, progressive: true)
+        }
+        .immersionStyle(selection: $space.progressiveStyle, in: GameModel.progressiveStyle, .full)
         .upperLimbVisibility(.automatic)
     }
 }

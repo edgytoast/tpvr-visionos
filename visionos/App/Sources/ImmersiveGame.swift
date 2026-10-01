@@ -6,9 +6,13 @@ import SwiftUI
 /// provider paces frames, places the eyes and composites the game's layers into
 /// the drawable. A CompositorLayer is immersive-space content, not a view.
 enum ImmersiveGame {
+    /// `progressive`: the layer of the progressive space, which must be layered
+    /// (its every frame ends through the system's render context).
     @MainActor
-    static func layer(for model: GameModel) -> CompositorLayer {
-        let configuration = GameLayerConfiguration(progressive: model.playsProgressive, foveated: model.foveated)
+    static func layer(for model: GameModel, progressive: Bool) -> CompositorLayer {
+        // No foveation in the progressive space: its layered render-context path
+        // hasn't been tried with a rasterization rate map.
+        let configuration = GameLayerConfiguration(progressive: progressive, foveated: model.foveated && !progressive)
         return CompositorLayer(configuration: configuration) { layerRenderer in
             model.attach(layerRenderer)
         }

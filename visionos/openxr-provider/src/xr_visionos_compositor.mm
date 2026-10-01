@@ -420,7 +420,9 @@ bool Compositor::EnsurePipelines(MTLPixelFormat color, MTLPixelFormat depth) {
     // layered drawable falls back to a pass per slice.
     m_layeredOpaquePipeline = nil;
     m_layeredBlendPipeline = nil;
-    if ([m_device supportsFamily:MTLGPUFamilyApple5] &&
+    Log("layered rendering: Apple5 %d, Mac2 %d, simulator %d", [m_device supportsFamily:MTLGPUFamilyApple5] ? 1 : 0,
+        [m_device supportsFamily:MTLGPUFamilyMac2] ? 1 : 0, TARGET_OS_SIMULATOR ? 1 : 0);
+    if (([m_device supportsFamily:MTLGPUFamilyApple5] || TARGET_OS_SIMULATOR) &&
         !build(true, m_layeredOpaquePipeline, m_layeredBlendPipeline)) {
         m_layeredOpaquePipeline = nil;
         m_layeredBlendPipeline = nil;
@@ -771,9 +773,16 @@ bool Compositor::BeginFrame() {
 namespace {
 
 // The system's render context, which draws what the compositor adds to an app's
-// frame: on visionOS 26 the edge of the progressive-immersion portal. It needs
-// the whole drawable in one encoder (a layered drawable, or the Simulator's one
-// view) and the device anchor already set on the drawable.
+// frame: on visionOS 26 the edge of the progressive-immersion portal. A space
+// that offers the progressive style requires it on every present, and refuses
+// it otherwise; the app's progressive space is the one with a layered layer, so
+// a layered drawable is the signal (IsLayered). It needs the whole drawable in
+// one encoder and the device anchor already set on the drawable.
+bool IsLayered(cp_drawable_t drawable) {
+    return cp_drawable_get_texture_count(drawable) == 1 &&
+           cp_drawable_get_color_texture(drawable, 0).textureType == MTLTextureType2DArray;
+}
+
 cp_drawable_render_context_t AddRenderContext(cp_drawable_t drawable, id<MTLCommandBuffer> commandBuffer) {
     if (@available(visionOS 26.0, *)) {
         return cp_drawable_add_render_context(drawable, commandBuffer);
@@ -888,9 +897,7 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
     }
     id<MTLCommandBuffer> commandBuffer = [m_queue commandBuffer];
     const size_t textures = cp_drawable_get_texture_count(drawable);
-    const bool oneEncoder =
-        textures == 1 && (cp_drawable_get_view_count(drawable) == 1 ||
-                          cp_drawable_get_color_texture(drawable, 0).textureType == MTLTextureType2DArray);
+    const bool layered = IsLayered(drawable);
     for (size_t i = 0; i < textures; ++i) {
         MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
         id<MTLTexture> color = cp_drawable_get_color_texture(drawable, i);
@@ -911,8 +918,7 @@ void Compositor::PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alp
         if (cp_drawable_get_rasterization_rate_map_count(drawable) > i) {
             pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(drawable, i);
         }
-        cp_drawable_render_context_t context =
-            oneEncoder && posed && depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
+        cp_drawable_render_context_t context = layered ? AddRenderContext(drawable, commandBuffer) : nullptr;
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         EndEncoding(context, encoder);
     }
@@ -962,6 +968,13 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
             cp_drawable_set_device_anchor(drawable, m_deviceAnchor);
         } else {
             posed = false;
+            // A layered (progressive) drawable ends through the render context,
+            // which reads the device anchor: give it the last one even when this
+            // frame's query failed (the first frames, before tracking settles),
+            // as the SHAR port does on every frame.
+            if (m_deviceAnchor != nullptr && IsLayered(drawable)) {
+                cp_drawable_set_device_anchor(drawable, m_deviceAnchor);
+            }
         }
     }
     // The safety boundary: away from the origin, the room shows through.
@@ -1032,8 +1045,22 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
         }
         drawn = &smoothed;
     }
-    const bool layered = cp_drawable_get_texture_count(drawable) == 1 &&
-                         firstColor.textureType == MTLTextureType2DArray && m_layeredOpaquePipeline != nil;
+    const bool layered = IsLayered(drawable);
+    if (layered && m_layeredOpaquePipeline == nil) {
+        // A layered drawable must end through the render context, which only the
+        // layered pass (or an empty frame) provides. The images still count as
+        // read, so the writer isn't left waiting on them.
+        for (const ComposedLayer& layer : layers) {
+            for (const ComposedLayer::Image& image : layer.images) {
+                if (image.readEvent != nil && image.readValue != 0) {
+                    [commandBuffer encodeSignalEvent:image.readEvent value:image.readValue];
+                }
+            }
+        }
+        [commandBuffer commit];
+        PresentEmpty(frame, drawable, alphaBlend, posed);
+        return;
+    }
     if (layered) {
         DrawLayersLayered(drawable, commandBuffer, *drawn, alphaBlend, worldFromDevice);
     } else {
@@ -1062,8 +1089,6 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
     std::vector<bool> cleared(textureCount, false);
     const simd_float4x4 deviceFromWorld = simd_inverse(worldFromDevice);
     const int antiAliasing = m_antiAliasing.load();
-    // One view in one texture (the Simulator): its one encoder can carry the render context.
-    const bool singleView = viewCount == 1 && textureCount == 1;
 
     for (size_t viewIndex = 0; viewIndex < viewCount; ++viewIndex) {
         cp_view_t view = cp_drawable_get_view(drawable, viewIndex);
@@ -1111,8 +1136,6 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
                 pass.depthAttachment.loadAction = MTLLoadActionLoad;
             }
         }
-        cp_drawable_render_context_t context =
-            singleView && depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
         id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
         encoder.label = viewIndex == 0 ? @"left eye" : @"right eye";
         [encoder setViewport:viewport];
@@ -1137,7 +1160,7 @@ void Compositor::DrawLayers(cp_drawable_t drawable, id<MTLCommandBuffer> command
             [encoder setFragmentTexture:image.texture atIndex:0];
             [encoder drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
         }
-        EndEncoding(context, encoder);
+        [encoder endEncoding];
     }
 }
 
@@ -1181,7 +1204,7 @@ void Compositor::DrawLayersLayered(cp_drawable_t drawable, id<MTLCommandBuffer> 
     if (cp_drawable_get_rasterization_rate_map_count(drawable) > 0) {
         pass.rasterizationRateMap = cp_drawable_get_rasterization_rate_map(drawable, 0);
     }
-    cp_drawable_render_context_t context = depth != nil ? AddRenderContext(drawable, commandBuffer) : nullptr;
+    cp_drawable_render_context_t context = AddRenderContext(drawable, commandBuffer);
     id<MTLRenderCommandEncoder> encoder = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     encoder.label = @"both eyes";
     [encoder setViewports:viewports.data() count:viewCount];

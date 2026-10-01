@@ -9,6 +9,7 @@ import SwiftUI
 final class GameModel: ObservableObject {
     static let launcherWindowID = "launcher"
     static let immersiveSpaceID = "game"
+    static let progressiveSpaceID = "game-progressive"
 
     enum Phase: Equatable {
         case idle
@@ -71,7 +72,7 @@ final class GameModel: ObservableObject {
 
     /// Portrait, as in the SHAR port: the wide default portal cuts off what's below
     /// eye level. The system's own range: a custom one showed nothing on the headset.
-    static var progressiveStyle: any ImmersionStyle {
+    nonisolated static var progressiveStyle: any ImmersionStyle {
         if #available(visionOS 26.0, *) {
             return ProgressiveImmersionStyle.progressive(aspectRatio: .portrait)
         }
@@ -85,9 +86,14 @@ final class GameModel: ObservableObject {
     var playsProgressive: Bool { immersion == .progressive && Self.progressiveAvailable }
     var playsMixed: Bool { !playsProgressive && roomBehindMenus }
 
+    /// The full space's style (the progressive space has only its own).
     func styleForPlay() -> any ImmersionStyle {
-        if playsProgressive { return Self.progressiveStyle }
-        return playsMixed ? .mixed : .full
+        playsMixed ? .mixed : .full
+    }
+
+    /// The immersive space Play opens.
+    var spaceIDForPlay: String {
+        playsProgressive ? Self.progressiveSpaceID : Self.immersiveSpaceID
     }
 
     /// Disc images nod (the game's disc reader) opens; Dusklight wants GZ2E01 or GZ2P01.
@@ -272,5 +278,8 @@ final class GameModel: ObservableObject {
 @Observable
 final class ImmersionSpaceStyle {
     static let shared = ImmersionSpaceStyle()
+    /// The full space's: .full, or .mixed for the room around menus.
     var style: any ImmersionStyle = .full
+    /// The progressive space's, which has only the one.
+    var progressiveStyle: any ImmersionStyle = GameModel.progressiveStyle
 }
