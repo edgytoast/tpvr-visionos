@@ -71,7 +71,7 @@ owns the swapchain images and Dawn imports them.
 ### 4. Hands and controllers
 - [x] PS VR2 Sense controllers, first class: ARKit accessory tracking for grip and aim poses (predicted to display time), buttons, sticks, triggers, haptics (`xr_visionos_controllers.mm`).
 - [x] Walking without a thumbstick: the left hand's held thumb-middle pinch is a joystick (the walk clutch, after illixion's RAVEInput); a quick tap still presses X. Needs tuning on the headset.
-- [ ] Bare-hand turning (today: turn your body), and a pass over which pinch does what with bare hands.
+- [x] Bare-hand turning: the right thumb-little pinch (unused by TPVR), held and moved sideways, is the right stick's x.
 
 ### 5. On the headset
 - [x] First light, 2026-09-30: VR, the right Sense controller, gameplay. "Works perfectly."
@@ -97,5 +97,4 @@ owns the swapchain images and Dawn imports them.
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
 - Per-pixel depth for the compositor's reprojection (today the eyes are placed on a plane 3 m out).
-- Bare-hand turning.
 - A windowed (shared-space) mode, once the SHAR port's window mode is finished.

@@ -12,9 +12,9 @@
 // the index finger is the trigger and select, the middle, ring and little
 // fingers pinched are the face buttons and menu, curling the fingers is the
 // grip squeeze. Either way the aim and grip poses are built from the wrist and
-// knuckles. There is no thumbstick: the left hand's held thumb-middle pinch
-// stands in for its stick (the walk clutch, below), and the right one has none,
-// so turning is your own body. Haptics have nowhere to go without a controller.
+// knuckles. There are no thumbsticks: a held pinch stands in for each (the
+// clutches below) -- the left thumb-middle pinch walks, the right thumb-little
+// pinch turns. Haptics have nowhere to go without a controller.
 
 #include "xr_visionos_internal.h"
 
@@ -181,14 +181,17 @@ float Pinch(const HandJointSample& a, const HandJointSample& b) noexcept {
     return Clamp01((kPinchNoneMeters - distance) / (kPinchNoneMeters - kPinchFullMeters));
 }
 
-// Walking with bare hands, which have no thumbstick: the left hand's thumb and
-// middle finger, pinched and held, are a joystick (a clutch, after illixion's
-// RAVEInput). Where the pinch moves from where it began -- in the horizontal
-// plane, forward being where the head faced then -- pushes the left stick, fully
-// at kClutchRangeMeters. A short, still pinch is a tap: the middle-finger button
-// (X), pressed for a moment when the fingers part. A Sense controller in that hand
-// takes over and the clutch rests.
-struct WalkClutch {
+// Walking and turning with bare hands, which have no thumbsticks: a pinch held
+// is a joystick (a clutch, after illixion's RAVEInput). Where the pinch moves
+// from where it began -- in the horizontal plane, forward being where the head
+// faced then -- pushes the stick, fully at kClutchRangeMeters.
+//  - Left hand, thumb and middle finger: the left stick (walk). A short, still
+//    pinch is a tap: the middle-finger button (X), pressed for a moment when
+//    the fingers part.
+//  - Right hand, thumb and little finger (a pinch no TPVR action uses): the
+//    right stick's x (turn), from moving the hand sideways.
+// A Sense controller in that hand takes over and its clutch rests.
+struct Clutch {
     bool active = false;
     simd_float3 start{};
     simd_float3 forward{0.0f, 0.0f, -1.0f};
@@ -198,8 +201,10 @@ struct WalkClutch {
     simd_float2 stick{};
     int64_t tapUntilNanos = 0;
 };
-WalkClutch g_walkClutch;
+// By hand: [0] walks, [1] turns.
+std::array<Clutch, 2> g_clutches{};
 constexpr uint32_t kWalkHand = 0; // left
+constexpr uint32_t kTurnHand = 1; // right
 constexpr float kClutchStartPinch = 0.8f;
 constexpr float kClutchEndPinch = 0.5f;
 constexpr float kClutchRangeMeters = 0.08f;
@@ -208,26 +213,34 @@ constexpr float kClutchTapTravelMeters = 0.02f;
 constexpr int64_t kClutchTapNanos = 300'000'000;
 constexpr int64_t kClutchTapPressNanos = 120'000'000;
 
-void UpdateWalkClutch(const Session& session) noexcept {
-    WalkClutch& clutch = g_walkClutch;
-    const HandSample& hand = session.hands[kWalkHand];
-    const bool bare = hand.tracked && !ControllerOf(kWalkHand).connected;
+void UpdateClutch(const Session& session, uint32_t handIndex) noexcept {
+    Clutch& clutch = g_clutches[handIndex];
+    const HandSample& hand = session.hands[handIndex];
+    const bool bare = hand.tracked && !ControllerOf(handIndex).connected;
+    const bool walking = handIndex == kWalkHand;
     float pinch = 0.0f;
     if (bare) {
-        pinch = Pinch(hand.thumbTip(), hand.middleTip());
-        // The middle finger only: an index pinch (the trigger) mustn't start a
-        // walk. Once walking, the neighbouring index tip wobbling closer mustn't
-        // end it either.
-        if (!clutch.active && Pinch(hand.thumbTip(), hand.indexTip()) > pinch) {
-            pinch = 0.0f;
+        const HandJointSample& finger = walking ? hand.middleTip() : hand.littleTip();
+        pinch = Pinch(hand.thumbTip(), finger);
+        // Only this finger may start it: a stronger pinch of another (the index
+        // is the trigger) mustn't. Once held, a neighbouring tip wobbling closer
+        // mustn't end it either.
+        if (!clutch.active) {
+            const float others = std::max({Pinch(hand.thumbTip(), hand.indexTip()),
+                                           walking ? Pinch(hand.thumbTip(), hand.littleTip())
+                                                   : Pinch(hand.thumbTip(), hand.middleTip()),
+                                           Pinch(hand.thumbTip(), hand.ringTip())});
+            if (others > pinch) {
+                pinch = 0.0f;
+            }
         }
     }
     const int64_t now = NowNanos();
     const simd_float3 position = hand.thumbTip().position;
     if (!clutch.active) {
         if (pinch > kClutchStartPinch) {
-            clutch = WalkClutch{.active = true, .start = position, .beganNanos = now,
-                                .tapUntilNanos = clutch.tapUntilNanos};
+            clutch = Clutch{.active = true, .start = position, .beganNanos = now,
+                            .tapUntilNanos = clutch.tapUntilNanos};
             simd_float4x4 worldFromDevice;
             if (Compositor::Get().DevicePose(now, worldFromDevice)) {
                 simd_float3 forward = -worldFromDevice.columns[2].xyz;
@@ -242,7 +255,7 @@ void UpdateWalkClutch(const Session& session) noexcept {
         return;
     }
     if (pinch < kClutchEndPinch) {
-        if (now - clutch.beganNanos < kClutchTapNanos && clutch.maxTravel < kClutchTapTravelMeters) {
+        if (walking && now - clutch.beganNanos < kClutchTapNanos && clutch.maxTravel < kClutchTapTravelMeters) {
             clutch.tapUntilNanos = now + kClutchTapPressNanos;
         }
         clutch.active = false;
@@ -250,7 +263,10 @@ void UpdateWalkClutch(const Session& session) noexcept {
         return;
     }
     const simd_float3 moved = position - clutch.start;
-    const simd_float2 planar = simd_make_float2(simd_dot(moved, clutch.right), simd_dot(moved, clutch.forward));
+    simd_float2 planar = simd_make_float2(simd_dot(moved, clutch.right), simd_dot(moved, clutch.forward));
+    if (!walking) {
+        planar.y = 0.0f; // turning is sideways only
+    }
     const float travel = simd_length(planar);
     clutch.maxTravel = std::max(clutch.maxTravel, travel);
     if (travel < kClutchDeadzoneMeters) {
@@ -332,17 +348,21 @@ Gestures GesturesOfHand(const Session& session, uint32_t hand) noexcept {
 
 namespace {
 
-// The walk clutch takes the walking hand's middle pinch; a tap gives it back as a
-// press on release.
-Gestures WithWalkClutch(Gestures g, uint32_t hand) noexcept {
-    if (hand != kWalkHand || ControllerOf(kWalkHand).connected) {
+// The clutches own their pinches: the walking hand's middle (a tap gives it back
+// as a press on release) and the turning hand's little finger.
+Gestures WithClutches(Gestures g, uint32_t hand) noexcept {
+    if (hand > 1 || ControllerOf(hand).connected) {
+        return g;
+    }
+    if (hand == kTurnHand) {
+        g.pinchLittle = 0.0f;
         return g;
     }
     // The middle pinch is the clutch's alone, so X comes only from a tap: the
     // pinch reaching the click threshold on its way to the clutch's start must
     // not press it.
     g.pinchMiddle = 0.0f;
-    if (!g_walkClutch.active && NowNanos() < g_walkClutch.tapUntilNanos) {
+    if (!g_clutches[kWalkHand].active && NowNanos() < g_clutches[kWalkHand].tapUntilNanos) {
         g.pinchIndex = g.pinchRing = g.pinchLittle = 0.0f;
         g.pinchMiddle = 1.0f;
     }
@@ -934,7 +954,8 @@ XrResult XRAPI_CALL SyncActions(XrSession session, const XrActionsSyncInfo* sync
     }
     // PS VR2 Sense controllers (xr_visionos_controllers.mm), predicted to this frame.
     SampleControllers(target->predictedDisplayNanos);
-    UpdateWalkClutch(*target);
+    UpdateClutch(*target, kWalkHand);
+    UpdateClutch(*target, kTurnHand);
     target->lastSyncNanos = NowNanos();
     return XR_SUCCESS;
 }
@@ -999,7 +1020,7 @@ XrResult XRAPI_CALL GetActionStateBoolean(XrSession session, const XrActionState
             current = current || boolean;
             continue;
         }
-        const Gestures g = WithWalkClutch(GesturesOfHand(*target, hand), hand);
+        const Gestures g = WithClutches(GesturesOfHand(*target, hand), hand);
         if (!g.tracked || !ComponentValue(g, component, value, boolean)) {
             continue;
         }
@@ -1047,7 +1068,7 @@ XrResult XRAPI_CALL GetActionStateFloat(XrSession session, const XrActionStateGe
             current = std::max(current, value);
             continue;
         }
-        const Gestures g = WithWalkClutch(GesturesOfHand(*target, hand), hand);
+        const Gestures g = WithClutches(GesturesOfHand(*target, hand), hand);
         if (!g.tracked || !ComponentValue(g, component, value, boolean)) {
             continue;
         }
@@ -1090,11 +1111,11 @@ XrResult XRAPI_CALL GetActionStateVector2f(XrSession session, const XrActionStat
                 current = {controller.stick.x, controller.stick.y};
             }
         } else if (target->hands[hand].tracked) {
-            // A bare hand has no stick: centred, except the walking hand's clutch.
+            // A bare hand has no stick: centred, except while its clutch is held.
             active = true;
-            if (hand == kWalkHand && g_walkClutch.active &&
-                simd_length(g_walkClutch.stick) > std::hypot(current.x, current.y)) {
-                current = {g_walkClutch.stick.x, g_walkClutch.stick.y};
+            if (hand < 2 && g_clutches[hand].active &&
+                simd_length(g_clutches[hand].stick) > std::hypot(current.x, current.y)) {
+                current = {g_clutches[hand].stick.x, g_clutches[hand].stick.y};
             }
         }
     }

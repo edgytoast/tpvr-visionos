@@ -63,8 +63,10 @@ deletes them.
 ### Controls
 
 PS VR2 Sense controllers play TPVR's Touch layout. Bare hands play it too: index
-pinch = trigger, middle = A/X, ring = B/Y, little = menu, a fist = grip. Hold the
-left hand's thumb-middle pinch and move the hand to walk (a quick tap is still X).
+pinch = trigger, middle = A/X, ring = B/Y, left little = menu, a fist = grip.
+Hold the left hand's thumb-middle pinch and move the hand to walk (a quick tap
+is still X); hold the right hand's thumb-little pinch and move it sideways to
+turn.
 
 Graphics options for Vision Pro are under VR › Vision Pro (anti-aliasing) and VR
 › Performance (render resolution up to 150%).
