@@ -50,9 +50,15 @@ Homebrew's `rustup` is keg-only; the build script puts
 4. Press the Digital Crown to leave. The game saves and the app closes; open it
    again to play again.
 
-With your room around the menus, Hyrule also fades into the room if you walk
-more than about 1.2 m from where you started, standing in for visionOS's
-full-immersion boundary.
+With your room around the menus, every black screen shows your room instead:
+menus, file select, Game Over, loading, and TP's fades to black, which cross
+into the room. Hyrule also fades into the room if you walk more than about
+1.2 m from where you started, standing in for visionOS's full-immersion
+boundary. The game pauses while the headset is off.
+
+Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight
+Princess VR), next to the disc: copy them out to back them up. Deleting the app
+deletes them.
 
 ### Controls
 

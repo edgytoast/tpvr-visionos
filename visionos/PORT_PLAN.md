@@ -88,9 +88,14 @@ owns the swapchain images and Dawn imports them.
 - [x] Render quality: VR Render Resolution reaches 150% on Vision Pro (supersampling), capped to the runtime's largest image.
 - [x] PC-only settings (VR brightness sliders, desktop mirror) hidden on Vision Pro, as on Quest.
 - [x] Opaque layers composite with alpha 1 (OpenXR semantics); TPVR's eye images carry undefined alpha.
+- [x] Two immersive spaces (full/mixed, and progressive): a space that lists the progressive style makes every drawable require the system's render context, which crashed Full on the headset (fixed 2026-10-01).
+- [x] The room behind every black screen (room option on): TP's full-screen menus, file select (load, name entry, brightness check), Game Over, loading frames (held black 0.25 s after game content, then eased in), and TP's fades to black, which crossfade into the room (frame opacity = 1 - fade rate).
+- [x] Direct render: the eye pass draws straight into the provider's IOSurface (no gamma pass or copy when the hand-off is an identity). Simulator: the compositor's GPU wait fell from ~21 ms to ~4.5 ms. `TPVR_COPY_EYES=1` restores the copy.
+- [x] The game clock holds while the session isn't focused (headset off, visionOS UI over the game): `aurora_set_external_pause`.
 - [x] Headless test hooks: `TPVR_AUTO_PLAY=1`, `TPVR_ARGS` (Dusklight options such as `--stage F_SP103`), `TPVR_TEST_ACTIONS` (scripted Sense controller input). Pass them as `SIMCTL_CHILD_*` to `xcrun simctl launch`.
 
 ### Next
-- Foveation: today the drawable is uniform, about 1888x1792 per eye. A rasterization rate map would put more pixels where you look; the eye images would need to grow to match, so it trades GPU time.
+- Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
 - Per-pixel depth for the compositor's reprojection (today the eyes are placed on a plane 3 m out).
-- Bare-hand turning and a full bare-hand control pass.
+- Bare-hand turning.
+- A windowed (shared-space) mode, once the SHAR port's window mode is finished.
