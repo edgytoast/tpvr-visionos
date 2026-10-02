@@ -139,6 +139,9 @@ static RENDERDOC_API_1_1_2* getRenderDocApi() {
 #ifdef __APPLE__
 #include <TargetConditionals.h>
 #endif
+#if defined(__APPLE__) && TARGET_OS_VISION
+#include "dusk/visionos/visionos_window.hpp"
+#endif
 
 // --- GLOBALS ---
 DUSK_GAME_DATA s8 mDoMain::developmentMode = -1;
@@ -356,6 +359,13 @@ void main01(void) {
         // silently proceeds flatscreen-only on failure.
         {
             static bool triedVrStartup = false;
+#if defined(__APPLE__) && TARGET_OS_VISION
+            // Apple Vision Pro, Window mode: no immersive space and no head pose; the game
+            // plays flat in a shared-space window (dusk/visionos/visionos_window.hpp).
+            if (dusk::visionos::window::enabled()) {
+                triedVrStartup = true;
+            }
+#endif
             if (!triedVrStartup) {
                 triedVrStartup = true;
                 if (!dusk::vr::startup()) {
@@ -364,6 +374,9 @@ void main01(void) {
             }
         }
 
+#if defined(__APPLE__) && TARGET_OS_VISION
+        dusk::visionos::window::begin_frame();  // Window mode: a frame per window update
+#endif
         VIWaitForRetrace();
 
         dusk::lastFrameAuroraStats = *aurora_get_stats();

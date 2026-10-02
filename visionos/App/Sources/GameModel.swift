@@ -10,6 +10,7 @@ final class GameModel: ObservableObject {
     static let launcherWindowID = "launcher"
     static let immersiveSpaceID = "game"
     static let progressiveSpaceID = "game-progressive"
+    static let windowSceneID = "game-window"
 
     enum Phase: Equatable {
         case idle
@@ -29,12 +30,16 @@ final class GameModel: ObservableObject {
         /// Hyrule through a portal in your room; the Digital Crown opens it wider
         /// or closes it down (visionOS 26).
         case progressive
+        /// Twilight Princess in a window beside your other apps, third person, with a
+        /// gamepad (GameWindowView). No head tracking reaches a window, so the VR mod is off.
+        case window
 
         var id: String { rawValue }
         var title: String {
             switch self {
             case .full: "Full"
             case .progressive: "Progressive"
+            case .window: "Window"
             }
         }
     }
@@ -84,7 +89,8 @@ final class GameModel: ObservableObject {
     /// with the room is a mixed space whose game frames are opaque (as WiiCompiled
     /// Vision opens by default), and only the menus' surroundings are see-through.
     var playsProgressive: Bool { immersion == .progressive && Self.progressiveAvailable }
-    var playsMixed: Bool { !playsProgressive && roomBehindMenus }
+    var playsWindow: Bool { immersion == .window }
+    var playsMixed: Bool { !playsProgressive && !playsWindow && roomBehindMenus }
 
     /// The full space's style (the progressive space has only its own).
     func styleForPlay() -> any ImmersionStyle {
@@ -106,7 +112,11 @@ final class GameModel: ObservableObject {
 
     init() {
         let saved = UserDefaults.standard.string(forKey: Self.immersionKey).flatMap(Immersion.init(rawValue:))
-        immersion = saved == .progressive && Self.progressiveAvailable ? .progressive : .full
+        switch saved {
+        case .progressive? where Self.progressiveAvailable: immersion = .progressive
+        case .window?: immersion = .window
+        default: immersion = .full
+        }
         roomBehindMenus = UserDefaults.standard.object(forKey: Self.roomBehindMenusKey) as? Bool ?? true
         foveated = UserDefaults.standard.bool(forKey: Self.foveatedKey)
         // TPVR's audio listener is the headset (Z2Audience follows the HMD pose), so
@@ -225,6 +235,33 @@ final class GameModel: ObservableObject {
             pose != nil, Float(pose?.x ?? 0), Float(pose?.y ?? 0), Float(pose?.z ?? 0))
     }
 
+    /// Window mode: called when the game window appears. The game plays flat (no layer renderer,
+    /// so no VR) and hands its frames to the window, which paces it.
+    func startWindowGame() {
+        guard phase == .opening || phase == .idle else { return }
+        // The game's listener follows its own camera, not your head: let visionOS place the sound
+        // at the window.
+        do {
+            try AVAudioSession.sharedInstance().setIntendedSpatialExperience(
+                .headTracked(soundStageSize: .automatic, anchoringStrategy: .automatic))
+        } catch {
+            print("[TPVR] window audio: setIntendedSpatialExperience failed: \(error)")
+        }
+        dusk_visionos_set_window_mode(true)
+        startGame()
+    }
+
+    /// The game window closed: the game saves and returns, and the app ends with it. The request
+    /// repeats from the watchdog until the game returns (one sent before the game's event loop
+    /// is up would be dropped).
+    func windowClosed() {
+        quitRequested = true
+        if phase == .running {
+            dusk_visionos_request_quit()
+        }
+    }
+    private var quitRequested = false
+
     private func startGame() {
         guard phase == .opening || phase == .idle else { return }
         dusk_visionos_set_disc_path(disc?.path)
@@ -267,7 +304,7 @@ final class GameModel: ObservableObject {
             phase = .ended(exitCode: code)
             // Something went wrong: bring the launcher back to say so.
             showLauncher?()
-        } else if dusk_visionos_layer_invalidated() {
+        } else if quitRequested || (!playsWindow && dusk_visionos_layer_invalidated()) {
             dusk_visionos_request_quit()
         }
     }

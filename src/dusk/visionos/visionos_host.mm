@@ -2,6 +2,8 @@
 
 #include "vr/visionos/xr_visionos.h"
 
+#include <aurora/aurora.h>
+
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_init.h>
 // Only SDL_SetMainReady() is wanted; without this SDL_main.h supplies a main().
@@ -154,6 +156,10 @@ bool dusk_visionos_room_behind_menus(void) {
 
 void dusk_visionos_set_safety_boundary(bool enabled) {
     xr_visionos_set_safety_boundary(enabled);
+}
+
+void dusk_visionos_set_paused(bool paused) {
+    aurora_set_external_pause(paused);
 }
 
 const char* dusk_visionos_last_error(void) {

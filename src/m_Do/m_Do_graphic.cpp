@@ -69,6 +69,13 @@
 #include <SDL3/SDL_video.h>
 #include <tracy/Tracy.hpp>
 #endif
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_VISION
+#include "dusk/visionos/visionos_window.hpp"
+#define DUSK_VISIONOS_WINDOW 1
+#endif
+#endif
 
 class mDoGph_HIO_c : public JORReflexible {
 public:
@@ -2249,6 +2256,9 @@ static void mDoGph_drawHud2D() {
 #if TARGET_PC
     dusk::mods::gfx_run_stage(GFX_STAGE_FRAME_BEFORE_HUD);
 #endif
+#if DUSK_VISIONOS_WINDOW
+    dusk::visionos::window::before_hud();  // Window mode: the scene and its depth
+#endif
 
     if (fapGmHIO_get2Ddraw()) {
         Mtx m4;
@@ -2309,6 +2319,9 @@ static void mDoGph_drawHud2D() {
 
 #if TARGET_PC
     dusk::mods::gfx_run_stage(GFX_STAGE_FRAME_AFTER_HUD);
+#endif
+#if DUSK_VISIONOS_WINDOW
+    dusk::visionos::window::after_hud();  // Window mode: the finished frame
 #endif
 }
 
@@ -2551,6 +2564,9 @@ int mDoGph_Painter() {
 
 #if TARGET_PC
             dusk::mods::gfx_run_stage(GFX_STAGE_SCENE_BEGIN, &camera_p->view, view_port);
+#endif
+#if DUSK_VISIONOS_WINDOW
+            dusk::visionos::window::note_scene(&camera_p->view);  // Window mode: the 3D camera
 #endif
 
             #if DEBUG

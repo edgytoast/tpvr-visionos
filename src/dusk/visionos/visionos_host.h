@@ -69,6 +69,39 @@ void dusk_visionos_set_safety_boundary(bool enabled);
 // Game -> bridge (not exported): dusk_visionos_set_room_behind_menus's value.
 bool dusk_visionos_room_behind_menus(void);
 
+// Holds the game clock (the window went to the background or was hidden), or lets it run.
+void dusk_visionos_set_paused(bool paused);
+
+// --- Window mode: the game in a window in the shared space (src/dusk/visionos/visionos_window.hpp).
+
+// Call before dusk_visionos_start_game, with no layer renderer: the game plays flat and hands
+// each frame to the app instead of rendering to a headset.
+void dusk_visionos_set_window_mode(bool enabled);
+
+// Once per window update (RealityKit's SceneEvents.Update): lets the game build its next frame.
+void dusk_visionos_window_tick(void);
+
+// One finished frame, as IOSurfaceRefs the game owns. Reads must wait for `event` (an
+// MTLSharedEvent) to reach `value`, and the frame goes back with dusk_visionos_window_release
+// once they finish. A `generation` that changed means the surfaces are new ones (the game
+// resized them).
+typedef struct dusk_visionos_window_frame {
+    uint64_t serial;
+    uint64_t generation;
+    void* scene;     // BGRA8: the 3D scene before the 2D/HUD, or NULL when none was drawn
+    void* distance;  // RGBA16F: each pixel's distance from the camera (game units) in .r; with scene
+    void* final;     // BGRA8: the finished frame, HUD and all
+    void* ui;        // BGRA8, premultiplied: Dusklight's own menus, or NULL when none is open
+    void* event;     // MTLSharedEvent, borrowed
+    uint64_t value;
+    float tan_half_x, tan_half_y;  // the camera's half field of view as tangents
+    float focus;                   // the camera's distance to what it looks at (game units)
+} dusk_visionos_window_frame;
+
+// The newest frame not yet taken, or false.
+bool dusk_visionos_window_acquire(dusk_visionos_window_frame* frame);
+void dusk_visionos_window_release(uint64_t serial);
+
 #ifdef __cplusplus
 }
 #endif

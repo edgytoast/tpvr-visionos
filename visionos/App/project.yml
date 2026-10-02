@@ -26,6 +26,9 @@ targets:
       - path: Sources
       # The app icon: three layers drawn by visionos/scripts/make-app-icon.py.
       - path: Assets.xcassets
+      # The game window's materials (WindowFrame.usda: the relief and the HUD).
+      - path: Resources
+        buildPhase: resources
       - path: ../../res
         type: folder
         buildPhase: resources

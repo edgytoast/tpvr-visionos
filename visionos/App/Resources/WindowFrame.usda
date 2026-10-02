@@ -1,0 +1,91 @@
+#usda 1.0
+(
+    defaultPrim = "Root"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+
+# The game window's materials (GameWindowView.swift), adapted from the SHAR port's. Metal textures
+# start at the top row, as the meshes' UVs expect, hence no_flip_v.
+def Xform "Root"
+{
+    # The relief: the game's picture on its depth, unlit, as the game drew it.
+    def Material "ReliefFrame"
+    {
+        asset inputs:Frame
+        token outputs:mtlx:surface.connect = </Root/ReliefFrame/Surface.outputs:out>
+        token outputs:realitykit:vertex
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_realitykit_unlit_surfaceshader"
+            bool inputs:applyPostProcessToneMap = 0
+            color3f inputs:color.connect = </Root/ReliefFrame/Sample.outputs:out>
+            token outputs:out
+        }
+
+        def Shader "Sample"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_color3"
+            asset inputs:file.connect = </Root/ReliefFrame.inputs:Frame>
+            float2 inputs:texcoord.connect = </Root/ReliefFrame/UV.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            color3f outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+    }
+
+    # The HUD and Dusklight's menus, flat on the window's face, alpha premultiplied.
+    def Material "HudFrame"
+    {
+        asset inputs:Frame
+        token outputs:mtlx:surface.connect = </Root/HudFrame/Surface.outputs:out>
+        token outputs:realitykit:vertex
+
+        def Shader "Surface"
+        {
+            uniform token info:id = "ND_realitykit_unlit_surfaceshader"
+            bool inputs:applyPostProcessToneMap = 0
+            bool inputs:hasPremultipliedAlpha = 1
+            color3f inputs:color.connect = </Root/HudFrame/Colour.outputs:out>
+            float inputs:opacity.connect = </Root/HudFrame/Alpha.outputs:outw>
+            token outputs:out
+        }
+
+        def Shader "Colour"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_color3"
+            asset inputs:file.connect = </Root/HudFrame.inputs:Frame>
+            float2 inputs:texcoord.connect = </Root/HudFrame/UV.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            color3f outputs:out
+        }
+
+        def Shader "Sample"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/HudFrame.inputs:Frame>
+            float2 inputs:texcoord.connect = </Root/HudFrame/UV.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            float4 outputs:out
+        }
+
+        def Shader "Alpha"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/HudFrame/Sample.outputs:out>
+            float outputs:outw
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+    }
+}

@@ -406,7 +406,7 @@ set(_dusklight_all_files src/dusk/main.cpp ${GAME_BASE_FILES} ${GAME_DEBUG_FILES
 if (VISIONOS)
     # The C bridge the SwiftUI app drives (main() is SwiftUI's; the game runs
     # on a thread of its own). See src/dusk/visionos/visionos_host.h.
-    list(APPEND _dusklight_all_files src/dusk/visionos/visionos_host.mm)
+    list(APPEND _dusklight_all_files src/dusk/visionos/visionos_host.mm src/dusk/visionos/visionos_window.cpp)
 endif ()
 set(DUSK_INTERNAL_FILES ${_dusklight_all_files})
 list(FILTER DUSK_INTERNAL_FILES INCLUDE REGEX "^src/dusk/")

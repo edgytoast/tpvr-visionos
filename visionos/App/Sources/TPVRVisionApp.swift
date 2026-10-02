@@ -29,6 +29,16 @@ struct TPVRVisionApp: App {
         .immersionStyle(selection: $space.style, in: .full, .mixed)
         .upperLimbVisibility(.automatic)
 
+        // Window: the game beside your other apps, with depth (GameWindowView). A WindowGroup
+        // (Window needs visionOS 26); only Play opens it, and only once per run.
+        WindowGroup(id: GameModel.windowSceneID) {
+            GameWindowView()
+                .environmentObject(model)
+        }
+        .windowStyle(.plain)
+        .defaultSize(width: 1280, height: 720)
+        .windowResizability(.contentSize)
+
         // Progressive: Hyrule through a portal the Digital Crown widens.
         ImmersiveSpace(id: GameModel.progressiveSpaceID) {
             ImmersiveGame.layer(for: model, progressive: true)

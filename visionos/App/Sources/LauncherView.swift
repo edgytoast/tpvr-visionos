@@ -43,15 +43,18 @@ struct LauncherView: View {
             }
 
             VStack(alignment: .leading, spacing: 10) {
-                if GameModel.progressiveAvailable {
-                    Picker("Immersion", selection: $model.immersion) {
-                        ForEach(GameModel.Immersion.allCases) { immersion in
-                            Text(immersion.title).tag(immersion)
-                        }
+                Picker("Immersion", selection: $model.immersion) {
+                    ForEach(GameModel.Immersion.allCases.filter { $0 != .progressive || GameModel.progressiveAvailable }) { immersion in
+                        Text(immersion.title).tag(immersion)
                     }
-                    .pickerStyle(.segmented)
                 }
-                if model.immersion == .progressive && GameModel.progressiveAvailable {
+                .pickerStyle(.segmented)
+                if model.immersion == .window {
+                    Text("Twilight Princess in a window beside your other apps, in third person, with depth you can see as you move. Play it with a gamepad; head and hand tracking stay in the immersive modes.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if model.immersion == .progressive && GameModel.progressiveAvailable {
                     Text("Hyrule opens through a portal in your room. Turn the Digital Crown to widen or narrow it.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -68,6 +71,8 @@ struct LauncherView: View {
             }
             .disabled(model.phase != .idle)
 
+            // Foveation is the immersive spaces' (a window is drawn by visionOS itself).
+            if model.immersion != .window {
             VStack(alignment: .leading, spacing: 6) {
                 Toggle("Foveated rendering", isOn: $model.foveated)
                 Text("Sharper where you look. The game renders larger eye images, which costs GPU time: lower VR Render Resolution in the game's VR settings if it stutters.")
@@ -76,6 +81,7 @@ struct LauncherView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .disabled(model.phase != .idle)
+            }
 
             if !model.message.isEmpty {
                 Text(model.message)
@@ -142,6 +148,11 @@ struct LauncherView: View {
 
     private func play() async {
         model.markOpening()
+        if model.playsWindow {
+            // The game window starts the game when it appears and closes this one.
+            openWindow(id: GameModel.windowSceneID)
+            return
+        }
         switch await openImmersiveSpace(id: model.spaceIDForPlay) {
         case .opened:
             // The game starts once the space's layer renderer arrives (GameModel.attach).

@@ -94,7 +94,24 @@ owns the swapchain images and Dawn imports them.
 - [x] The game clock holds while the session isn't focused (headset off, visionOS UI over the game): `aurora_set_external_pause`.
 - [x] Headless test hooks: `TPVR_AUTO_PLAY=1`, `TPVR_ARGS` (Dusklight options such as `--stage F_SP103`), `TPVR_TEST_ACTIONS` (scripted Sense controller input). Pass them as `SIMCTL_CHILD_*` to `xcrun simctl launch`.
 
+### 7. Window mode (2026-10-01)
+- [x] Immersion: Window. A shared-space window (a WindowGroup with a RealityView), third person,
+      gamepad. The game plays flat (VR startup skipped) and is paced by the window's RealityKit
+      updates. Before and after its HUD it snapshots the scene, its depth (as distances) and the
+      finished frame into IOSurfaces (src/dusk/visionos/visionos_window.cpp: Dawn encoder tasks,
+      SharedTextureMemory, an MTLSharedEvent the app waits on, four slots handed over by serial).
+- [x] The app turns them into a relief behind a portal (GameWindowView.swift, after the SHAR port's
+      relief window, single view): a 216-row grid placed along each pixel's ray at its distance,
+      cut where neighbouring pixels jump in depth by a visible amount, with a backstop that
+      continues the background behind foreground objects (borrowed from just past the nearest
+      depth jump) for when you look in from the side. Depth is capped at 3 window widths, and
+      telephoto shots are laid out for a normal viewing distance. The HUD (what the 2D pass
+      changed) and Dusklight's menus sit flat on the glass.
+- [x] Simulator: title attract, Ordon gameplay, straight on and at 15/35 degrees. Headset: untried.
+- [ ] Sense controllers in the window (today a gamepad; each Sense half may show up as its own pad).
+- [ ] SHAR's scene mirror for GX: not attempted (TEV materials have no RealityKit equivalent; see
+      the plugin's windowed-mode notes).
+
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
 - Per-pixel depth for the compositor's reprojection (today the eyes are placed on a plane 3 m out).
-- A windowed (shared-space) mode, once the SHAR port's window mode is finished.
