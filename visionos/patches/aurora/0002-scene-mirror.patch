@@ -231,10 +231,10 @@ index d51516f..2c6fa6f 100644
      gfx::push_debug_group(std::move(label));
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..25560cf
+index 0000000..bcca7e4
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,1842 @@
+@@ -0,0 +1,2150 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -271,11 +271,18 @@ index 0000000..25560cf
 +#include <chrono>
 +#include <condition_variable>
 +#include <cmath>
++#include <cstdlib>
 +#include <cstring>
++#include <string>
++#include <memory>
 +#include <mutex>
 +#include <thread>
 +#include <unordered_map>
 +#include <vector>
++
++#if defined(__APPLE__)
++#include <dispatch/dispatch.h>
++#endif
 +
 +namespace aurora::gx::mirror {
 +namespace {
@@ -353,9 +360,13 @@ index 0000000..25560cf
 +
 +// --- Symbolic TEV values: k * T[sel] + c, T the primary texture's sample (sel -1: a constant).
 +
++// TEV values as k * T[sel] + kb * B[bsel] + c: T the primary texture's sample, B a framebuffer
++// copy's (what's behind the surface, for a refracting one like water), either absent (-1).
 +struct Sym {
 +  int8_t sel = -1;
++  int8_t bsel = -1;
 +  float k = 0.f;
++  float kb = 0.f;
 +  float c = 0.f;
 +};
 +
@@ -363,38 +374,62 @@ index 0000000..25560cf
 +  std::array<float, 4> primaryAverage{0.5f, 0.5f, 0.5f, 1.f};
 +};
 +
-+Sym constant(float value) { return {-1, 0.f, value}; }
-+Sym scaled(Sym a, float f) { return {a.sel, a.k * f, a.c * f}; }
-+float average_of(const TevContext& ctx, const Sym& a) { return a.sel < 0 ? a.c : a.k * ctx.primaryAverage[a.sel] + a.c; }
-+Sym add(const TevContext& ctx, Sym a, Sym b) {
-+  if (b.sel < 0) {
-+    return {a.sel, a.k, a.c + b.c};
-+  }
-+  if (a.sel < 0) {
-+    return {b.sel, b.k, a.c + b.c};
-+  }
-+  if (a.sel == b.sel) {
-+    return {a.sel, a.k + b.k, a.c + b.c};
-+  }
-+  // Two different channels of T: the second as its average.
-+  return {a.sel, a.k, a.c + b.k * ctx.primaryAverage[b.sel] + b.c};
++// What's behind a surface, on average.
++constexpr float kBehindAverage = 0.5f;
++
++Sym constant(float value) { return {-1, -1, 0.f, 0.f, value}; }
++bool is_constant(const Sym& a) { return a.sel < 0 && a.bsel < 0; }
++Sym scaled(Sym a, float f) { return {a.sel, a.bsel, a.k * f, a.kb * f, a.c * f}; }
++float average_of(const TevContext& ctx, const Sym& a) {
++  return a.c + (a.sel >= 0 ? a.k * ctx.primaryAverage[a.sel] : 0.f) + (a.bsel >= 0 ? a.kb * kBehindAverage : 0.f);
 +}
-+Sym multiply(const TevContext& ctx, Sym a, Sym b) {
-+  if (a.sel < 0) {
++// A second, different channel of T (or of B) counts as its average.
++Sym add(const TevContext& ctx, Sym a, const Sym& b) {
++  a.c += b.c;
++  if (b.sel >= 0) {
++    if (a.sel < 0) {
++      a.sel = b.sel;
++      a.k = b.k;
++    } else if (a.sel == b.sel) {
++      a.k += b.k;
++    } else {
++      a.c += b.k * ctx.primaryAverage[b.sel];
++    }
++  }
++  if (b.bsel >= 0) {
++    if (a.bsel < 0) {
++      a.bsel = b.bsel;
++      a.kb = b.kb;
++    } else if (a.bsel == b.bsel) {
++      a.kb += b.kb;
++    } else {
++      a.c += b.kb * kBehindAverage;
++    }
++  }
++  return a;
++}
++// A product of two unknowns keeps the first; the second counts as its average.
++Sym multiply(const TevContext& ctx, const Sym& a, const Sym& b) {
++  if (is_constant(a)) {
 +    return scaled(b, a.c);
 +  }
-+  if (b.sel < 0) {
++  if (is_constant(b)) {
 +    return scaled(a, b.c);
 +  }
 +  return scaled(a, average_of(ctx, b));
 +}
-+// Clamped over T in [0, 1]: the line through the clamped ends.
++// Clamped over the unknowns from 0 to 1: the line through the clamped ends.
 +Sym clamped(Sym a, float low, float high) {
-+  if (a.sel < 0) {
++  if (is_constant(a)) {
 +    return constant(std::clamp(a.c, low, high));
 +  }
-+  const float at0 = std::clamp(a.c, low, high), at1 = std::clamp(a.c + a.k, low, high);
-+  return {a.sel, at1 - at0, at0};
++  const float k = a.sel >= 0 ? a.k : 0.f, kb = a.bsel >= 0 ? a.kb : 0.f, total = k + kb;
++  const float at0 = std::clamp(a.c, low, high), at1 = std::clamp(a.c + total, low, high);
++  const float f = std::fabs(total) > 1e-6f ? (at1 - at0) / total : 0.f;
++  a.c = at0;
++  a.k = k * f;
++  a.kb = kb * f;
++  return a;
 +}
 +
 +float tev_scale(GXTevScale scale) {
@@ -421,7 +456,7 @@ index 0000000..25560cf
 +}
 +
 +// One channel of a stage: (d +- mix(a, b, c) + bias) * scale, clamped. The comparison ops are d.
-+Sym tev(const TevContext& ctx, const TevOp& op, Sym a, Sym b, Sym c, Sym d) {
++Sym tev(const TevContext& ctx, const TevOp& op, const Sym& a, const Sym& b, const Sym& c, const Sym& d) {
 +  Sym result = d;
 +  if (op.op == GX_TEV_ADD || op.op == GX_TEV_SUB) {
 +    const Sym mixed = add(ctx, a, multiply(ctx, add(ctx, b, scaled(a, -1.f)), c));
@@ -580,7 +615,7 @@ index 0000000..25560cf
 +
 +struct Stats {
 +  uint64_t draws = 0, recorded = 0, lines = 0, screen = 0, noColour = 0, viewport = 0, projection = 0, blend = 0,
-+           copyOnly = 0, alphaNever = 0, vertices = 0, triangles = 0, background = 0, frames = 0;
++           copyOnly = 0, alphaNever = 0, vertices = 0, triangles = 0, background = 0, behind = 0, frames = 0;
 +  double seconds = 0;
 +};
 +
@@ -805,7 +840,39 @@ index 0000000..25560cf
 +            : (static_cast<uint32_t>(p[0]) << 24 | p[1] << 16 | p[2] << 8 | p[3]);
 +}
 +
++// What a draw's vertices read of the GX state, copied when the draw is recorded: the vertices are
++// decoded on worker threads while the FIFO thread moves on.
++struct DrawState {
++  std::array<PnMtx, MaxPnMtx> pnMtx;
++  std::array<Mat3x4<float>, MaxTexMtx> texMtxs;
++  std::array<Mat3x4<float>, MaxPTTexMtx> ptTexMtxs;
++  std::array<Light, GX::MaxLights> lights;
++  std::array<ColorChannelConfig, MaxColorChannels> channelConfig;
++  std::array<ColorChannelState, MaxColorChannels> channelState;
++  std::array<Vec4<float>, MaxTevRegs> colorRegs;
++  std::array<AttrArray, MaxVtxAttr> arrays;
++  FogState fog;
++  Mat4x4<float> proj;
++  u32 currentPnMtx = 0;
++
++  void capture() {
++    const auto& st = g_gxState;
++    pnMtx = st.pnMtx;
++    texMtxs = st.texMtxs;
++    ptTexMtxs = st.ptTexMtxs;
++    lights = st.lights;
++    channelConfig = st.colorChannelConfig;
++    channelState = st.colorChannelState;
++    colorRegs = st.colorRegs;
++    arrays = st.arrays;
++    fog = st.fog;
++    proj = st.proj;
++    currentPnMtx = st.currentPnMtx;
++  }
++};
++
 +struct Decoder {
++  const DrawState& st;
 +  const ShaderConfig& config;
 +  const uint8_t* vertices;
 +  size_t bytes;
@@ -818,7 +885,7 @@ index 0000000..25560cf
 +      *le = false;
 +      return at + size <= bytes ? vertices + at : nullptr;
 +    }
-+    const auto& array = g_gxState.arrays[attr];
++    const auto& array = st.arrays[attr];
 +    size_t index;
 +    if (m.attrType == GX_INDEX8) {
 +      if (at + 1 > bytes) {
@@ -925,12 +992,12 @@ index 0000000..25560cf
 +  }
 +};
 +
-+const Mat3x4<float>& postex_matrix(uint32_t index) {
-+  return index < MaxPnMtx ? g_gxState.pnMtx[index].pos : g_gxState.texMtxs[std::min(index - MaxPnMtx, MaxTexMtx - 1)];
++const Mat3x4<float>& postex_matrix(const DrawState& st, uint32_t index) {
++  return index < MaxPnMtx ? st.pnMtx[index].pos : st.texMtxs[std::min(index - MaxPnMtx, MaxTexMtx - 1)];
 +}
 +
-+F4 light_channel(const ColorChannelConfig& cc, const ColorChannelState& state, const F4& vertexColour, F3 position,
-+                 F3 normal) {
++F4 light_channel(const DrawState& st, const ColorChannelConfig& cc, const ColorChannelState& state,
++                 const F4& vertexColour, F3 position, F3 normal) {
 +  const F4 material = cc.matSrc == GX_SRC_VTX ? vertexColour : f4(state.matColor);
 +  if (!cc.lightingEnabled) {
 +    return material;
@@ -940,7 +1007,7 @@ index 0000000..25560cf
 +    if (!state.lightMask.test(l)) {
 +      continue;
 +    }
-+    const Light& light = g_gxState.lights[l];
++    const Light& light = st.lights[l];
 +    F3 direction = xyz(light.pos) - position;
 +    const float distance2 = dot(direction, direction);
 +    const float distance = std::sqrt(distance2);
@@ -989,15 +1056,15 @@ index 0000000..25560cf
 +  std::array<std::array<float, 4>, MaxTextures> average{};
 +  bool rasterUsed[2] = {false, false};
 +  bool alphaAsColour[2] = {false, false};
++  // A framebuffer copy it samples (refraction, water): the unknown B, what's behind the surface.
++  int behindMap = -1;
 +  TevContext ctx;
 +  // Per stage: its konst colour and alpha.
 +  std::array<std::array<float, 4>, MaxTevStages> konst{};
 +};
 +
-+// Which texture the mirror keeps, and the others' averages. False: the draw only samples copies
-+// of the framebuffer (a screen effect: bloom, refraction, haze), which a mirror can't show.
++// Which texture the mirror keeps, the others' averages, and a framebuffer copy it samples.
 +bool plan_draw(const ShaderConfig& config, DrawPlan& plan) {
-+  bool sampledCopy = false;
 +  for (auto& average : plan.average) {
 +    average = {0.5f, 0.5f, 0.5f, 1.f};
 +  }
@@ -1012,7 +1079,9 @@ index 0000000..25560cf
 +    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
 +    TexEntry* entry = texture_entry(obj);
 +    if (entry == nullptr || !entry->ok) {
-+      sampledCopy = sampledCopy || entry == nullptr;
++      if (entry == nullptr && plan.behindMap < 0) {
++        plan.behindMap = stage.texMapId;
++      }
 +      continue;
 +    }
 +    plan.average[stage.texMapId] = entry->average;
@@ -1038,7 +1107,7 @@ index 0000000..25560cf
 +    plan.alphaAsColour[c] = colour == alpha && g_gxState.colorChannelState[c].lightMask ==
 +                                                   g_gxState.colorChannelState[c + GX_ALPHA0].lightMask;
 +  }
-+  return plan.primary != nullptr || !sampledCopy;
++  return true;
 +}
 +
 +// GX's alpha test as a threshold: the least alpha it passes, when it passes everything above
@@ -1210,14 +1279,14 @@ index 0000000..25560cf
 +}
 +
 +// The texture coordinate GX generates for `coord` at vertex `v`.
-+std::array<float, 2> tex_coord(const Decoder& decoder, const ShaderConfig& config, int coord, uint32_t v,
-+                               const float position[3], F3 normal, const F4 colours[2], int depth = 0) {
++std::array<float, 2> tex_coord(const DrawState& st, const Decoder& decoder, const ShaderConfig& config, int coord,
++                               uint32_t v, const float position[3], F3 normal, const F4 colours[2], int depth = 0) {
 +  if (coord < 0 || coord >= static_cast<int>(MaxTexCoord) || depth > 2) {
 +    return {0, 0};
 +  }
 +  const TcgConfig& tcg = config.tcgs[coord];
 +  if (tcg.type >= GX_TG_BUMP0 && tcg.type <= GX_TG_BUMP7) {
-+    return tex_coord(decoder, config, tcg.embossSrc, v, position, normal, colours, depth + 1);
++    return tex_coord(st, decoder, config, tcg.embossSrc, v, position, normal, colours, depth + 1);
 +  }
 +  float src[4] = {0, 0, 1, 1};
 +  if (tcg.src >= GX_TG_TEX0 && tcg.src <= GX_TG_TEX7) {
@@ -1244,9 +1313,9 @@ index 0000000..25560cf
 +  if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
 +    const GXAttr mtxAttr = static_cast<GXAttr>(GX_VA_TEX0MTXIDX + coord);
 +    if (config.attrs[mtxAttr].attrType != GX_NONE) {
-+      tmp = transform(postex_matrix(decoder.u8(mtxAttr, v, 0) / 3), src[0], src[1], src[2], src[3]);
++      tmp = transform(postex_matrix(st, decoder.u8(mtxAttr, v, 0) / 3), src[0], src[1], src[2], src[3]);
 +    } else if (tcg.mtx != GX_IDENTITY) {
-+      tmp = transform(postex_matrix(tcg.mtx / 3), src[0], src[1], src[2], src[3]);
++      tmp = transform(postex_matrix(st, tcg.mtx / 3), src[0], src[1], src[2], src[3]);
 +    }
 +    if (tcg.type == GX_TG_MTX2x4) {
 +      tmp.z = 1.f;
@@ -1259,7 +1328,7 @@ index 0000000..25560cf
 +  }
 +  if (tcg.postMtx != GX_PTIDENTITY) {
 +    const u32 index = std::min<u32>((tcg.postMtx - GX_PTTEXMTX0) / 3, MaxPTTexMtx - 1);
-+    tmp = transform(g_gxState.ptTexMtxs[index], tmp.x, tmp.y, tmp.z, 1.f);
++    tmp = transform(st.ptTexMtxs[index], tmp.x, tmp.y, tmp.z, 1.f);
 +  }
 +  if (tcg.type == GX_TG_MTX3x4 && std::fabs(tmp.z) > 1e-6f) {
 +    return {tmp.x / tmp.z, tmp.y / tmp.z};
@@ -1268,12 +1337,12 @@ index 0000000..25560cf
 +}
 +
 +// The fog factor at a view-space point, as the fragment shader computes it from its depth.
-+float fog_at(F3 view) {
-+  const auto& fog = g_gxState.fog;
++float fog_at(const DrawState& st, F3 view) {
++  const auto& fog = st.fog;
 +  if (fog.type == GX_FOG_NONE) {
 +    return 0.f;
 +  }
-+  const auto& p = g_gxState.proj;
++  const auto& p = st.proj;
 +  float depth;
 +  if ((fog.type & 0x08) != 0) {
 +    depth = p.m2[2] * view.z + p.m2[3]; // orthographic: z' directly
@@ -1310,7 +1379,449 @@ index 0000000..25560cf
 +  return std::clamp(z, 0.f, 1.f);
 +}
 +
++// --- Draws, decoded on worker threads. The FIFO thread snapshots what a draw's vertices read and
++// moves on; the frame's END waits for them all and merges them in the game's order. The game's
++// vertex arrays stay put until then: the game thread waits for the FIFO before its next frame.
++
++struct DrawJob {
++  DrawState state;
++  ShaderConfig config;
++  DrawPlan plan;
++  GXPrimitive prim = GX_TRIANGLES;
++  uint32_t vtxCount = 0;
++  std::vector<u8> bytes;
++  std::vector<u16> indices;
++  std::array<int8_t, 4> channelSel{};
++  bool behind = false;
++  bool background = false;
++  bool perVertex = true;
++  std::array<Sym, 4> constantResult{};
++  float nearClip = 1, kx = 1, ky = 1;
++  size_t group = 0;
++  // How much nearer the camera to draw it (scaling about the camera keeps the picture): RealityKit
++  // can't settle coplanar surfaces as GX's LEQUAL test does, in favour of the later draw.
++  float nearer = 1.f;
++  // Out: its vertices (clipping adds some) and triangles into them, wound for RealityKit.
++  std::vector<MirrorVertex> vertices;
++  std::vector<uint32_t> triangles;
++  float nearest = INFINITY, farthest = 0;
++};
++
++std::vector<std::unique_ptr<DrawJob>> g_jobs;
++size_t g_jobCount = 0;
++// How many times this frame each (mesh, place) has been drawn.
++std::unordered_map<uint64_t, unsigned> g_passes;
++std::atomic<uint64_t> g_decodeNanos{0};
++#if defined(__APPLE__)
++dispatch_group_t g_jobGroup = dispatch_group_create();
++#endif
++
++void light(const DrawJob& job, const F4 colours[2], F3 view, F3 normal, F4 raster[2]) {
++  const auto& st = job.state;
++  for (int c = 0; c < 2; ++c) {
++    if (!job.plan.rasterUsed[c]) {
++      continue;
++    }
++    const F4 rgb = light_channel(st, st.channelConfig[c], st.channelState[c], colours[c], view, normal);
++    // The alpha channel, lit the same way as the colour (the usual case), is the colour's alpha.
++    const F4 alpha = job.plan.alphaAsColour[c] ? rgb
++                                               : light_channel(st, st.channelConfig[c + GX_ALPHA0],
++                                                               st.channelState[c + GX_ALPHA0], colours[c], view, normal);
++    raster[c] = {{rgb[0], rgb[1], rgb[2], alpha[3]}};
++  }
++}
++
++// The TEV stages with T (and B) unknown, from a vertex's colour channels.
++std::array<Sym, 4> run_tev(const DrawJob& job, const F4 raster[2]) {
++  const auto& config = job.config;
++  const auto& plan = job.plan;
++  const auto& stages = config.tevStages;
++  const u32 stageCount = std::min<u32>(config.tevStageCount, MaxTevStages);
++  std::array<std::array<Sym, 4>, MaxTevRegs> regs;
++  for (u32 r = 0; r < MaxTevRegs; ++r) {
++    for (int c = 0; c < 4; ++c) {
++      regs[r][c] = constant(job.state.colorRegs[r][c]);
++    }
++  }
++  for (u32 s = 0; s < stageCount; ++s) {
++    const TevStage& stage = stages[s];
++    const bool primaryStage = plan.primary != nullptr && stage.texMapId == plan.primaryMap;
++    const bool behindStage = plan.behindMap >= 0 && stage.texMapId == plan.behindMap;
++    const auto& texSwap = config.tevSwapTable[stage.tevSwapTex];
++    const auto& rasSwap = config.tevSwapTable[stage.tevSwapRas];
++    const int texChannel[4] = {swap_channel(texSwap.red), swap_channel(texSwap.green), swap_channel(texSwap.blue),
++                               swap_channel(texSwap.alpha)};
++    const int rasChannel[4] = {swap_channel(rasSwap.red), swap_channel(rasSwap.green), swap_channel(rasSwap.blue),
++                               swap_channel(rasSwap.alpha)};
++    const auto texture = [&](int channel) -> Sym {
++      if (stage.texMapId == GX_TEXMAP_NULL) {
++        return constant(1.f);
++      }
++      const int from = texChannel[channel];
++      if (primaryStage) {
++        return {static_cast<int8_t>(from), -1, 1.f, 0.f, 0.f};
++      }
++      if (behindStage) {
++        return {-1, static_cast<int8_t>(from), 0.f, 1.f, 0.f};
++      }
++      return constant(stage.texMapId < MaxTextures ? plan.average[stage.texMapId][from] : 0.5f);
++    };
++    const auto raster_value = [&](int channel) -> Sym {
++      if (stage.channelId == GX_COLOR_NULL || stage.channelId == GX_COLOR_ZERO || is_bump_channel(stage.channelId)) {
++        return constant(0.f);
++      }
++      return constant(raster[color_channel(stage.channelId) & 1][rasChannel[channel]]);
++    };
++    const auto colour_arg = [&](GXTevColorArg arg, int c) -> Sym {
++      switch (arg) {
++      case GX_CC_CPREV:
++        return regs[0][c];
++      case GX_CC_APREV:
++        return regs[0][3];
++      case GX_CC_C0:
++        return regs[1][c];
++      case GX_CC_A0:
++        return regs[1][3];
++      case GX_CC_C1:
++        return regs[2][c];
++      case GX_CC_A1:
++        return regs[2][3];
++      case GX_CC_C2:
++        return regs[3][c];
++      case GX_CC_A2:
++        return regs[3][3];
++      case GX_CC_TEXC:
++        return texture(c);
++      case GX_CC_TEXA:
++        return texture(3);
++      case GX_CC_RASC:
++        return raster_value(c);
++      case GX_CC_RASA:
++        return raster_value(3);
++      case GX_CC_ONE:
++        return constant(1.f);
++      case GX_CC_HALF:
++        return constant(0.5f);
++      case GX_CC_KONST:
++        return constant(plan.konst[s][c]);
++      default:
++        return constant(0.f);
++      }
++    };
++    const auto alpha_arg = [&](GXTevAlphaArg arg) -> Sym {
++      switch (arg) {
++      case GX_CA_APREV:
++        return regs[0][3];
++      case GX_CA_A0:
++        return regs[1][3];
++      case GX_CA_A1:
++        return regs[2][3];
++      case GX_CA_A2:
++        return regs[3][3];
++      case GX_CA_TEXA:
++        return texture(3);
++      case GX_CA_RASA:
++        return raster_value(3);
++      case GX_CA_KONST:
++        return constant(plan.konst[s][3]);
++      default:
++        return constant(0.f);
++      }
++    };
++    Sym colour[3];
++    for (int c = 0; c < 3; ++c) {
++      colour[c] = tev(plan.ctx, stage.colorOp, colour_arg(stage.colorPass.a, c), colour_arg(stage.colorPass.b, c),
++                      colour_arg(stage.colorPass.c, c), colour_arg(stage.colorPass.d, c));
++    }
++    const Sym alpha = tev(plan.ctx, stage.alphaOp, alpha_arg(stage.alphaPass.a), alpha_arg(stage.alphaPass.b),
++                          alpha_arg(stage.alphaPass.c), alpha_arg(stage.alphaPass.d));
++    for (int c = 0; c < 3; ++c) {
++      regs[std::min<u32>(stage.colorOp.outReg, MaxTevRegs - 1)][c] = colour[c];
++    }
++    regs[std::min<u32>(stage.alphaOp.outReg, MaxTevRegs - 1)][3] = alpha;
++  }
++  std::array<Sym, 4> result = regs[0];
++  if (stageCount > 0) {
++    const TevStage& last = stages[stageCount - 1];
++    for (int c = 0; c < 3; ++c) {
++      result[c] = regs[std::min<u32>(last.colorOp.outReg, MaxTevRegs - 1)][c];
++    }
++    result[3] = regs[std::min<u32>(last.alphaOp.outReg, MaxTevRegs - 1)][3];
++  }
++  return result;
++}
++
++// Vertex v into job.vertices[v]; its distance from the camera back.
++float decode_vertex(DrawJob& job, const Decoder& decoder, uint32_t v) {
++  const auto& st = job.state;
++  const auto& config = job.config;
++  const auto& plan = job.plan;
++  float position[3] = {0, 0, 0};
++  decoder.numbers(GX_VA_POS, v, config.attrs[GX_VA_POS].cnt == 2 ? 2 : 3, position);
++  const uint32_t matrix = std::min<uint32_t>(decoder.u8(GX_VA_PNMTXIDX, v, st.currentPnMtx * 3) / 3, MaxPnMtx - 1);
++  const F3 view = transform(st.pnMtx[matrix].pos, position[0], position[1], position[2], 1.f);
++  float rawNormal[3] = {1, 0, 0};
++  if (config.attrs[GX_VA_NRM].attrType != GX_NONE) {
++    decoder.numbers(GX_VA_NRM, v, 3, rawNormal);
++  }
++  const F3 normal = normalized(transform(st.pnMtx[matrix].nrm, rawNormal[0], rawNormal[1], rawNormal[2], 0.f));
++  const F4 colours[2] = {decoder.colour(GX_VA_CLR0, v), decoder.colour(GX_VA_CLR1, v)};
++  std::array<Sym, 4> result = job.constantResult;
++  if (job.perVertex) {
++    F4 raster[2];
++    light(job, colours, view, normal, raster);
++    result = run_tev(job, raster);
++  }
++  const float fog = fog_at(st, view);
++
++  MirrorVertex& out = job.vertices[v];
++  out = {};
++  out.position[0] = view.x;
++  out.position[1] = view.y;
++  out.position[2] = view.z;
++  if (plan.primary != nullptr) {
++    const auto uv =
++        tex_coord(st, decoder, config, plan.primaryCoord, v, position, F3{rawNormal[0], rawNormal[1], rawNormal[2]}, colours);
++    out.uv[0] = std::isfinite(uv[0]) ? uv[0] : 0.f;
++    out.uv[1] = std::isfinite(uv[1]) ? uv[1] : 0.f;
++  }
++  float transmitted = 0.f; // B's mean weight (a refracting surface's transparency)
++  for (int c = 0; c < 4; ++c) {
++    Sym s = result[c];
++    // T: only the channel the texture holds there (the swizzled copy), the rest as its average.
++    if (s.sel >= 0 && s.sel != job.channelSel[c]) {
++      if (job.channelSel[c] >= 0) {
++        s.c += s.k * plan.ctx.primaryAverage[s.sel];
++        s.k = 0.f;
++        s.sel = job.channelSel[c];
++      } else {
++        s.c += s.k * plan.ctx.primaryAverage[s.sel];
++        s.k = 0.f;
++        s.sel = -1;
++      }
++    }
++    if (s.bsel >= 0) {
++      if (job.behind && c < 3) {
++        transmitted += s.kb / 3.f;
++      } else {
++        s.c += s.kb * kBehindAverage;
++      }
++    }
++    float mul = s.sel >= 0 ? s.k : 0.f, addend = s.c;
++    if (c < 3 && fog > 0.f) {
++      mul *= 1.f - fog;
++      addend = addend * (1.f - fog) + fog * st.fog.color[c];
++    }
++    if (c == 3 && job.behind) {
++      mul = 0.f;
++      addend = 1.f - std::clamp(transmitted, 0.f, 1.f) * (1.f - fog);
++    }
++    out.mul[c] = half(mul);
++    out.add[c] = half(addend);
++  }
++  return std::sqrt(dot(view, view));
++}
++
++// The draw's triangles, clipped as the GPU clips them and turned round (GX's front faces wind
++// clockwise on screen, RealityKit's counter-clockwise). Clipping adds vertices.
++void build_triangles(DrawJob& job) {
++  auto& built = job.vertices;
++  const uint32_t vtxCount = job.vtxCount;
++  // Inside where >= 0: near, left, right, bottom, top.
++  const auto inside = [&](int plane, uint32_t i) {
++    const float* p = built[i].position;
++    const float d = -p[2];
++    switch (plane) {
++    case 0:
++      return d - job.nearClip;
++    case 1:
++      return job.kx * d + p[0];
++    case 2:
++      return job.kx * d - p[0];
++    case 3:
++      return job.ky * d + p[1];
++    default:
++      return job.ky * d - p[1];
++    }
++  };
++  const auto between = [&](uint32_t p, uint32_t q, float fp, float fq) {
++    const MirrorVertex a = built[p], b = built[q];
++    const float t = fp / (fp - fq);
++    MirrorVertex out{};
++    for (int i = 0; i < 3; ++i) {
++      out.position[i] = a.position[i] + (b.position[i] - a.position[i]) * t;
++    }
++    for (int i = 0; i < 2; ++i) {
++      out.uv[i] = a.uv[i] + (b.uv[i] - a.uv[i]) * t;
++    }
++    for (int i = 0; i < 4; ++i) {
++      const float ma = from_half(a.mul[i]), mb = from_half(b.mul[i]);
++      const float aa = from_half(a.add[i]), ab = from_half(b.add[i]);
++      out.mul[i] = half(ma + (mb - ma) * t);
++      out.add[i] = half(aa + (ab - aa) * t);
++    }
++    built.push_back(out);
++    return static_cast<uint32_t>(built.size() - 1);
++  };
++  const auto triangle = [&](uint32_t a, uint32_t b, uint32_t c) {
++    if (a == b || b == c || a == c || a >= vtxCount || b >= vtxCount || c >= vtxCount) {
++      return;
++    }
++    uint32_t polygon[9] = {a, b, c};
++    int count = 3;
++    for (int plane = 0; plane < 5 && count >= 3; ++plane) {
++      float values[9];
++      int outside = 0;
++      for (int i = 0; i < count; ++i) {
++        values[i] = inside(plane, polygon[i]);
++        outside += values[i] < 0.f;
++      }
++      if (outside == 0) {
++        continue;
++      }
++      if (outside == count) {
++        return;
++      }
++      uint32_t next[9];
++      int nextCount = 0;
++      for (int i = 0; i < count && nextCount < 8; ++i) {
++        const int j = (i + 1) % count;
++        if (values[i] >= 0.f) {
++          next[nextCount++] = polygon[i];
++        }
++        if ((values[i] >= 0.f) != (values[j] >= 0.f)) {
++          next[nextCount++] = between(polygon[i], polygon[j], values[i], values[j]);
++        }
++      }
++      std::copy(next, next + nextCount, polygon);
++      count = nextCount;
++    }
++    for (int i = 1; i + 1 < count; ++i) {
++      job.triangles.insert(job.triangles.end(), {polygon[0], polygon[i + 1], polygon[i]});
++    }
++  };
++  const auto& indices = job.indices;
++  if (!indices.empty()) {
++    for (size_t i = 0; i + 2 < indices.size(); i += 3) {
++      triangle(indices[i], indices[i + 1], indices[i + 2]);
++    }
++  } else if (job.prim == GX_TRIANGLES) {
++    for (uint32_t i = 0; i + 2 < vtxCount; i += 3) {
++      triangle(i, i + 1, i + 2);
++    }
++  } else if (job.prim == GX_QUADS) {
++    for (uint32_t i = 0; i + 3 < vtxCount; i += 4) {
++      triangle(i, i + 1, i + 2);
++      triangle(i + 2, i + 3, i);
++    }
++  } else if (job.prim == GX_TRIANGLESTRIP) {
++    for (uint32_t i = 2; i < vtxCount; ++i) {
++      if (i == 2 || (i & 1) == 0) {
++        triangle(i - 2, i - 1, i);
++      } else {
++        triangle(i - 1, i - 2, i);
++      }
++    }
++  } else if (job.prim == GX_TRIANGLEFAN) {
++    for (uint32_t i = 2; i < vtxCount; ++i) {
++      triangle(0, i - 1, i);
++    }
++  }
++}
++
++void process(DrawJob& job) {
++  const auto started = std::chrono::steady_clock::now();
++  const Decoder decoder{job.state, job.config, job.bytes.data(), job.bytes.size()};
++  job.vertices.resize(job.vtxCount);
++  job.triangles.clear();
++  job.nearest = INFINITY;
++  job.farthest = 0;
++  for (uint32_t v = 0; v < job.vtxCount; ++v) {
++    const float distance = decode_vertex(job, decoder, v);
++    job.nearest = std::min(job.nearest, distance);
++    job.farthest = std::max(job.farthest, distance);
++  }
++  build_triangles(job);
++  g_decodeNanos += static_cast<uint64_t>(
++      std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
++}
++
++// END: every draw decoded, merged in the game's order into the frame.
++void merge_jobs() {
++#if defined(__APPLE__)
++  dispatch_group_wait(g_jobGroup, DISPATCH_TIME_FOREVER);
++#endif
++  for (size_t i = 0; i < g_jobCount; ++i) {
++    DrawJob& job = *g_jobs[i];
++    const auto base = static_cast<uint32_t>(g_building.vertices.size());
++    if (job.nearer != 1.f && !job.background) {
++      for (MirrorVertex& vertex : job.vertices) {
++        for (float& c : vertex.position) {
++          c *= job.nearer;
++        }
++      }
++    }
++    g_building.vertices.insert(g_building.vertices.end(), job.vertices.begin(), job.vertices.end());
++    auto& indices = g_groups[job.group].indices;
++    indices.reserve(indices.size() + job.triangles.size());
++    for (uint32_t t : job.triangles) {
++      indices.push_back(base + t);
++    }
++    g_stats.triangles += job.triangles.size() / 3;
++    if (job.background) {
++      g_backgroundRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
++      ++g_stats.background;
++      g_nearestBackground = std::min(g_nearestBackground, job.nearest);
++    } else {
++      g_farthest = std::max(g_farthest, job.farthest);
++    }
++  }
++  g_jobCount = 0;
++}
++
++void discard_jobs() {
++#if defined(__APPLE__)
++  dispatch_group_wait(g_jobGroup, DISPATCH_TIME_FOREVER);
++#endif
++  g_jobCount = 0;
++}
++
++// AURORA_MIRROR_LOG=1 (a test switch): what the skipped framebuffer-copy draws are, each kind once.
++void log_skipped(const ShaderConfig& config, const MirrorPart& part, u16 vtxCount) {
++  static const bool enabled = std::getenv("AURORA_MIRROR_LOG") != nullptr;
++  static std::unordered_map<uint64_t, bool> seen;
++  if (!enabled || seen.size() > 64) {
++    return;
++  }
++  const auto& st = g_gxState;
++  std::string text = fmt::format("blend {} {}->{} depth {}{} func {} cull {} kind {} | {} stages:", static_cast<int>(st.blendMode),
++                                 static_cast<int>(st.blendFacSrc), static_cast<int>(st.blendFacDst), st.depthCompare ? "test" : "-",
++                                 st.depthUpdate ? "+write" : "", static_cast<int>(st.depthFunc), static_cast<int>(st.cullMode),
++                                 part.kind, config.tevStageCount);
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const auto& stage = config.tevStages[i];
++    const auto& obj = st.loadedTextures[stage.texMapId < MaxTextures ? stage.texMapId : 0];
++    text += fmt::format(" [c {} {} {} {} a {} {} {} {} map {} fmt {} {}x{} copy {} coord {} chan {}]", static_cast<int>(stage.colorPass.a),
++                        static_cast<int>(stage.colorPass.b), static_cast<int>(stage.colorPass.c), static_cast<int>(stage.colorPass.d),
++                        static_cast<int>(stage.alphaPass.a), static_cast<int>(stage.alphaPass.b), static_cast<int>(stage.alphaPass.c),
++                        static_cast<int>(stage.alphaPass.d), static_cast<int>(stage.texMapId), obj.format(), obj.width(), obj.height(),
++                        g_gxState.copyTextures.contains(obj.data) ? 1 : 0, static_cast<int>(stage.texCoordId),
++                        static_cast<int>(stage.channelId));
++  }
++  for (u32 i = 0; i < MaxTexCoord; ++i) {
++    if (config.tcgs[i].src != GX_MAX_TEXGENSRC) {
++      text += fmt::format(" tcg{} type {} src {} mtx {}", i, static_cast<int>(config.tcgs[i].type),
++                          static_cast<int>(config.tcgs[i].src), static_cast<int>(config.tcgs[i].mtx));
++    }
++  }
++  const uint64_t key = xxh3_hash_s(text.data(), text.size());
++  if (seen.emplace(key, true).second) {
++    Log.info("mirror skipped ({} vertices): {}", vtxCount, text);
++  }
++}
++
 +void begin_frame() {
++  g_passes.clear();
 +  g_building.vertices.clear();
 +  g_groups.clear();
 +  g_solidGroups.clear();
@@ -1473,12 +1984,14 @@ index 0000000..25560cf
 +    // ground nearest the camera came out streaked. So first the near triangles are subdivided
 +    // until the depth along each edge changes little (the decision is the edge's own, so two
 +    // triangles sharing an edge split it alike, with one midpoint: no cracks).
-+    const float onPlane = out.plane * 1.0005f;
-+    subdivide_near(out.vertices, job.groups, onPlane);
++    // The near geometry keeps its order front to back, in a band 3% deep behind the glass:
++    // depths [0, P x 1.03] go to [P, P x 1.03] (laid flat on one plane, it z-fought).
++    const float onPlane = out.plane * 1.0005f, band = 0.03f, bandEnd = onPlane * (1.f + band);
++    subdivide_near(out.vertices, job.groups, bandEnd);
 +    for (MirrorVertex& vertex : out.vertices) {
 +      const float depth = -vertex.position[2];
-+      if (depth > 1e-3f && depth < onPlane) {
-+        const float scale = onPlane / depth;
++      if (depth > 1e-3f && depth < bandEnd) {
++        const float scale = (onPlane + band * onPlane * depth / bandEnd) / depth;
 +        for (float& c : vertex.position) {
 +          c *= scale;
 +        }
@@ -1576,13 +2089,14 @@ index 0000000..25560cf
 +    const uint64_t finished = std::max<uint64_t>(g_finished.exchange(0), 1);
 +    Log.info("mirror: per frame {:.0f} draws, {:.0f} recorded ({:.0f} background), skipped {:.0f} lines, {:.0f} screen, "
 +             "{:.0f} no colour, {:.0f} small viewport, {:.0f} other projection, {:.0f} blend, {:.0f} framebuffer "
-+             "copies, {:.0f} alpha-never; {:.0f} vertices, {:.0f} triangles, {} parts; recording {:.2f} ms, finishing "
-+             "{:.2f} ms (worker), {} frames dropped; {} textures known",
++             "copies, {:.0f} alpha-never; {:.0f} see-through (refracting); {:.0f} vertices, {:.0f} triangles, {} parts; "
++             "recording {:.2f} ms (FIFO thread), decoding {:.2f} ms (workers' CPU), finishing {:.2f} ms (worker), {} "
++             "frames dropped; {} textures known",
 +             g_stats.draws / f, g_stats.recorded / f, g_stats.background / f, g_stats.lines / f, g_stats.screen / f,
 +             g_stats.noColour / f, g_stats.viewport / f, g_stats.projection / f, g_stats.blend / f, g_stats.copyOnly / f,
-+             g_stats.alphaNever / f, g_stats.vertices / f, g_stats.triangles / f, g_lastParts.load(),
-+             g_stats.seconds / f * 1000.0, static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6,
-+             g_dropped.exchange(0), g_textures.size());
++             g_stats.alphaNever / f, g_stats.behind / f, g_stats.vertices / f, g_stats.triangles / f,
++             g_lastParts.load(), g_stats.seconds / f * 1000.0, static_cast<double>(g_decodeNanos.exchange(0)) / f / 1e6,
++             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
 +    g_stats = {};
 +  }
 +}
@@ -1592,6 +2106,7 @@ index 0000000..25560cf
 +
 +void mark(u32 mark, f32 value) noexcept {
 +  if (mark == AURORA_MIRROR_MARK_BEGIN) {
++    discard_jobs(); // a frame that never ended
 +    g_recording = g_enabled.load(std::memory_order_relaxed);
 +    if (g_reset.exchange(false)) {
 +      forget_textures();
@@ -1604,6 +2119,11 @@ index 0000000..25560cf
 +      return;
 +    }
 +    g_recording = false;
++    if (mark == AURORA_MIRROR_MARK_END) {
++      merge_jobs();
++    } else {
++      discard_jobs();
++    }
 +    publish(mark == AURORA_MIRROR_MARK_END, value);
 +  }
 +}
@@ -1694,9 +2214,29 @@ index 0000000..25560cf
 +  }
 +
 +  DrawPlan plan;
-+  if (!plan_draw(config, plan)) {
-+    ++g_stats.copyOnly;
-+    return;
++  plan_draw(config, plan);
++  bool behind = false;
++  if (plan.behindMap >= 0) {
++    if (part.kind == aurora::mirror::PartOpaque && !background) {
++      // A refracting surface (water): it draws what's behind it from a copy of the framebuffer. In
++      // the mirror, what's behind is really there: the surface becomes see-through, as much as the
++      // copy weighs in its colour (premultiplied, its opacity in alpha).
++      behind = true;
++      part.kind = aurora::mirror::PartBlend;
++      part.colourBase = 1;
++      part.colourAlpha = 0;
++      part.opacityBase = 0;
++      part.opacityAlpha = 1;
++      part.opacityLuma = 0;
++      ++g_stats.behind;
++    } else if (plan.primary == nullptr) {
++      // Only a framebuffer copy (bloom, heat haze, a shadow image): a screen effect.
++      ++g_stats.copyOnly;
++      log_skipped(config, part, vtxCount);
++      return;
++    } else {
++      plan.behindMap = -1; // as its average
++    }
 +  }
 +  if (plan.primary != nullptr) {
 +    const auto& obj = st.loadedTextures[plan.primaryMap];
@@ -1704,323 +2244,91 @@ index 0000000..25560cf
 +    part.wrapT = static_cast<uint8_t>(std::min<int>(obj.wrap_t(), 2));
 +  }
 +
-+  const Decoder decoder{config, vertices, static_cast<size_t>(vtxCount) * config.vtxStride};
-+  const uint32_t base = static_cast<uint32_t>(g_building.vertices.size());
-+  const auto fogColour = st.fog.color;
-+  int8_t channelSel[4] = {-2, -2, -2, -2}; // fixed by the first vertex
-+  const auto& stages = config.tevStages;
-+  const u32 stageCount = std::min<u32>(config.tevStageCount, MaxTevStages);
++  if (g_jobCount == g_jobs.size()) {
++    g_jobs.push_back(std::make_unique<DrawJob>());
++  }
++  DrawJob& job = *g_jobs[g_jobCount++];
++  job.state.capture();
++  job.config = config;
++  job.plan = plan;
++  job.prim = prim;
++  job.vtxCount = vtxCount;
++  job.bytes.assign(vertices, vertices + static_cast<size_t>(vtxCount) * config.vtxStride);
++  if (indices != nullptr) {
++    job.indices.assign(indices, indices + indexCount);
++  } else {
++    job.indices.clear();
++  }
++  job.behind = behind;
++  job.background = background;
++  // The GPU's clip: the near plane, and the view's sides with a margin for a viewer leaning to look
++  // past the window's edges.
++  const auto& proj = st.proj;
++  const float far = std::fabs(proj.m2[2]) > 1e-9f ? proj.m2[3] / proj.m2[2] : 1e6f;
++  job.nearClip = std::max(1.f, std::fabs(1.f - proj.m2[2]) > 1e-9f ? -proj.m2[2] * far / (1.f - proj.m2[2]) : 1.f);
++  constexpr float kMargin = 1.4f;
++  job.kx = kMargin / proj.m0[0];
++  job.ky = kMargin / proj.m1[1];
 +  // Without vertex colours or lighting, every vertex's TEV result is the same: run it once.
-+  bool perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE;
++  job.perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE;
 +  for (int c = 0; c < 2; ++c) {
-+    perVertex = perVertex || (plan.rasterUsed[c] && (st.colorChannelConfig[c].lightingEnabled ||
-+                                                     st.colorChannelConfig[c + GX_ALPHA0].lightingEnabled));
++    job.perVertex = job.perVertex || (plan.rasterUsed[c] && (st.colorChannelConfig[c].lightingEnabled ||
++                                                             st.colorChannelConfig[c + GX_ALPHA0].lightingEnabled));
 +  }
-+  std::array<Sym, 4> result{};
-+  bool haveResult = false;
-+  for (uint32_t v = 0; v < vtxCount; ++v) {
-+    float position[3] = {0, 0, 0};
-+    const int posCount = config.attrs[GX_VA_POS].cnt == 2 ? 2 : 3;
-+    decoder.numbers(GX_VA_POS, v, posCount, position);
-+    const uint32_t matrix = std::min<uint32_t>(decoder.u8(GX_VA_PNMTXIDX, v, st.currentPnMtx * 3) / 3, MaxPnMtx - 1);
-+    const F3 view = transform(st.pnMtx[matrix].pos, position[0], position[1], position[2], 1.f);
-+    float rawNormal[3] = {1, 0, 0};
-+    if (config.attrs[GX_VA_NRM].attrType != GX_NONE) {
-+      decoder.numbers(GX_VA_NRM, v, 3, rawNormal);
-+    }
-+    const F3 normal = normalized(transform(st.pnMtx[matrix].nrm, rawNormal[0], rawNormal[1], rawNormal[2], 0.f));
-+    const F4 colours[2] = {decoder.colour(GX_VA_CLR0, v), decoder.colour(GX_VA_CLR1, v)};
-+    if (perVertex || !haveResult) {
-+      haveResult = true;
-+      F4 raster[2];
-+      for (int c = 0; c < 2; ++c) {
-+        if (!plan.rasterUsed[c]) {
-+          continue;
-+        }
-+        const F4 rgb = light_channel(st.colorChannelConfig[c], st.colorChannelState[c], colours[c], view, normal);
-+        // The alpha channel, lit the same way as the colour (the usual case), is the colour's alpha.
-+        const F4 alpha = plan.alphaAsColour[c] ? rgb
-+                                               : light_channel(st.colorChannelConfig[c + GX_ALPHA0],
-+                                                               st.colorChannelState[c + GX_ALPHA0], colours[c], view, normal);
-+        raster[c] = {{rgb[0], rgb[1], rgb[2], alpha[3]}};
-+      }
-+
-+      // The TEV stages with T unknown.
-+      std::array<std::array<Sym, 4>, MaxTevRegs> regs;
-+      for (u32 r = 0; r < MaxTevRegs; ++r) {
-+        for (int c = 0; c < 4; ++c) {
-+          regs[r][c] = constant(st.colorRegs[r][c]);
-+        }
-+      }
-+      for (u32 s = 0; s < stageCount; ++s) {
-+        const TevStage& stage = stages[s];
-+        const bool primaryStage = plan.primary != nullptr && stage.texMapId == plan.primaryMap;
-+        const auto& texSwap = config.tevSwapTable[stage.tevSwapTex];
-+        const auto& rasSwap = config.tevSwapTable[stage.tevSwapRas];
-+        const int texChannel[4] = {swap_channel(texSwap.red), swap_channel(texSwap.green), swap_channel(texSwap.blue),
-+                                   swap_channel(texSwap.alpha)};
-+        const int rasChannel[4] = {swap_channel(rasSwap.red), swap_channel(rasSwap.green), swap_channel(rasSwap.blue),
-+                                   swap_channel(rasSwap.alpha)};
-+        const auto texture = [&](int channel) -> Sym {
-+          if (stage.texMapId == GX_TEXMAP_NULL) {
-+            return constant(1.f);
-+          }
-+          const int from = texChannel[channel];
-+          if (primaryStage) {
-+            return {static_cast<int8_t>(from), 1.f, 0.f};
-+          }
-+          return constant(stage.texMapId < MaxTextures ? plan.average[stage.texMapId][from] : 0.5f);
-+        };
-+        const auto raster_value = [&](int channel) -> Sym {
-+          if (stage.channelId == GX_COLOR_NULL || stage.channelId == GX_COLOR_ZERO || is_bump_channel(stage.channelId)) {
-+            return constant(0.f);
-+          }
-+          return constant(raster[color_channel(stage.channelId) & 1][rasChannel[channel]]);
-+        };
-+        const auto colour_arg = [&](GXTevColorArg arg, int c) -> Sym {
-+          switch (arg) {
-+          case GX_CC_CPREV:
-+            return regs[0][c];
-+          case GX_CC_APREV:
-+            return regs[0][3];
-+          case GX_CC_C0:
-+            return regs[1][c];
-+          case GX_CC_A0:
-+            return regs[1][3];
-+          case GX_CC_C1:
-+            return regs[2][c];
-+          case GX_CC_A1:
-+            return regs[2][3];
-+          case GX_CC_C2:
-+            return regs[3][c];
-+          case GX_CC_A2:
-+            return regs[3][3];
-+          case GX_CC_TEXC:
-+            return texture(c);
-+          case GX_CC_TEXA:
-+            return texture(3);
-+          case GX_CC_RASC:
-+            return raster_value(c);
-+          case GX_CC_RASA:
-+            return raster_value(3);
-+          case GX_CC_ONE:
-+            return constant(1.f);
-+          case GX_CC_HALF:
-+            return constant(0.5f);
-+          case GX_CC_KONST:
-+            return constant(plan.konst[s][c]);
-+          default:
-+            return constant(0.f);
-+          }
-+        };
-+        const auto alpha_arg = [&](GXTevAlphaArg arg) -> Sym {
-+          switch (arg) {
-+          case GX_CA_APREV:
-+            return regs[0][3];
-+          case GX_CA_A0:
-+            return regs[1][3];
-+          case GX_CA_A1:
-+            return regs[2][3];
-+          case GX_CA_A2:
-+            return regs[3][3];
-+          case GX_CA_TEXA:
-+            return texture(3);
-+          case GX_CA_RASA:
-+            return raster_value(3);
-+          case GX_CA_KONST:
-+            return constant(plan.konst[s][3]);
-+          default:
-+            return constant(0.f);
-+          }
-+        };
-+        Sym colour[3];
-+        for (int c = 0; c < 3; ++c) {
-+          colour[c] = tev(plan.ctx, stage.colorOp, colour_arg(stage.colorPass.a, c), colour_arg(stage.colorPass.b, c),
-+                          colour_arg(stage.colorPass.c, c), colour_arg(stage.colorPass.d, c));
-+        }
-+        const Sym alpha = tev(plan.ctx, stage.alphaOp, alpha_arg(stage.alphaPass.a), alpha_arg(stage.alphaPass.b),
-+                              alpha_arg(stage.alphaPass.c), alpha_arg(stage.alphaPass.d));
-+        for (int c = 0; c < 3; ++c) {
-+          regs[std::min<u32>(stage.colorOp.outReg, MaxTevRegs - 1)][c] = colour[c];
-+        }
-+        regs[std::min<u32>(stage.alphaOp.outReg, MaxTevRegs - 1)][3] = alpha;
-+      }
-+      result = regs[0];
-+      if (stageCount > 0) {
-+        const TevStage& last = stages[stageCount - 1];
-+        for (int c = 0; c < 3; ++c) {
-+          result[c] = regs[std::min<u32>(last.colorOp.outReg, MaxTevRegs - 1)][c];
-+        }
-+        result[3] = regs[std::min<u32>(last.alphaOp.outReg, MaxTevRegs - 1)][3];
-+      }
-+    }
-+    const float fog = fog_at(view);
-+
-+    MirrorVertex out{};
-+    out.position[0] = view.x;
-+    out.position[1] = view.y;
-+    out.position[2] = view.z;
-+    if (plan.primary != nullptr) {
-+      const auto uv =
-+          tex_coord(decoder, config, plan.primaryCoord, v, position, F3{rawNormal[0], rawNormal[1], rawNormal[2]}, colours);
-+      out.uv[0] = std::isfinite(uv[0]) ? uv[0] : 0.f;
-+      out.uv[1] = std::isfinite(uv[1]) ? uv[1] : 0.f;
-+    }
-+    for (int c = 0; c < 4; ++c) {
-+      Sym s = result[c];
-+      if (plan.primary == nullptr) {
-+        s = constant(average_of(plan.ctx, s));
-+      }
-+      if (channelSel[c] == -2) {
-+        channelSel[c] = s.sel;
-+      } else if (s.sel != channelSel[c]) {
-+        s = channelSel[c] < 0 ? constant(average_of(plan.ctx, s))
-+                              : Sym{channelSel[c], 0.f, average_of(plan.ctx, s)};
-+      }
-+      float mul = s.sel < 0 ? 0.f : s.k, addend = s.c;
-+      if (c < 3 && fog > 0.f) {
-+        mul *= 1.f - fog;
-+        addend = addend * (1.f - fog) + fog * fogColour[c];
-+      }
-+      out.mul[c] = half(mul);
-+      out.add[c] = half(addend);
-+    }
-+    if (background) {
-+      g_nearestBackground = std::min(g_nearestBackground, std::sqrt(dot(view, view)));
-+    } else {
-+      g_farthest = std::max(g_farthest, std::sqrt(dot(view, view)));
-+    }
-+    g_building.vertices.push_back(out);
++  // Which channel of T each output channel reads is the TEV's structure, the same at every vertex.
++  const F4 none[2];
++  F4 raster[2];
++  light(job, none, F3{}, F3{1, 0, 0}, raster);
++  const auto structure = run_tev(job, raster);
++  job.constantResult = structure;
++  for (int c = 0; c < 4; ++c) {
++    job.channelSel[c] = plan.primary != nullptr ? structure[c].sel : -1;
 +  }
-+
++  if (behind) {
++    job.channelSel[3] = -1; // alpha carries the opacity
++  }
 +  // The texture as the TEV reads it.
 +  if (plan.primary != nullptr) {
 +    uint8_t swizzle = 0;
 +    for (int c = 0; c < 4; ++c) {
-+      const int from = channelSel[c] >= 0 ? channelSel[c] : c;
++      const int from = job.channelSel[c] >= 0 ? job.channelSel[c] : c;
 +      swizzle |= static_cast<uint8_t>(from << (2 * c));
 +    }
 +    part.texture = texture_variant(*plan.primary, st.loadedTextures[plan.primaryMap], swizzle);
 +  }
-+
 +  Group& group = group_for(part);
-+  // Clipped as the GPU clips them, at the camera's near plane and the sides of its view (with a
-+  // margin, for a viewer leaning to look past the window's edges): a large triangle (the ground,
-+  // the sky) can reach behind the camera, and kept whole it would lie in front of the window's
-+  // glass; the ground below the picture would only be subdivided for nothing (subdivide_near).
-+  const auto& proj = st.proj;
-+  const float far = std::fabs(proj.m2[2]) > 1e-9f ? proj.m2[3] / proj.m2[2] : 1e6f;
-+  const float nearClip = std::max(1.f, std::fabs(1.f - proj.m2[2]) > 1e-9f ? -proj.m2[2] * far / (1.f - proj.m2[2]) : 1.f);
-+  constexpr float kMargin = 1.4f;
-+  const float kx = kMargin / proj.m0[0], ky = kMargin / proj.m1[1];
-+  auto& built = g_building.vertices;
-+  // Inside where >= 0: near, left, right, bottom, top.
-+  const auto inside = [&](int plane, uint32_t i) {
-+    const float* p = built[i].position;
-+    const float d = -p[2];
-+    switch (plane) {
-+    case 0:
-+      return d - nearClip;
-+    case 1:
-+      return kx * d + p[0];
-+    case 2:
-+      return kx * d - p[0];
-+    case 3:
-+      return ky * d + p[1];
-+    default:
-+      return ky * d - p[1];
-+    }
-+  };
-+  const auto between = [&](uint32_t p, uint32_t q, float fp, float fq) {
-+    const MirrorVertex a = built[p], b = built[q];
-+    const float t = fp / (fp - fq);
-+    MirrorVertex out{};
-+    for (int i = 0; i < 3; ++i) {
-+      out.position[i] = a.position[i] + (b.position[i] - a.position[i]) * t;
-+    }
-+    for (int i = 0; i < 2; ++i) {
-+      out.uv[i] = a.uv[i] + (b.uv[i] - a.uv[i]) * t;
-+    }
-+    const auto lerp16 = [t](uint16_t x, uint16_t y) {
-+      const float fx = from_half(x), fy = from_half(y);
-+      return half(fx + (fy - fx) * t);
-+    };
-+    for (int i = 0; i < 4; ++i) {
-+      out.mul[i] = lerp16(a.mul[i], b.mul[i]);
-+      out.add[i] = lerp16(a.add[i], b.add[i]);
-+    }
-+    built.push_back(out);
-+    return static_cast<uint32_t>(built.size() - 1);
-+  };
-+  const auto triangle = [&](uint32_t a, uint32_t b, uint32_t c) {
-+    if (a == b || b == c || a == c || a >= vtxCount || b >= vtxCount || c >= vtxCount) {
-+      return;
-+    }
-+    uint32_t polygon[9] = {base + a, base + b, base + c};
-+    int count = 3;
-+    for (int plane = 0; plane < 5 && count >= 3; ++plane) {
-+      float values[9];
-+      int outside = 0;
-+      for (int i = 0; i < count; ++i) {
-+        values[i] = inside(plane, polygon[i]);
-+        outside += values[i] < 0.f;
-+      }
-+      if (outside == 0) {
-+        continue;
-+      }
-+      if (outside == count) {
-+        return;
-+      }
-+      uint32_t next[9];
-+      int nextCount = 0;
-+      for (int i = 0; i < count && nextCount < 8; ++i) {
-+        const int j = (i + 1) % count;
-+        if (values[i] >= 0.f) {
-+          next[nextCount++] = polygon[i];
-+        }
-+        if ((values[i] >= 0.f) != (values[j] >= 0.f)) {
-+          next[nextCount++] = between(polygon[i], polygon[j], values[i], values[j]);
-+        }
-+      }
-+      std::copy(next, next + nextCount, polygon);
-+      count = nextCount;
-+    }
-+    // Turned round: GX's front faces wind clockwise on screen, RealityKit's counter-clockwise.
-+    for (int i = 1; i + 1 < count; ++i) {
-+      group.indices.insert(group.indices.end(), {polygon[0], polygon[i + 1], polygon[i]});
-+      ++g_stats.triangles;
-+    }
-+  };
-+  if (indices != nullptr) {
-+    for (u32 i = 0; i + 2 < indexCount; i += 3) {
-+      triangle(indices[i], indices[i + 1], indices[i + 2]);
-+    }
-+  } else if (prim == GX_TRIANGLES) {
-+    for (uint32_t i = 0; i + 2 < vtxCount; i += 3) {
-+      triangle(i, i + 1, i + 2);
-+    }
-+  } else if (prim == GX_QUADS) {
-+    for (uint32_t i = 0; i + 3 < vtxCount; i += 4) {
-+      triangle(i, i + 1, i + 2);
-+      triangle(i + 2, i + 3, i);
-+    }
-+  } else if (prim == GX_TRIANGLESTRIP) {
-+    for (uint32_t i = 2; i < vtxCount; ++i) {
-+      if (i == 2 || (i & 1) == 0) {
-+        triangle(i - 2, i - 1, i);
-+      } else {
-+        triangle(i - 1, i - 2, i);
-+      }
-+    }
-+  } else if (prim == GX_TRIANGLEFAN) {
-+    for (uint32_t i = 2; i < vtxCount; ++i) {
-+      triangle(0, i - 1, i);
++  job.group = static_cast<size_t>(&group - g_groups.data());
++  // Coplanar draws: a decal (blended, depth-tested, writing no depth: paths, stains, shadows) lies on
++  // what's under it; a mesh drawn again where it was just drawn (a second pass) is over the first;
++  // and every draw a hair nearer than the ones before, in the game's order. (SHAR's rules.)
++  job.nearer = 1.f - 1e-6f * static_cast<float>(g_jobCount);
++  if (part.kind == aurora::mirror::PartBlend && !behind && depthTest && !st.depthUpdate && !background) {
++    job.nearer *= 1.f - 4e-3f;
++  }
++  {
++    struct PassKey {
++      uint64_t bytes;
++      uint32_t count, matrix;
++      float translation[3];
++    } key{};
++    key.bytes = xxh3_hash_s(vertices, std::min<size_t>(job.bytes.size(), 256));
++    key.count = vtxCount;
++    key.matrix = st.currentPnMtx;
++    const auto& m = st.pnMtx[std::min<u32>(st.currentPnMtx, MaxPnMtx - 1)].pos;
++    key.translation[0] = m.m0[3];
++    key.translation[1] = m.m1[3];
++    key.translation[2] = m.m2[3];
++    const unsigned repeat = g_passes[xxh3_hash_s(&key, sizeof key)]++;
++    if (repeat > 0) {
++      job.nearer *= 1.f - 2e-4f * static_cast<float>(std::min(repeat, 8u));
 +    }
 +  }
-+  if (background) {
-+    g_backgroundRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
-+    ++g_stats.background;
-+  }
++#if defined(__APPLE__)
++  dispatch_group_async_f(g_jobGroup, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), &job,
++                         [](void* context) { process(*static_cast<DrawJob*>(context)); });
++#else
++  process(job);
++#endif
 +  ++g_stats.recorded;
 +  g_stats.vertices += vtxCount;
 +}
