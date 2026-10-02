@@ -23,6 +23,8 @@ final class MirrorScene {
     // MirrorMaterials(Wrap).usda: kind ("Opaque", "Cutout", "Blend") + wrap ("RR", "CC"...).
     private var templates: [String: ShaderGraphMaterial] = [:]
     private var textures: [UInt64: TextureResource] = [:]
+    // Their textures, for the ones the game updates (shadows read back each frame).
+    private var lowLevelTextures: [UInt64: LowLevelTexture] = [:]
     private var failedTextures: Set<UInt64> = []
     private struct PendingTexture { let id: UInt64; let pixels: Data; let width: Int; let height: Int; let mipmapped: Bool; let cutout: Bool }
     private var pendingTextures: [PendingTexture] = []
@@ -255,6 +257,12 @@ final class MirrorScene {
                 let texture = list[index]
                 let count = Int(texture.width) * Int(texture.height) * 4
                 guard let rgba = texture.rgba, count > 0 else { continue }
+                // New pixels for one already made (a shadow, each frame): replaced in place.
+                if let existing = lowLevelTextures[texture.id], existing.descriptor.width == Int(texture.width),
+                   existing.descriptor.height == Int(texture.height), existing.descriptor.mipmapLevelCount == 1 {
+                    Self.upload(queue: queue, pixels: rgba, width: Int(texture.width), height: Int(texture.height), into: existing)
+                    continue
+                }
                 pendingTextures.append(PendingTexture(id: texture.id, pixels: Data(bytes: rgba, count: count),
                                                       width: Int(texture.width), height: Int(texture.height),
                                                       mipmapped: texture.mipmapped, cutout: texture.cutout))
@@ -266,6 +274,7 @@ final class MirrorScene {
             let gone = Set((0..<Int(frame.removed_count)).map { removed[$0] })
             for id in gone {
                 textures[id] = nil
+                lowLevelTextures[id] = nil
                 failedTextures.remove(id)
             }
             pendingTextures.removeAll { gone.contains($0.id) }
@@ -283,8 +292,9 @@ final class MirrorScene {
             if Self.dumpFrame >= 0 {
                 dumpTextures[pending.id] = pending
             }
-            if let resource = makeTexture(pending) {
+            if let (lowLevel, resource) = makeTexture(pending) {
                 textures[pending.id] = resource
+                lowLevelTextures[pending.id] = lowLevel
                 counts.texturesMade += 1
             } else {
                 failedTextures.insert(pending.id)
@@ -295,7 +305,7 @@ final class MirrorScene {
         }
     }
 
-    private func makeTexture(_ texture: PendingTexture) -> TextureResource? {
+    private func makeTexture(_ texture: PendingTexture) -> (LowLevelTexture, TextureResource)? {
         let levels = texture.mipmapped && texture.cutout ? Self.coverageMipmaps(texture) : nil
         return (levels ?? texture.pixels).withUnsafeBytes {
             Self.makeTexture(queue: queue, pixels: $0.baseAddress!, width: texture.width, height: texture.height,
@@ -304,13 +314,25 @@ final class MirrorScene {
     }
 
     private static func makeTexture(queue: MTLCommandQueue, pixels: [UInt8], width: Int, height: Int) -> TextureResource? {
-        pixels.withUnsafeBytes { makeTexture(queue: queue, pixels: $0.baseAddress!, width: width, height: height) }
+        pixels.withUnsafeBytes { makeTexture(queue: queue, pixels: $0.baseAddress!, width: width, height: height)?.1 }
+    }
+
+    /// New level-zero pixels into a texture already made.
+    private static func upload(queue: MTLCommandQueue, pixels: UnsafePointer<UInt8>, width: Int, height: Int,
+                               into texture: LowLevelTexture) {
+        guard let staging = queue.device.makeBuffer(bytes: pixels, length: width * height * 4),
+              let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: width * 4, sourceBytesPerImage: width * height * 4,
+                  sourceSize: MTLSize(width: width, height: height, depth: 1), to: texture.replace(using: commands),
+                  destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
+        blit.endEncoding()
+        commands.commit()
     }
 
     /// RGBA8 (sRGB) into a texture, its mipmaps made by the GPU or, with `levelsIncluded`, given
     /// one after another in `pixels`.
     private static func makeTexture(queue: MTLCommandQueue, pixels: UnsafeRawPointer, width: Int, height: Int,
-                                    mipmapped: Bool = false, levelsIncluded: Bool = false) -> TextureResource? {
+                                    mipmapped: Bool = false, levelsIncluded: Bool = false) -> (LowLevelTexture, TextureResource)? {
         let levels = mipmapped ? Int(log2(Double(max(width, height)))) + 1 : 1
         let descriptor = LowLevelTexture.Descriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height,
                                                     mipmapLevelCount: levels, textureUsage: [.shaderRead, .renderTarget])
@@ -330,7 +352,8 @@ final class MirrorScene {
         if levels > 1 && !levelsIncluded { blit.generateMipmaps(for: destination) }
         blit.endEncoding()
         commands.commit()
-        return try? TextureResource(from: texture)
+        guard let resource = try? TextureResource(from: texture) else { return nil }
+        return (texture, resource)
     }
 
     /// A cut-out texture's mipmaps (SHAR's): each texel the alpha-weighted mean of the four below

@@ -516,6 +516,8 @@ void before_hud() {
     if (!g_sceneThisFrame) {
         return;
     }
+    // The shadows the mirror's draws project, read back for the window.
+    aurora::mirror::capture_copies();
     const int index = ClaimSlot();
     if (index < 0) {
         return;

@@ -12,10 +12,10 @@ index 02a96af..9fcbde8 100644
          lib/gx/shader.cpp
 diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
 new file mode 100644
-index 0000000..ec90ae0
+index 0000000..9117caf
 --- /dev/null
 +++ b/include/aurora/mirror.h
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,110 @@
 +#pragma once
 +
 +// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
@@ -105,7 +105,7 @@ index 0000000..ec90ae0
 +  // focus. Nothing is nearer: what was is moved back onto it along its own line of sight, so the
 +  // picture from the camera is unchanged.
 +  float plane;
-+  // Textures new since the last acquire, and ones no longer used.
++  // Textures new since the last acquire (or new pixels for one sent before), and ones no longer used.
 +  const Texture* textures;
 +  uint32_t textureCount;
 +  const uint64_t* removed;
@@ -115,6 +115,11 @@ index 0000000..ec90ae0
 +// Whether to record (any thread). Turning it on starts the textures over: each is sent again.
 +void set_enabled(bool enabled) noexcept;
 +bool enabled() noexcept;
++
++// Game thread, after the 3D scene and before the HUD: queues the GPU readback of the framebuffer
++// copies the scene's mirrored draws use as masks (character shadows). Their pixels arrive with a
++// later frame, as updates: a Texture whose id was sent before, to be replaced in place.
++void capture_copies() noexcept;
 +
 +// The newest recorded frame, or false before the first. Its pointers stay valid until the next
 +// call. One consumer thread.
@@ -231,10 +236,10 @@ index d51516f..2c6fa6f 100644
      gfx::push_debug_group(std::move(label));
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..bcca7e4
+index 0000000..1a1871d
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2150 @@
+@@ -0,0 +1,2470 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -262,6 +267,7 @@ index 0000000..bcca7e4
 +#include "../gfx/hash.hpp"
 +#include "../gfx/texture_convert.hpp"
 +#include "../internal.hpp"
++#include "fifo.hpp"
 +#include "shader_info.hpp"
 +#include "texture.hpp"
 +
@@ -582,6 +588,7 @@ index 0000000..bcca7e4
 +struct TexEntry {
 +  uint64_t id = 0;
 +  bool ok = false; // decoded: otherwise drawn white
++  bool captured = false; // a framebuffer copy read back from the GPU each frame (capture_copies)
 +  std::array<float, 4> average{0.5f, 0.5f, 0.5f, 1.f};
 +  bool cutout = false;
 +  bool mipmapped = false;
@@ -638,6 +645,16 @@ index 0000000..bcca7e4
 +std::unordered_map<uint64_t, TexEntry> g_textures;  // by source key
 +std::unordered_map<uint64_t, uint64_t> g_variants; // (base id << 8 | swizzle) -> id
 +uint64_t g_nextTextureId = 1;
++
++// Framebuffer copies to read back (capture_entry, capture_copies).
++struct Capture {
++  uint64_t id;
++  gfx::TextureHandle handle;
++  uint8_t swizzle; // the channels as the TEV reads them (a swap table's red as alpha, for a shadow)
++};
++std::mutex g_captureMutex;
++std::vector<Capture> g_wanted;                              // this frame's, FIFO thread (under the mutex)
++std::unordered_map<const void*, TexEntry> g_captureEntries; // FIFO thread: by copy destination
 +std::vector<OwnedTexture> g_newTextures;
 +std::vector<uint64_t> g_removedTextures;
 +Stats g_stats;
@@ -807,6 +824,11 @@ index 0000000..bcca7e4
 +
 +void forget_textures() {
 +  g_textures.clear();
++  g_captureEntries.clear();
++  {
++    std::lock_guard lock(g_captureMutex);
++    g_wanted.clear();
++  }
 +  g_variants.clear();
 +  g_newTextures.clear();
 +  g_removedTextures.clear();
@@ -1049,6 +1071,270 @@ index 0000000..bcca7e4
 +
 +// --- Per draw.
 +
++// --- Framebuffer copies used as masks (character shadows: the shadow is drawn into the EFB from
++// the light, copied, and projected onto the ground through the copy's alpha), read back from the
++// GPU: the FIFO thread notes them; just before the HUD the game thread queues a GPU task that
++// renders each, small, into a readable texture; the pixels reach the window a frame later, as a
++// texture updated in place.
++
++
++// A copy the draw samples only through its alpha, as a texture to capture; null if it isn't one.
++TexEntry* capture_entry(const ShaderConfig& config, int texMap) {
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const TevStage& stage = config.tevStages[i];
++    if (stage.texMapId != texMap) {
++      continue;
++    }
++    const auto& c = stage.colorPass;
++    if (c.a == GX_CC_TEXC || c.b == GX_CC_TEXC || c.c == GX_CC_TEXC || c.d == GX_CC_TEXC) {
++      return nullptr; // its colour: a picture of the screen, not a mask
++    }
++  }
++  const auto& obj = g_gxState.loadedTextures[texMap];
++  const auto copy = g_gxState.copyTextures.find(obj.data);
++  if (copy == g_gxState.copyTextures.end() || !copy->second.handle) {
++    return nullptr;
++  }
++  auto [found, added] = g_captureEntries.try_emplace(obj.data);
++  TexEntry& entry = found->second;
++  if (added) {
++    entry.id = g_nextTextureId++;
++    entry.ok = true;
++    entry.captured = true;
++    entry.average = {0.f, 0.f, 0.f, 0.5f};
++  }
++  std::lock_guard lock(g_captureMutex);
++  if (std::none_of(g_wanted.begin(), g_wanted.end(), [&](const Capture& c) { return c.id == entry.id; })) {
++    g_wanted.push_back({entry.id, copy->second.handle, kIdentitySwizzle});
++  }
++  return &entry;
++}
++
++// The GPU side, on the render worker: each copy drawn into a 256 x 256 RGBA8 target (a box
++// filter over the texels it covers), copied to a buffer, mapped after the frame is submitted.
++constexpr uint32_t kCaptureSize = 256;
++constexpr uint64_t kCaptureBytes = uint64_t{kCaptureSize} * kCaptureSize * 4;
++constexpr char kCaptureShader[] = R"(
++@group(0) @binding(0) var source: texture_2d<f32>;
++
++struct VertexOut {
++  @builtin(position) position: vec4f,
++};
++
++@vertex
++fn vs(@builtin(vertex_index) index: u32) -> VertexOut {
++  let p = vec2f(f32((index << 1u) & 2u), f32(index & 2u));
++  var out: VertexOut;
++  out.position = vec4f(p * 2.0 - 1.0, 0.0, 1.0);
++  return out;
++}
++
++@fragment
++fn fs(in: VertexOut) -> @location(0) vec4f {
++  let size = vec2i(textureDimensions(source));
++  let scale = vec2f(size) / 256.0;
++  let first = vec2i(floor((in.position.xy - 0.5) * scale));
++  let span = max(vec2i(ceil(scale)), vec2i(1));
++  var sum = vec4f(0.0);
++  for (var y = 0; y < span.y; y++) {
++    for (var x = 0; x < span.x; x++) {
++      sum += textureLoad(source, clamp(first + vec2i(x, y), vec2i(0), size - 1), 0);
++    }
++  }
++  return sum / f32(span.x * span.y);
++}
++)";
++
++struct Readback {
++  uint64_t id = 0;
++  uint8_t swizzle = kIdentitySwizzle;
++  wgpu::Texture target;
++  wgpu::Buffer buffer;
++  std::atomic<bool> busy{false};
++};
++
++std::vector<std::unique_ptr<Readback>> g_readbacks; // render worker
++wgpu::RenderPipeline g_capturePipeline;
++wgpu::BindGroupLayout g_captureLayout;
++bool g_captureFailed = false;
++gfx::EncoderTaskId g_captureTask = gfx::InvalidEncoderTask;
++constexpr size_t kCaptureBatches = 4;
++std::array<std::vector<Capture>, kCaptureBatches> g_captureBatches; // under g_captureMutex
++std::array<std::vector<Readback*>, kCaptureBatches> g_captureEncoded; // render worker
++uint32_t g_nextCaptureBatch = 0;                                    // game thread
++
++bool ensure_capture_pipeline(const wgpu::Device& device) {
++  if (g_capturePipeline || g_captureFailed) {
++    return !g_captureFailed;
++  }
++  wgpu::ShaderSourceWGSL wgsl{};
++  wgsl.code = kCaptureShader;
++  wgpu::ShaderModuleDescriptor moduleDesc{};
++  moduleDesc.nextInChain = &wgsl;
++  moduleDesc.label = "Mirror capture";
++  wgpu::ShaderModule module = device.CreateShaderModule(&moduleDesc);
++  wgpu::BindGroupLayoutEntry entry{};
++  entry.binding = 0;
++  entry.visibility = wgpu::ShaderStage::Fragment;
++  entry.texture.sampleType = wgpu::TextureSampleType::UnfilterableFloat;
++  entry.texture.viewDimension = wgpu::TextureViewDimension::e2D;
++  wgpu::BindGroupLayoutDescriptor layoutDesc{};
++  layoutDesc.entryCount = 1;
++  layoutDesc.entries = &entry;
++  g_captureLayout = device.CreateBindGroupLayout(&layoutDesc);
++  wgpu::PipelineLayoutDescriptor pipelineLayoutDesc{};
++  pipelineLayoutDesc.bindGroupLayoutCount = 1;
++  pipelineLayoutDesc.bindGroupLayouts = &g_captureLayout;
++  wgpu::PipelineLayout layout = device.CreatePipelineLayout(&pipelineLayoutDesc);
++  wgpu::ColorTargetState target{};
++  target.format = wgpu::TextureFormat::RGBA8Unorm;
++  wgpu::FragmentState fs{};
++  fs.module = module;
++  fs.entryPoint = "fs";
++  fs.targetCount = 1;
++  fs.targets = &target;
++  wgpu::RenderPipelineDescriptor desc{};
++  desc.label = "Mirror capture";
++  desc.layout = layout;
++  desc.vertex.module = module;
++  desc.vertex.entryPoint = "vs";
++  desc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
++  desc.fragment = &fs;
++  g_capturePipeline = device.CreateRenderPipeline(&desc);
++  g_captureFailed = !g_capturePipeline;
++  if (g_captureFailed) {
++    Log.warn("mirror: the capture pipeline failed; shadows won't show");
++  }
++  return !g_captureFailed;
++}
++
++Readback* readback_for(const wgpu::Device& device, uint64_t id) {
++  for (auto& readback : g_readbacks) {
++    if (readback->id == id) {
++      return readback.get();
++    }
++  }
++  auto readback = std::make_unique<Readback>();
++  readback->id = id;
++  wgpu::TextureDescriptor textureDesc{};
++  textureDesc.label = "Mirror capture";
++  textureDesc.size = {kCaptureSize, kCaptureSize, 1};
++  textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
++  textureDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
++  readback->target = device.CreateTexture(&textureDesc);
++  wgpu::BufferDescriptor bufferDesc{};
++  bufferDesc.label = "Mirror capture readback";
++  bufferDesc.size = kCaptureBytes;
++  bufferDesc.usage = wgpu::BufferUsage::MapRead | wgpu::BufferUsage::CopyDst;
++  readback->buffer = device.CreateBuffer(&bufferDesc);
++  if (!readback->target || !readback->buffer) {
++    return nullptr;
++  }
++  g_readbacks.push_back(std::move(readback));
++  return g_readbacks.back().get();
++}
++
++bool capturable_format(wgpu::TextureFormat format) {
++  switch (format) {
++  case wgpu::TextureFormat::RGBA8Unorm:
++  case wgpu::TextureFormat::BGRA8Unorm:
++  case wgpu::TextureFormat::R8Unorm:
++  case wgpu::TextureFormat::RG8Unorm:
++  case wgpu::TextureFormat::RGBA16Float:
++    return true;
++  default:
++    return false;
++  }
++}
++
++void capture_task(const gfx::EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, const void* payload, size_t,
++                  void*) {
++  const uint32_t batch = *static_cast<const uint32_t*>(payload) % kCaptureBatches;
++  std::vector<Capture> captures;
++  {
++    std::lock_guard lock(g_captureMutex);
++    captures.swap(g_captureBatches[batch]);
++  }
++  g_captureEncoded[batch].clear();
++  if (captures.empty() || !ensure_capture_pipeline(ctx.device)) {
++    return;
++  }
++  wgpu::CommandEncoder encoder = cmd;
++  for (const Capture& capture : captures) {
++    const auto& ref = capture.handle;
++    if (!ref || !ref->sampleTextureView || !capturable_format(ref->format)) {
++      continue;
++    }
++    Readback* readback = readback_for(ctx.device, capture.id);
++    if (readback == nullptr || readback->busy) {
++      continue;
++    }
++    wgpu::BindGroupEntry entry{};
++    entry.binding = 0;
++    entry.textureView = ref->sampleTextureView;
++    wgpu::BindGroupDescriptor groupDesc{};
++    groupDesc.layout = g_captureLayout;
++    groupDesc.entryCount = 1;
++    groupDesc.entries = &entry;
++    wgpu::BindGroup group = ctx.device.CreateBindGroup(&groupDesc);
++    wgpu::RenderPassColorAttachment colour{};
++    colour.view = readback->target.CreateView();
++    colour.loadOp = wgpu::LoadOp::Clear;
++    colour.storeOp = wgpu::StoreOp::Store;
++    colour.clearValue = {0, 0, 0, 0};
++    wgpu::RenderPassDescriptor passDesc{};
++    passDesc.label = "Mirror capture";
++    passDesc.colorAttachmentCount = 1;
++    passDesc.colorAttachments = &colour;
++    wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
++    pass.SetPipeline(g_capturePipeline);
++    pass.SetBindGroup(0, group);
++    pass.Draw(3);
++    pass.End();
++    wgpu::TexelCopyTextureInfo source{};
++    source.texture = readback->target;
++    wgpu::TexelCopyBufferInfo destination{};
++    destination.buffer = readback->buffer;
++    destination.layout.bytesPerRow = kCaptureSize * 4;
++    destination.layout.rowsPerImage = kCaptureSize;
++    const wgpu::Extent3D size{kCaptureSize, kCaptureSize, 1};
++    encoder.CopyTextureToBuffer(&source, &destination, &size);
++    readback->swizzle = capture.swizzle;
++    readback->busy = true;
++    g_captureEncoded[batch].push_back(readback);
++  }
++}
++
++// After the frame's submission: the readbacks mapped; their pixels go to the window as updates.
++void capture_submitted(const gfx::EncoderTaskCompletionContext&, const void* payload, size_t, void*) {
++  const uint32_t batch = *static_cast<const uint32_t*>(payload) % kCaptureBatches;
++  for (Readback* readback : g_captureEncoded[batch]) {
++    readback->buffer.MapAsync(
++        wgpu::MapMode::Read, 0, kCaptureBytes, wgpu::CallbackMode::AllowSpontaneous,
++        [readback](wgpu::MapAsyncStatus status, wgpu::StringView) {
++          if (status == wgpu::MapAsyncStatus::Success) {
++            const auto* data = static_cast<const uint8_t*>(readback->buffer.GetConstMappedRange(0, kCaptureBytes));
++            std::vector<uint8_t> rgba(data, data + kCaptureBytes);
++            readback->buffer.Unmap();
++            if (const uint8_t swizzle = readback->swizzle; swizzle != kIdentitySwizzle) {
++              for (size_t i = 0; i < rgba.size(); i += 4) {
++                const uint8_t texel[4] = {rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]};
++                for (int c = 0; c < 4; ++c) {
++                  rgba[i + c] = texel[(swizzle >> (2 * c)) & 3];
++                }
++              }
++            }
++            std::lock_guard lock(g_mutex);
++            // Only the newest: an older one still waiting for the window is replaced.
++            std::erase_if(g_pendingTextures, [&](const OwnedTexture& t) { return t.id == readback->id; });
++            g_pendingTextures.push_back({readback->id, std::move(rgba), kCaptureSize, kCaptureSize, false, false});
++          }
++          readback->busy = false;
++        });
++  }
++  g_captureEncoded[batch].clear();
++}
++
 +struct DrawPlan {
 +  int primaryMap = -1;
 +  int primaryCoord = -1;
@@ -1064,7 +1350,7 @@ index 0000000..bcca7e4
 +};
 +
 +// Which texture the mirror keeps, the others' averages, and a framebuffer copy it samples.
-+bool plan_draw(const ShaderConfig& config, DrawPlan& plan) {
++bool plan_draw(const ShaderConfig& config, DrawPlan& plan, bool blended) {
 +  for (auto& average : plan.average) {
 +    average = {0.5f, 0.5f, 0.5f, 1.f};
 +  }
@@ -1078,6 +1364,9 @@ index 0000000..bcca7e4
 +    }
 +    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
 +    TexEntry* entry = texture_entry(obj);
++    if (entry == nullptr && blended) {
++      entry = capture_entry(config, stage.texMapId);
++    }
 +    if (entry == nullptr || !entry->ok) {
 +      if (entry == nullptr && plan.behindMap < 0) {
 +        plan.behindMap = stage.texMapId;
@@ -2214,7 +2503,7 @@ index 0000000..bcca7e4
 +  }
 +
 +  DrawPlan plan;
-+  plan_draw(config, plan);
++  plan_draw(config, plan, part.kind == aurora::mirror::PartBlend);
 +  bool behind = false;
 +  if (plan.behindMap >= 0) {
 +    if (part.kind == aurora::mirror::PartOpaque && !background) {
@@ -2294,7 +2583,18 @@ index 0000000..bcca7e4
 +      const int from = job.channelSel[c] >= 0 ? job.channelSel[c] : c;
 +      swizzle |= static_cast<uint8_t>(from << (2 * c));
 +    }
-+    part.texture = texture_variant(*plan.primary, st.loadedTextures[plan.primaryMap], swizzle);
++    if (plan.primary->captured) {
++      // A read-back copy: swizzled as it arrives.
++      part.texture = plan.primary->id;
++      std::lock_guard lock(g_captureMutex);
++      for (Capture& capture : g_wanted) {
++        if (capture.id == part.texture) {
++          capture.swizzle = swizzle;
++        }
++      }
++    } else {
++      part.texture = texture_variant(*plan.primary, st.loadedTextures[plan.primaryMap], swizzle);
++    }
 +  }
 +  Group& group = group_for(part);
 +  job.group = static_cast<size_t>(&group - g_groups.data());
@@ -2343,6 +2643,31 @@ index 0000000..bcca7e4
 +}
 +
 +bool enabled() noexcept { return gx::mirror::g_enabled.load(); }
++
++void capture_copies() noexcept {
++  using namespace gx::mirror;
++  if (!g_enabled.load()) {
++    return;
++  }
++  gx::fifo::drain(); // the scene's draws, and so the copies they use, all noted
++  {
++    std::lock_guard lock(g_captureMutex);
++    if (g_wanted.empty()) {
++      return;
++    }
++  }
++  if (g_captureTask == gfx::InvalidEncoderTask) {
++    g_captureTask = gfx::register_encoder_task_type(
++        {.label = "Mirror capture", .callback = capture_task, .afterSubmit = capture_submitted});
++  }
++  const uint32_t batch = g_nextCaptureBatch++ % kCaptureBatches;
++  {
++    std::lock_guard lock(g_captureMutex);
++    g_captureBatches[batch].clear();
++    g_captureBatches[batch].swap(g_wanted);
++  }
++  gfx::push_encoder_task(g_captureTask, &batch, sizeof batch);
++}
 +
 +bool acquire(Frame& frame) noexcept {
 +  using namespace gx::mirror;
