@@ -124,11 +124,19 @@ owns the swapchain images and Dawn imports them.
 - [x] Simulator: Ordon and Faron Woods match the game's picture straight on and stand in depth at
       25 degrees; ~290 draws, ~71k vertices, ~9.4 ms of FIFO-thread time a frame, game at 60 fps.
       Headset: untried.
-- [ ] Water and screen effects (refraction, bloom, heat haze, DOF) aren't in the mirror: draws that
-      only sample framebuffer copies are skipped. Water could be blended with its own texture.
-- [ ] FIFO-thread cost on the headset; if it limits frame rate, cache decoded static draws in
-      model space (lighting is camera-invariant for world-fixed lights).
-- [ ] Sense controllers in the window (today a gamepad; each Sense half may show up as its own pad).
+- [x] Decoding on worker threads (the FIFO thread snapshots each draw; END merges in order):
+      FIFO-thread time in Ordon ~10.6 -> ~3.2 ms a frame.
+- [x] No z-fighting: decals and second passes nudged nearer, every draw a hair nearer than the
+      ones before (SHAR's rules); near geometry keeps its order in a 3% band behind the glass.
+- [x] Character shadows: the shadow masks (framebuffer copies sampled through their alpha) read
+      back from the GPU each frame (256x256, swizzled as the TEV reads them), a frame late.
+- [x] Refracting surfaces (an opaque draw sampling a framebuffer copy, water) are see-through:
+      the copy is a second unknown in the TEV, its weight the transparency. (None in the areas
+      tested so far: TP's water there is plain textured geometry.)
+- [x] Sense controllers in the window, as one SDL virtual gamepad (visionos_sense_pad.mm).
+      Untested: the Simulator has no Sense controllers.
+- [ ] Screen effects (bloom, heat haze, light shafts, DOF) stay out: they're pictures of the
+      screen, not geometry. Faron's mist (a half-size screen copy projected on geometry) too.
 
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.

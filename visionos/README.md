@@ -62,12 +62,16 @@ boundary. The game pauses while the headset is off.
 Window plays Twilight Princess as the GameCube game, in third person, in a
 window you can move and resize beside your other apps. visionOS gives an app no
 head tracking outside a full space, so the VR mod is off there and you play with
-a gamepad (DualSense, Xbox or another Bluetooth controller). The picture isn't
+a gamepad (DualSense, Xbox or another Bluetooth controller) or the two Sense
+controllers held as one: right half Cross A, Circle B, R2 R, R1 Z, Options
+Start; left half Square X, Triangle Y, L2 L (targeting); the D-pad is L1 up
+(Midna), Create left (map), L3 down, R3 right. The picture isn't
 flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
-menus sit on the glass. Water and the game's screen effects (bloom, heat haze)
-don't appear in the window yet. Close the window to quit (the game
+menus sit on the glass. Characters cast their shadows; water you can see into
+lets the riverbed show through. The game's screen effects (bloom, heat haze,
+light shafts) don't appear in the window. Close the window to quit (the game
 saves); the game pauses while the window is in the background.
 
 Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight

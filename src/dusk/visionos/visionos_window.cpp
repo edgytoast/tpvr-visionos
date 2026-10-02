@@ -17,6 +17,7 @@
 #include "dusk/visionos/visionos_window.hpp"
 
 #include "dusk/visionos/visionos_host.h"
+#include "dusk/visionos/visionos_sense_pad.hpp"
 #include "dusk/ui/ui.hpp"
 #include "f_op/f_op_view.h"
 
@@ -475,6 +476,8 @@ void begin_frame() {
     g_frameSlot = -1;
     g_sceneThisFrame = false;
     g_scenePushed = false;
+    // The Sense controllers, if any, as a gamepad (no controller tracking outside a Full Space).
+    sense_pad::update();
     // The scene mirror records the frame's draws from here to before_hud().
     if (aurora::mirror::enabled()) {
         GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, 0.0f);
