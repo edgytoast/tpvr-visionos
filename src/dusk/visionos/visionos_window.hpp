@@ -8,6 +8,9 @@
 // from the viewer's real eyes (depth and parallax), and puts the HUD flat on the window's glass
 // (visionos/App/Sources/GameWindowView.swift; the approach is the SHAR port's relief window).
 //
+// With the app's scene mirror on (aurora/mirror.h), the frame's 3D draws between begin_frame()
+// and before_hud() are also recorded for the window to draw itself.
+//
 // Every function is a no-op unless window mode was set before the game started.
 
 struct view_class;

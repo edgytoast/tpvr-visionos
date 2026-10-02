@@ -1,0 +1,2102 @@
+diff --git a/cmake/aurora_gx.cmake b/cmake/aurora_gx.cmake
+index 02a96af..9fcbde8 100644
+--- a/cmake/aurora_gx.cmake
++++ b/cmake/aurora_gx.cmake
+@@ -20,6 +20,7 @@ add_library(aurora_gx STATIC
+         lib/gx/dl.cpp
+         lib/gx/fifo.cpp
+         lib/gx/gx.cpp
++        lib/gx/mirror.cpp
+         lib/gx/texture.cpp
+         lib/gx/pipeline.cpp
+         lib/gx/shader.cpp
+diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
+new file mode 100644
+index 0000000..ec90ae0
+--- /dev/null
++++ b/include/aurora/mirror.h
+@@ -0,0 +1,105 @@
++#pragma once
++
++// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
++// materials a host renderer can draw again from any viewpoint (the visionOS port's shared-space
++// window gives them to RealityKit, which renders them from the viewer's real eyes).
++//
++// The game marks where its 3D scene starts and ends in the GX stream (GXAuroraMirrorMark); every
++// perspective draw between the marks into the main framebuffer is recorded as aurora processes
++// it. Each vertex is transformed, lit and given its texture coordinate as GX would, and the TEV
++// combine is reduced to an affine function of one texture's sample (lib/gx/mirror.cpp).
++
++#include <cstdint>
++
++namespace aurora::mirror {
++
++// One vertex: its position in the frame's view space (GX's: right-handed, the camera at the
++// origin looking down -z), its primary texture's coordinate, and the TEV result as an affine
++// function of that texture's sample T, in the game's (gamma) space:
++//   colour = T.rgb * mul.rgb + add.rgb, alpha = T.a * mul.a + add.a.
++// mul and add are half floats.
++struct Vertex {
++  float position[3];
++  float uv[2];
++  uint16_t mul[4];
++  uint16_t add[4];
++};
++static_assert(sizeof(Vertex) == 36, "packed");
++
++enum PartKind : uint32_t {
++  PartOpaque = 0,
++  PartCutout = 1, // alpha below `cutoff` is discarded
++  PartBlend = 2,  // see Part's weights
++};
++
++enum PartFlags : uint32_t {
++  PartCullBack = 1u << 0, // GX's back faces culled (front faces wind counter-clockwise, as RealityKit's)
++  PartCullFront = 1u << 1,
++  PartDepthWrite = 1u << 2,
++  PartDepthTest = 1u << 3,
++  PartBackground = 1u << 4, // drawn behind everything (the sky): pushed past the scene's farthest point
++};
++
++enum WrapMode : uint8_t {
++  WrapClamp = 0,
++  WrapRepeat = 1,
++  WrapMirror = 2,
++};
++
++// A run of triangles with one material.
++struct Part {
++  uint32_t firstIndex;
++  uint32_t indexCount;
++  uint64_t texture; // 0: none (white)
++  uint32_t kind;    // PartKind
++  uint32_t flags;   // PartFlags
++  float cutoff;
++  // PartBlend, premultiplied (result = colour + destination * (1 - opacity)):
++  //   colour  = rgb * (colourBase + colourAlpha * a)
++  //   opacity = opacityBase + opacityAlpha * a + opacityLuma * luma(rgb)
++  float colourBase, colourAlpha, opacityBase, opacityAlpha, opacityLuma;
++  uint8_t wrapS, wrapT; // WrapMode
++  uint8_t pad[6];
++};
++
++// A texture the frame's parts use, sent once: RGBA8, the top row first.
++struct Texture {
++  uint64_t id;
++  const uint8_t* rgba;
++  uint32_t width, height;
++  bool mipmapped; // the game samples it with mipmaps
++  bool cutout;    // its alpha is all but on or off (foliage, fences)
++};
++
++struct Frame {
++  uint64_t serial;
++  bool scene; // false: the frame had no 3D scene
++  const Vertex* vertices;
++  uint32_t vertexCount;
++  const uint32_t* indices;
++  uint32_t indexCount;
++  const Part* parts;
++  uint32_t partCount;
++  float boundsMin[3], boundsMax[3];
++  float tanHalfX, tanHalfY; // the scene projection's half-view tangents
++  float focus;              // the camera's distance to what it looks at (view units)
++  // Where a window showing the frame should put its glass (view units): a little short of the
++  // focus. Nothing is nearer: what was is moved back onto it along its own line of sight, so the
++  // picture from the camera is unchanged.
++  float plane;
++  // Textures new since the last acquire, and ones no longer used.
++  const Texture* textures;
++  uint32_t textureCount;
++  const uint64_t* removed;
++  uint32_t removedCount;
++};
++
++// Whether to record (any thread). Turning it on starts the textures over: each is sent again.
++void set_enabled(bool enabled) noexcept;
++bool enabled() noexcept;
++
++// The newest recorded frame, or false before the first. Its pointers stay valid until the next
++// call. One consumer thread.
++bool acquire(Frame& frame) noexcept;
++
++} // namespace aurora::mirror
+diff --git a/include/dolphin/gx/GXAurora.h b/include/dolphin/gx/GXAurora.h
+index 1626d56..3184be6 100644
+--- a/include/dolphin/gx/GXAurora.h
++++ b/include/dolphin/gx/GXAurora.h
+@@ -127,6 +127,12 @@ extern "C" {
+  */
+ #define GX_AURORA_SET_COPY_TEX_FRESH_ONLY 0x0052
+ 
++/**
++ * The scene mirror (aurora/mirror.h): marks where a frame's 3D scene begins and ends, in GX
++ * stream order. Followed by a u32 mark (AURORA_MIRROR_MARK_*) and an f32 value.
++ */
++#define GX_AURORA_MIRROR_MARK 0x0060
++
+ #define GX2_SET_POLYGON_OFFSET 0x1000
+ 
+ 
+@@ -224,6 +230,14 @@ void GXSetOffscreenNativeLogicalSize(u8 enabled);
+  */
+ void GXSetCopyTexFreshOnly(const void* dest, u8 enabled);
+ 
++/**
++ * Scene mirror marks (see GX_AURORA_MIRROR_MARK and aurora/mirror.h).
++ */
++#define AURORA_MIRROR_MARK_BEGIN 1u     /* the frame's 3D scene starts */
++#define AURORA_MIRROR_MARK_END 2u       /* it ends (before the 2D/HUD); value: the camera's focus distance */
++#define AURORA_MIRROR_MARK_NO_SCENE 3u  /* the frame had no 3D scene */
++void GXAuroraMirrorMark(u32 mark, f32 value);
++
+ #if __cplusplus
+ }
+ #endif
+diff --git a/lib/dolphin/gx/GXAurora.cpp b/lib/dolphin/gx/GXAurora.cpp
+index f4572a1..1c27b7e 100644
+--- a/lib/dolphin/gx/GXAurora.cpp
++++ b/lib/dolphin/gx/GXAurora.cpp
+@@ -130,3 +130,9 @@ void GXSetCopyTexFreshOnly(const void* dest, u8 enabled) {
+   GX_WRITE_U64(reinterpret_cast<u64>(dest));
+   GX_WRITE_U8(enabled ? 1 : 0);
+ }
++
++void GXAuroraMirrorMark(u32 mark, f32 value) {
++  GX_WRITE_AURORA(GX_AURORA_MIRROR_MARK);
++  GX_WRITE_U32(mark);
++  GX_WRITE_F32(value);
++}
+diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
+index d51516f..2c6fa6f 100644
+--- a/lib/gx/command_processor.cpp
++++ b/lib/gx/command_processor.cpp
+@@ -6,6 +6,7 @@
+ #include "dolphin/gd/GDGeometry.h"
+ #include "dolphin/gx/GXAurora.h"
+ #include "gx.hpp"
++#include "mirror.hpp"
+ #include "pipeline.hpp"
+ #include "regs.hpp"
+ #include "shader_info.hpp"
+@@ -607,10 +608,16 @@ static void draw_prim(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount, ByteReader&
+     lastDraw->vtxCount += vtxCount;
+     lastDraw->indexCount += numIndices;
+     gfx::detail::increment_merged_draw_count();
++    if (mirror::recording()) {
++      mirror::record(prim, sDrawCache.config.shaderConfig, vtxCount, vertexData.data(), nullptr, 0);
++    }
+     return;
+   }
+ 
+   handle_draw_unmerged(prim, fmt, vtxCount, vertRange);
++  if (mirror::recording()) {
++    mirror::record(prim, sDrawCache.config.shaderConfig, vtxCount, vertexData.data(), nullptr, 0);
++  }
+ }
+ 
+ static void handle_draw(u8 cmd, ByteReader& reader) noexcept {
+@@ -763,8 +770,10 @@ void handle_aurora(ByteReader& reader) noexcept {
+     const u32 width = reader.read<u32>();
+     const u32 height = reader.read<u32>();
+     gfx::begin_offscreen(width, height);
++    mirror::offscreen(true);
+   } else if (subCmd == GX_AURORA_END_OFFSCREEN) {
+     gfx::end_offscreen();
++    mirror::offscreen(false);
+   } else if (subCmd == GX_AURORA_DESTROY_TEXOBJ) {
+     evict_texture_object(reader.read<u32>());
+   } else if (subCmd == GX_AURORA_DESTROY_TLUT) {
+@@ -813,6 +822,10 @@ void handle_aurora(ByteReader& reader) noexcept {
+     const gfx::Range vertRange = gfx::push_verts(vertexData.data(), vertexData.size(), 4);
+     if (indexCount != 0) {
+       push_gx_draw(prim, fmt, vtxCount, vertRange, idxRange, indexCount);
++      if (mirror::recording()) {
++        mirror::record(prim, sDrawCache.config.shaderConfig, vtxCount, vertexData.data(),
++                       reinterpret_cast<const u16*>(indexData.data()), indexCount);
++      }
+     }
+   } else if (subCmd == GX_AURORA_SET_STEREO) {
+     auto& stereo = g_gxState.stereo;
+@@ -845,6 +858,10 @@ void handle_aurora(ByteReader& reader) noexcept {
+       dests.erase(dest);
+     }
+     g_gxState.dirty |= DirtyTextures; // re-collect the sampled fresh-only dests
++  } else if (subCmd == GX_AURORA_MIRROR_MARK) {
++    const u32 mark = reader.read<u32>();
++    const f32 value = reader.read<f32>();
++    mirror::mark(mark, value);
+   } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
+     auto label = reader.read_string();
+     gfx::push_debug_group(std::move(label));
+diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
+new file mode 100644
+index 0000000..25560cf
+--- /dev/null
++++ b/lib/gx/mirror.cpp
+@@ -0,0 +1,1842 @@
++// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
++// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
++// again from any viewpoint.
++//
++// Per draw, on the FIFO thread, after the command processor has pushed it:
++//   - which draws: between the game's BEGIN and END marks, perspective, into the main framebuffer
++//     (no offscreen pass, a full-size viewport), writing colour, with the frame's projection;
++//   - each vertex as the vertex shader has it: its attributes (direct or from the arrays, big- or
++//     little-endian), the position and normal matrices, both colour channels lit by GX's lights,
++//     and the texture coordinate of the one texture the mirror keeps (the "primary": the first
++//     a TEV stage samples that has pixels to copy);
++//   - the TEV stages, run per vertex with that texture's sample T left as an unknown, so their
++//     result is an affine function of it: colour = T.rgb * mul + add. Other textures stand in as
++//     their average colour; where a stage would need T twice, the second use is its average too.
++//     Fog is applied per vertex;
++//   - the material: blend mode as premultiplied weights, alpha test as a cut-out, cull mode, depth
++//     test and write. Opaque draws that neither test nor write depth (the sky) are the background,
++//     pushed past the scene's farthest point so that from any viewpoint they stay behind it.
++// Triangles are grouped by material: solid groups merged, blended ones kept in the game's order.
++// Textures are decoded once (texture_convert) and sent with the frame that first uses them.
++
++#include "mirror.hpp"
++
++#include "aurora/mirror.h"
++#include "../gfx/hash.hpp"
++#include "../gfx/texture_convert.hpp"
++#include "../internal.hpp"
++#include "shader_info.hpp"
++#include "texture.hpp"
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <chrono>
++#include <condition_variable>
++#include <cmath>
++#include <cstring>
++#include <mutex>
++#include <thread>
++#include <unordered_map>
++#include <vector>
++
++namespace aurora::gx::mirror {
++namespace {
++constexpr Module Log{"aurora::gx::mirror"};
++
++using MirrorVertex = aurora::mirror::Vertex;
++using MirrorPart = aurora::mirror::Part;
++
++struct F3 {
++  float x = 0, y = 0, z = 0;
++};
++struct F4 {
++  float v[4] = {0, 0, 0, 0};
++  float& operator[](int i) { return v[i]; }
++  float operator[](int i) const { return v[i]; }
++};
++
++F3 operator-(F3 a, F3 b) { return {a.x - b.x, a.y - b.y, a.z - b.z}; }
++float dot(F3 a, F3 b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
++F3 normalized(F3 a) {
++  const float l = std::sqrt(dot(a, a));
++  return l > 1e-10f ? F3{a.x / l, a.y / l, a.z / l} : a;
++}
++F3 xyz(const Vec4<float>& v) { return {v[0], v[1], v[2]}; }
++F4 f4(const Vec4<float>& v) { return {{v[0], v[1], v[2], v[3]}}; }
++
++// A GX 3x4 matrix (rows) times (x, y, z, w).
++F3 transform(const Mat3x4<float>& m, float x, float y, float z, float w) {
++  return {m.m0[0] * x + m.m0[1] * y + m.m0[2] * z + m.m0[3] * w, m.m1[0] * x + m.m1[1] * y + m.m1[2] * z + m.m1[3] * w,
++          m.m2[0] * x + m.m2[1] * y + m.m2[2] * z + m.m2[3] * w};
++}
++
++// IEEE half floats, without a compiler's half type (MSVC has none): round to nearest, clamped
++// to the finite range, small values flushed to zero.
++uint16_t half(float value) {
++  value = std::clamp(std::isfinite(value) ? value : 0.f, -65504.f, 65504.f);
++  uint32_t bits;
++  std::memcpy(&bits, &value, sizeof bits);
++  const uint32_t sign = (bits >> 16) & 0x8000u;
++  const int exponent = static_cast<int>((bits >> 23) & 0xFFu) - 127 + 15;
++  uint32_t mantissa = bits & 0x7FFFFFu;
++  if (exponent <= 0) {
++    return static_cast<uint16_t>(sign);
++  }
++  uint32_t result = sign | static_cast<uint32_t>(exponent) << 10 | mantissa >> 13;
++  if ((mantissa & 0x1FFFu) > 0x1000u || ((mantissa & 0x1FFFu) == 0x1000u && (result & 1u))) {
++    ++result; // may carry into the exponent, as rounding should
++  }
++  return static_cast<uint16_t>(std::min<uint32_t>(result, sign | 0x7BFFu));
++}
++float from_half(uint16_t h) {
++  const uint32_t sign = static_cast<uint32_t>(h & 0x8000u) << 16;
++  const uint32_t exponent = (h >> 10) & 0x1Fu, mantissa = h & 0x3FFu;
++  uint32_t bits;
++  if (exponent == 0) {
++    if (mantissa == 0) {
++      bits = sign;
++    } else {
++      // Subnormal: normalise it.
++      int e = -1;
++      uint32_t m = mantissa;
++      do {
++        ++e;
++        m <<= 1;
++      } while ((m & 0x400u) == 0);
++      bits = sign | static_cast<uint32_t>(127 - 15 - e) << 23 | (m & 0x3FFu) << 13;
++    }
++  } else {
++    bits = sign | (exponent + 127 - 15) << 23 | mantissa << 13;
++  }
++  float value;
++  std::memcpy(&value, &bits, sizeof value);
++  return value;
++}
++
++// --- Symbolic TEV values: k * T[sel] + c, T the primary texture's sample (sel -1: a constant).
++
++struct Sym {
++  int8_t sel = -1;
++  float k = 0.f;
++  float c = 0.f;
++};
++
++struct TevContext {
++  std::array<float, 4> primaryAverage{0.5f, 0.5f, 0.5f, 1.f};
++};
++
++Sym constant(float value) { return {-1, 0.f, value}; }
++Sym scaled(Sym a, float f) { return {a.sel, a.k * f, a.c * f}; }
++float average_of(const TevContext& ctx, const Sym& a) { return a.sel < 0 ? a.c : a.k * ctx.primaryAverage[a.sel] + a.c; }
++Sym add(const TevContext& ctx, Sym a, Sym b) {
++  if (b.sel < 0) {
++    return {a.sel, a.k, a.c + b.c};
++  }
++  if (a.sel < 0) {
++    return {b.sel, b.k, a.c + b.c};
++  }
++  if (a.sel == b.sel) {
++    return {a.sel, a.k + b.k, a.c + b.c};
++  }
++  // Two different channels of T: the second as its average.
++  return {a.sel, a.k, a.c + b.k * ctx.primaryAverage[b.sel] + b.c};
++}
++Sym multiply(const TevContext& ctx, Sym a, Sym b) {
++  if (a.sel < 0) {
++    return scaled(b, a.c);
++  }
++  if (b.sel < 0) {
++    return scaled(a, b.c);
++  }
++  return scaled(a, average_of(ctx, b));
++}
++// Clamped over T in [0, 1]: the line through the clamped ends.
++Sym clamped(Sym a, float low, float high) {
++  if (a.sel < 0) {
++    return constant(std::clamp(a.c, low, high));
++  }
++  const float at0 = std::clamp(a.c, low, high), at1 = std::clamp(a.c + a.k, low, high);
++  return {a.sel, at1 - at0, at0};
++}
++
++float tev_scale(GXTevScale scale) {
++  switch (scale) {
++  case GX_CS_SCALE_2:
++    return 2.f;
++  case GX_CS_SCALE_4:
++    return 4.f;
++  case GX_CS_DIVIDE_2:
++    return 0.5f;
++  default:
++    return 1.f;
++  }
++}
++float tev_bias(GXTevBias bias) {
++  switch (bias) {
++  case GX_TB_ADDHALF:
++    return 0.5f;
++  case GX_TB_SUBHALF:
++    return -0.5f;
++  default:
++    return 0.f;
++  }
++}
++
++// One channel of a stage: (d +- mix(a, b, c) + bias) * scale, clamped. The comparison ops are d.
++Sym tev(const TevContext& ctx, const TevOp& op, Sym a, Sym b, Sym c, Sym d) {
++  Sym result = d;
++  if (op.op == GX_TEV_ADD || op.op == GX_TEV_SUB) {
++    const Sym mixed = add(ctx, a, multiply(ctx, add(ctx, b, scaled(a, -1.f)), c));
++    result = add(ctx, d, op.op == GX_TEV_SUB ? scaled(mixed, -1.f) : mixed);
++    result.c += tev_bias(op.bias);
++    result = scaled(result, tev_scale(op.scale));
++  }
++  return op.clamp ? clamped(result, 0.f, 1.f) : clamped(result, -4.f, 4.f);
++}
++
++float konst_colour(GXTevKColorSel sel, int channel) {
++  const auto& k = g_gxState.kcolors;
++  switch (sel) {
++  case GX_TEV_KCSEL_8_8:
++    return 1.f;
++  case GX_TEV_KCSEL_7_8:
++    return 7.f / 8.f;
++  case GX_TEV_KCSEL_6_8:
++    return 6.f / 8.f;
++  case GX_TEV_KCSEL_5_8:
++    return 5.f / 8.f;
++  case GX_TEV_KCSEL_4_8:
++    return 4.f / 8.f;
++  case GX_TEV_KCSEL_3_8:
++    return 3.f / 8.f;
++  case GX_TEV_KCSEL_2_8:
++    return 2.f / 8.f;
++  case GX_TEV_KCSEL_1_8:
++    return 1.f / 8.f;
++  case GX_TEV_KCSEL_K0:
++  case GX_TEV_KCSEL_K1:
++  case GX_TEV_KCSEL_K2:
++  case GX_TEV_KCSEL_K3:
++    return k[sel - GX_TEV_KCSEL_K0][channel];
++  case GX_TEV_KCSEL_K0_R:
++  case GX_TEV_KCSEL_K1_R:
++  case GX_TEV_KCSEL_K2_R:
++  case GX_TEV_KCSEL_K3_R:
++    return k[sel - GX_TEV_KCSEL_K0_R][0];
++  case GX_TEV_KCSEL_K0_G:
++  case GX_TEV_KCSEL_K1_G:
++  case GX_TEV_KCSEL_K2_G:
++  case GX_TEV_KCSEL_K3_G:
++    return k[sel - GX_TEV_KCSEL_K0_G][1];
++  case GX_TEV_KCSEL_K0_B:
++  case GX_TEV_KCSEL_K1_B:
++  case GX_TEV_KCSEL_K2_B:
++  case GX_TEV_KCSEL_K3_B:
++    return k[sel - GX_TEV_KCSEL_K0_B][2];
++  case GX_TEV_KCSEL_K0_A:
++  case GX_TEV_KCSEL_K1_A:
++  case GX_TEV_KCSEL_K2_A:
++  case GX_TEV_KCSEL_K3_A:
++    return k[sel - GX_TEV_KCSEL_K0_A][3];
++  default:
++    return 1.f;
++  }
++}
++
++float konst_alpha(GXTevKAlphaSel sel) {
++  const auto& k = g_gxState.kcolors;
++  switch (sel) {
++  case GX_TEV_KASEL_8_8:
++    return 1.f;
++  case GX_TEV_KASEL_7_8:
++    return 7.f / 8.f;
++  case GX_TEV_KASEL_6_8:
++    return 6.f / 8.f;
++  case GX_TEV_KASEL_5_8:
++    return 5.f / 8.f;
++  case GX_TEV_KASEL_4_8:
++    return 4.f / 8.f;
++  case GX_TEV_KASEL_3_8:
++    return 3.f / 8.f;
++  case GX_TEV_KASEL_2_8:
++    return 2.f / 8.f;
++  case GX_TEV_KASEL_1_8:
++    return 1.f / 8.f;
++  case GX_TEV_KASEL_K0_R:
++  case GX_TEV_KASEL_K1_R:
++  case GX_TEV_KASEL_K2_R:
++  case GX_TEV_KASEL_K3_R:
++    return k[sel - GX_TEV_KASEL_K0_R][0];
++  case GX_TEV_KASEL_K0_G:
++  case GX_TEV_KASEL_K1_G:
++  case GX_TEV_KASEL_K2_G:
++  case GX_TEV_KASEL_K3_G:
++    return k[sel - GX_TEV_KASEL_K0_G][1];
++  case GX_TEV_KASEL_K0_B:
++  case GX_TEV_KASEL_K1_B:
++  case GX_TEV_KASEL_K2_B:
++  case GX_TEV_KASEL_K3_B:
++    return k[sel - GX_TEV_KASEL_K0_B][2];
++  case GX_TEV_KASEL_K0_A:
++  case GX_TEV_KASEL_K1_A:
++  case GX_TEV_KASEL_K2_A:
++  case GX_TEV_KASEL_K3_A:
++    return k[sel - GX_TEV_KASEL_K0_A][3];
++  default:
++    return 1.f;
++  }
++}
++
++int swap_channel(GXTevColorChan chan) { return static_cast<int>(chan); }
++
++bool samples_texture(const TevStage& stage) noexcept {
++  if (stage.texMapId == GX_TEXMAP_NULL) {
++    return false;
++  }
++  const auto& c = stage.colorPass;
++  const auto& a = stage.alphaPass;
++  return c.a == GX_CC_TEXC || c.a == GX_CC_TEXA || c.b == GX_CC_TEXC || c.b == GX_CC_TEXA || c.c == GX_CC_TEXC ||
++         c.c == GX_CC_TEXA || c.d == GX_CC_TEXC || c.d == GX_CC_TEXA || a.a == GX_CA_TEXA || a.b == GX_CA_TEXA ||
++         a.c == GX_CA_TEXA || a.d == GX_CA_TEXA;
++}
++
++bool is_bump_channel(GXChannelID id) { return id == GX_ALPHA_BUMP || id == GX_ALPHA_BUMPN; }
++
++// --- Textures.
++
++constexpr uint8_t kIdentitySwizzle = 0xE4; // r g b a: 0 1 2 3, two bits each
++
++struct TexEntry {
++  uint64_t id = 0;
++  bool ok = false; // decoded: otherwise drawn white
++  std::array<float, 4> average{0.5f, 0.5f, 0.5f, 1.f};
++  bool cutout = false;
++  bool mipmapped = false;
++  uint32_t lastFrame = 0;
++  std::vector<uint64_t> variants; // swizzled copies' ids, removed with it
++};
++
++struct OwnedTexture {
++  uint64_t id;
++  std::vector<uint8_t> rgba;
++  uint32_t width, height;
++  bool mipmapped, cutout;
++};
++
++struct Group {
++  uint64_t key;
++  MirrorPart part{};
++  std::vector<uint32_t> indices;
++  bool blended = false;
++};
++
++struct Built {
++  uint64_t serial = 0;
++  bool scene = false;
++  std::vector<MirrorVertex> vertices;
++  std::vector<uint32_t> indices;
++  std::vector<MirrorPart> parts;
++  float boundsMin[3]{}, boundsMax[3]{};
++  float tanHalfX = 1, tanHalfY = 1, focus = 0, plane = 1;
++};
++
++struct Stats {
++  uint64_t draws = 0, recorded = 0, lines = 0, screen = 0, noColour = 0, viewport = 0, projection = 0, blend = 0,
++           copyOnly = 0, alphaNever = 0, vertices = 0, triangles = 0, background = 0, frames = 0;
++  double seconds = 0;
++};
++
++std::atomic_bool g_enabled{false};
++std::atomic_bool g_reset{false};
++
++// FIFO thread.
++bool g_recording = false;
++int g_offscreen = 0;
++bool g_haveProjection = false;
++float g_p0 = 1, g_p2 = 1;
++bool g_sawDepthWrite = false;
++float g_farthest = 0, g_nearestBackground = INFINITY;
++std::vector<std::pair<uint32_t, uint32_t>> g_backgroundRanges;
++std::vector<Group> g_groups;
++std::unordered_map<uint64_t, size_t> g_solidGroups;
++int g_lastBlended = -1;
++Built g_building;
++uint32_t g_frame = 0;
++std::unordered_map<uint64_t, TexEntry> g_textures;  // by source key
++std::unordered_map<uint64_t, uint64_t> g_variants; // (base id << 8 | swizzle) -> id
++uint64_t g_nextTextureId = 1;
++std::vector<OwnedTexture> g_newTextures;
++std::vector<uint64_t> g_removedTextures;
++Stats g_stats;
++
++// Shared with the consumer.
++std::mutex g_mutex;
++Built g_latest, g_acquired;
++bool g_latestFresh = false;
++uint64_t g_serial = 0;
++std::vector<OwnedTexture> g_pendingTextures, g_acquiredTextures;
++std::vector<uint64_t> g_pendingRemoved, g_acquiredRemoved;
++std::vector<aurora::mirror::Texture> g_textureViews;
++
++uint64_t texture_key(const GXTexObj_& obj, const GXTlutObj_* tlut) {
++  struct Key {
++    const void* data;
++    const void* tlutData;
++    // Not the object id: GXInitTexObj gives a new one each time, and J3D initialises its
++    // materials' texture objects every frame.
++    uint32_t format, width, height, version;
++    uint32_t tlutFormat, tlutEntries, tlutVersion;
++  } key{};
++  key.data = obj.data;
++  key.format = obj.format();
++  key.width = obj.width();
++  key.height = obj.height();
++  key.version = obj.texDataVersion;
++  if (tlut != nullptr) {
++    key.tlutData = tlut->data;
++    key.tlutFormat = tlut->format;
++    key.tlutEntries = tlut->numEntries;
++    key.tlutVersion = tlut->tlutDataVersion;
++  }
++  // A sample of the pixels too, as memory a level freed may hold another texture of the same shape.
++  const auto* bytes = static_cast<const uint8_t*>(obj.data);
++  const size_t size = texture::texture_source_size(key.format, key.width, key.height, 1);
++  const uint64_t sample = xxh3_hash_s(bytes, std::min<size_t>(size, 64)) ^
++                          (size > 128 ? xxh3_hash_s(bytes + size - 64, 64) : 0);
++  return xxh3_hash_s(&key, sizeof key, sample);
++}
++
++const GXTlutObj_* palette_of(const GXTexObj_& obj) {
++  if (!is_palette_format(obj.format())) {
++    return nullptr;
++  }
++  const auto index = static_cast<size_t>(obj.tlut);
++  if (index >= g_gxState.loadedTluts.size() || g_gxState.loadedTluts[index].data == nullptr) {
++    return nullptr;
++  }
++  return &g_gxState.loadedTluts[index];
++}
++
++// The texture's level-zero pixels as RGBA8, or empty.
++std::vector<uint8_t> decode(const GXTexObj_& obj, const GXTlutObj_* tlut) {
++  const u32 format = obj.format(), width = obj.width(), height = obj.height();
++  if (width == 0 || height == 0 || width > 4096 || height > 4096) {
++    return {};
++  }
++  const auto* data = static_cast<const uint8_t*>(obj.data);
++  const size_t size = texture::texture_source_size(format, width, height, 1);
++  if (format == GX_TF_RGBA8_PC) {
++    return {data, data + static_cast<size_t>(width) * height * 4};
++  }
++  if (gfx::is_pc_texture_format(format) && format != GX_TF_BC1_PC) {
++    return {};
++  }
++  gfx::ConvertedTexture converted;
++  if (is_palette_format(format)) {
++    if (tlut == nullptr) {
++      return {};
++    }
++    converted = gfx::convert_texture_palette(format, width, height, 1, {data, size}, tlut->format, tlut->numEntries,
++                                             {static_cast<const uint8_t*>(tlut->data), texture::tlut_source_size(tlut->numEntries)});
++  } else {
++    converted = gfx::convert_texture(format, width, height, 1, {data, size});
++  }
++  if (converted.format != wgpu::TextureFormat::RGBA8Unorm ||
++      converted.data.size() < static_cast<size_t>(width) * height * 4) {
++    return {};
++  }
++  const auto* pixels = converted.data.data();
++  return {pixels, pixels + static_cast<size_t>(width) * height * 4};
++}
++
++// A texture's alpha: all opaque, all but on or off (foliage, cut-out trim), or translucent.
++bool binary_alpha(const std::vector<uint8_t>& rgba) {
++  size_t translucent = 0;
++  uint8_t lowest = 255;
++  for (size_t i = 3; i < rgba.size(); i += 4) {
++    lowest = std::min(lowest, rgba[i]);
++    translucent += rgba[i] > 25 && rgba[i] < 230;
++  }
++  return lowest < 250 && translucent * 10 <= rgba.size() / 4;
++}
++
++TexEntry* texture_entry(const GXTexObj_& obj) {
++  if (!obj.has_data() || g_gxState.copyTextures.contains(obj.data)) {
++    return nullptr;
++  }
++  const GXTlutObj_* tlut = palette_of(obj);
++  const uint64_t key = texture_key(obj, tlut);
++  auto found = g_textures.find(key);
++  if (found != g_textures.end()) {
++    found->second.lastFrame = g_frame;
++    return &found->second;
++  }
++  TexEntry entry;
++  entry.lastFrame = g_frame;
++  entry.mipmapped = obj.has_mips();
++  auto rgba = decode(obj, tlut);
++  if (!rgba.empty()) {
++    entry.ok = true;
++    entry.id = g_nextTextureId++;
++    double sum[4] = {0, 0, 0, 0};
++    for (size_t i = 0; i < rgba.size(); i += 4) {
++      for (int c = 0; c < 4; ++c) {
++        sum[c] += rgba[i + c];
++      }
++    }
++    const double texels = static_cast<double>(rgba.size() / 4);
++    for (int c = 0; c < 4; ++c) {
++      entry.average[c] = static_cast<float>(sum[c] / texels / 255.0);
++    }
++    entry.cutout = binary_alpha(rgba);
++    g_newTextures.push_back({entry.id, std::move(rgba), obj.width(), obj.height(), entry.mipmapped, entry.cutout});
++  }
++  return &g_textures.emplace(key, std::move(entry)).first->second;
++}
++
++// The texture with its channels rearranged, as the TEV reads them (an intensity texture's alpha
++// as colour, a swap table's red as everything...).
++uint64_t texture_variant(TexEntry& entry, const GXTexObj_& obj, uint8_t swizzle) {
++  if (!entry.ok || swizzle == kIdentitySwizzle) {
++    return entry.ok ? entry.id : 0;
++  }
++  const uint64_t key = entry.id << 8 | swizzle;
++  if (auto found = g_variants.find(key); found != g_variants.end()) {
++    return found->second;
++  }
++  // From the pixels decoded this frame, if they're still here; otherwise decoded again.
++  std::vector<uint8_t> rgba;
++  for (const auto& texture : g_newTextures) {
++    if (texture.id == entry.id) {
++      rgba = texture.rgba;
++      break;
++    }
++  }
++  if (rgba.empty()) {
++    rgba = decode(obj, palette_of(obj));
++  }
++  if (rgba.empty()) {
++    return entry.id;
++  }
++  for (size_t i = 0; i < rgba.size(); i += 4) {
++    const uint8_t texel[4] = {rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]};
++    for (int c = 0; c < 4; ++c) {
++      rgba[i + c] = texel[(swizzle >> (2 * c)) & 3];
++    }
++  }
++  const uint64_t id = g_nextTextureId++;
++  const bool cutout = binary_alpha(rgba);
++  g_newTextures.push_back({id, std::move(rgba), obj.width(), obj.height(), entry.mipmapped, cutout});
++  g_variants.emplace(key, id);
++  entry.variants.push_back(id);
++  return id;
++}
++
++void forget_textures() {
++  g_textures.clear();
++  g_variants.clear();
++  g_newTextures.clear();
++  g_removedTextures.clear();
++  std::lock_guard lock(g_mutex);
++  g_pendingTextures.clear();
++  g_pendingRemoved.clear();
++}
++
++// Every few seconds: textures unused for fifteen go.
++void sweep_textures() {
++  for (auto it = g_textures.begin(); it != g_textures.end();) {
++    if (g_frame - it->second.lastFrame > 900) {
++      if (it->second.ok) {
++        g_removedTextures.push_back(it->second.id);
++        g_removedTextures.insert(g_removedTextures.end(), it->second.variants.begin(), it->second.variants.end());
++        const uint64_t id = it->second.id;
++        std::erase_if(g_variants, [id](const auto& v) { return (v.first >> 8) == id; });
++      }
++      it = g_textures.erase(it);
++    } else {
++      ++it;
++    }
++  }
++}
++
++// --- Vertices.
++
++uint32_t read16(const uint8_t* p, bool le) { return le ? (p[0] | p[1] << 8) : (p[0] << 8 | p[1]); }
++uint32_t read32(const uint8_t* p, bool le) {
++  return le ? (p[0] | p[1] << 8 | p[2] << 16 | static_cast<uint32_t>(p[3]) << 24)
++            : (static_cast<uint32_t>(p[0]) << 24 | p[1] << 16 | p[2] << 8 | p[3]);
++}
++
++struct Decoder {
++  const ShaderConfig& config;
++  const uint8_t* vertices;
++  size_t bytes;
++
++  // Where an attribute's data for vertex `v` is, and its endianness; null if out of range.
++  const uint8_t* locate(GXAttr attr, uint32_t v, size_t size, bool* le) const {
++    const AttrConfig& m = config.attrs[attr];
++    const size_t at = static_cast<size_t>(v) * config.vtxStride + m.offset;
++    if (m.attrType == GX_DIRECT) {
++      *le = false;
++      return at + size <= bytes ? vertices + at : nullptr;
++    }
++    const auto& array = g_gxState.arrays[attr];
++    size_t index;
++    if (m.attrType == GX_INDEX8) {
++      if (at + 1 > bytes) {
++        return nullptr;
++      }
++      index = vertices[at];
++    } else {
++      if (at + 2 > bytes) {
++        return nullptr;
++      }
++      index = read16(vertices + at, false);
++    }
++    *le = m.le;
++    const size_t offset = index * m.stride;
++    if (array.data == nullptr || offset + size > array.size) {
++      return nullptr;
++    }
++    return static_cast<const uint8_t*>(array.data) + offset;
++  }
++
++  uint32_t u8(GXAttr attr, uint32_t v, uint32_t fallback) const {
++    if (config.attrs[attr].attrType == GX_NONE) {
++      return fallback;
++    }
++    bool le;
++    const uint8_t* p = locate(attr, v, 1, &le);
++    return p != nullptr ? *p : fallback;
++  }
++
++  // Up to four components of a position, normal or texture coordinate.
++  bool numbers(GXAttr attr, uint32_t v, int count, float* out) const {
++    const AttrConfig& m = config.attrs[attr];
++    if (m.attrType == GX_NONE) {
++      return false;
++    }
++    const int size = m.compType == GX_F32 ? 4 : m.compType >= GX_U16 ? 2 : 1;
++    bool le;
++    const uint8_t* p = locate(attr, v, static_cast<size_t>(size) * count, &le);
++    if (p == nullptr) {
++      return false;
++    }
++    const float scale = 1.f / static_cast<float>(1u << m.frac);
++    for (int i = 0; i < count; ++i, p += size) {
++      switch (m.compType) {
++      case GX_U8:
++        out[i] = static_cast<float>(p[0]) * scale;
++        break;
++      case GX_S8:
++        out[i] = static_cast<float>(static_cast<int8_t>(p[0])) * scale;
++        break;
++      case GX_U16:
++        out[i] = static_cast<float>(read16(p, le)) * scale;
++        break;
++      case GX_S16:
++        out[i] = static_cast<float>(static_cast<int16_t>(read16(p, le))) * scale;
++        break;
++      default: {
++        const uint32_t bits = read32(p, le);
++        std::memcpy(&out[i], &bits, sizeof bits);
++        if (!std::isfinite(out[i])) {
++          out[i] = 0;
++        }
++        break;
++      }
++      }
++    }
++    return true;
++  }
++
++  F4 colour(GXAttr attr, uint32_t v) const {
++    const AttrConfig& m = config.attrs[attr];
++    if (m.attrType == GX_NONE) {
++      return {};
++    }
++    static constexpr int kSizes[] = {2, 3, 4, 2, 3, 4}; // RGB565 RGB8 RGBX8 RGBA4 RGBA6 RGBA8
++    const int size = m.compType < 6 ? kSizes[m.compType] : 4;
++    bool le;
++    const uint8_t* p = locate(attr, v, size, &le);
++    if (p == nullptr) {
++      return {};
++    }
++    switch (m.compType) {
++    case GX_RGB565: {
++      const uint32_t c = read16(p, le);
++      return {{static_cast<float>(c >> 11 & 31) / 31.f, static_cast<float>(c >> 5 & 63) / 63.f,
++               static_cast<float>(c & 31) / 31.f, 1.f}};
++    }
++    case GX_RGB8:
++    case GX_RGBX8:
++      return {{p[0] / 255.f, p[1] / 255.f, p[2] / 255.f, 1.f}};
++    case GX_RGBA4: {
++      const uint32_t c = read16(p, le);
++      return {{static_cast<float>(c >> 12 & 15) / 15.f, static_cast<float>(c >> 8 & 15) / 15.f,
++               static_cast<float>(c >> 4 & 15) / 15.f, static_cast<float>(c & 15) / 15.f}};
++    }
++    case GX_RGBA6: {
++      const uint32_t c = le ? (p[0] | p[1] << 8 | p[2] << 16) : (p[0] << 16 | p[1] << 8 | p[2]);
++      return {{static_cast<float>(c >> 18 & 63) / 63.f, static_cast<float>(c >> 12 & 63) / 63.f,
++               static_cast<float>(c >> 6 & 63) / 63.f, static_cast<float>(c & 63) / 63.f}};
++    }
++    default:
++      return {{p[0] / 255.f, p[1] / 255.f, p[2] / 255.f, p[3] / 255.f}};
++    }
++  }
++};
++
++const Mat3x4<float>& postex_matrix(uint32_t index) {
++  return index < MaxPnMtx ? g_gxState.pnMtx[index].pos : g_gxState.texMtxs[std::min(index - MaxPnMtx, MaxTexMtx - 1)];
++}
++
++F4 light_channel(const ColorChannelConfig& cc, const ColorChannelState& state, const F4& vertexColour, F3 position,
++                 F3 normal) {
++  const F4 material = cc.matSrc == GX_SRC_VTX ? vertexColour : f4(state.matColor);
++  if (!cc.lightingEnabled) {
++    return material;
++  }
++  F4 lighting = cc.ambSrc == GX_SRC_VTX ? vertexColour : f4(state.ambColor);
++  for (u32 l = 0; l < GX::MaxLights; ++l) {
++    if (!state.lightMask.test(l)) {
++      continue;
++    }
++    const Light& light = g_gxState.lights[l];
++    F3 direction = xyz(light.pos) - position;
++    const float distance2 = dot(direction, direction);
++    const float distance = std::sqrt(distance2);
++    if (distance > 1e-10f) {
++      direction = {direction.x / distance, direction.y / distance, direction.z / distance};
++    }
++    float attenuation = 1.f;
++    if (cc.attnFn == GX_AF_SPOT) {
++      const float cosine = std::max(0.f, dot(direction, xyz(light.dir)));
++      const float cosAtt = light.cosAtt[0] + light.cosAtt[1] * cosine + light.cosAtt[2] * cosine * cosine;
++      const float distAtt = light.distAtt[0] + light.distAtt[1] * distance + light.distAtt[2] * distance2;
++      attenuation = distAtt > 1e-10f ? std::max(0.f, cosAtt / distAtt) : 0.f;
++    } else if (cc.attnFn == GX_AF_SPEC) {
++      float a = dot(normal, direction) >= 0.f ? std::max(0.f, dot(normal, xyz(light.dir))) : 0.f;
++      const float cosAtt = light.cosAtt[0] + light.cosAtt[1] * a + light.cosAtt[2] * a * a;
++      F3 k = xyz(light.distAtt);
++      if (cc.diffFn != GX_DF_NONE) {
++        k = normalized(k);
++      }
++      const float distAtt = std::max(0.f, k.x + k.y * a + k.z * a * a);
++      attenuation = distAtt > 1e-10f ? std::max(0.f, cosAtt / distAtt) : 0.f;
++    }
++    float diffuse = 1.f;
++    if (cc.diffFn == GX_DF_SIGN) {
++      diffuse = dot(direction, normal);
++    } else if (cc.diffFn == GX_DF_CLAMP) {
++      diffuse = std::max(0.f, dot(direction, normal));
++    }
++    for (int c = 0; c < 4; ++c) {
++      lighting[c] += attenuation * diffuse * light.color[c];
++    }
++  }
++  F4 out;
++  for (int c = 0; c < 4; ++c) {
++    out[c] = material[c] * std::clamp(lighting[c], 0.f, 1.f);
++  }
++  return out;
++}
++
++// --- Per draw.
++
++struct DrawPlan {
++  int primaryMap = -1;
++  int primaryCoord = -1;
++  TexEntry* primary = nullptr;
++  std::array<std::array<float, 4>, MaxTextures> average{};
++  bool rasterUsed[2] = {false, false};
++  bool alphaAsColour[2] = {false, false};
++  TevContext ctx;
++  // Per stage: its konst colour and alpha.
++  std::array<std::array<float, 4>, MaxTevStages> konst{};
++};
++
++// Which texture the mirror keeps, and the others' averages. False: the draw only samples copies
++// of the framebuffer (a screen effect: bloom, refraction, haze), which a mirror can't show.
++bool plan_draw(const ShaderConfig& config, DrawPlan& plan) {
++  bool sampledCopy = false;
++  for (auto& average : plan.average) {
++    average = {0.5f, 0.5f, 0.5f, 1.f};
++  }
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const TevStage& stage = config.tevStages[i];
++    if (stage.channelId != GX_COLOR_NULL && stage.channelId != GX_COLOR_ZERO && !is_bump_channel(stage.channelId)) {
++      plan.rasterUsed[color_channel(stage.channelId) & 1] = true;
++    }
++    if (!samples_texture(stage) || stage.texMapId >= MaxTextures) {
++      continue;
++    }
++    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
++    TexEntry* entry = texture_entry(obj);
++    if (entry == nullptr || !entry->ok) {
++      sampledCopy = sampledCopy || entry == nullptr;
++      continue;
++    }
++    plan.average[stage.texMapId] = entry->average;
++    if (plan.primary == nullptr) {
++      plan.primary = entry;
++      plan.primaryMap = stage.texMapId;
++      plan.primaryCoord = stage.texCoordId != GX_TEXCOORD_NULL ? stage.texCoordId : -1;
++    }
++  }
++  if (plan.primary != nullptr) {
++    plan.ctx.primaryAverage = plan.primary->average;
++  }
++  for (u32 i = 0; i < std::min<u32>(config.tevStageCount, MaxTevStages); ++i) {
++    const TevStage& stage = config.tevStages[i];
++    for (int c = 0; c < 3; ++c) {
++      plan.konst[i][c] = konst_colour(stage.kcSel, c);
++    }
++    plan.konst[i][3] = konst_alpha(stage.kaSel);
++  }
++  for (int c = 0; c < 2; ++c) {
++    const auto& colour = g_gxState.colorChannelConfig[c];
++    const auto& alpha = g_gxState.colorChannelConfig[c + GX_ALPHA0];
++    plan.alphaAsColour[c] = colour == alpha && g_gxState.colorChannelState[c].lightMask ==
++                                                   g_gxState.colorChannelState[c + GX_ALPHA0].lightMask;
++  }
++  return plan.primary != nullptr || !sampledCopy;
++}
++
++// GX's alpha test as a threshold: the least alpha it passes, when it passes everything above
++// that; -1 when it passes everything (or isn't a threshold), 2 when it passes nothing.
++float alpha_threshold(const AlphaCompare& compare) {
++  if (!compare) {
++    return -1.f;
++  }
++  const auto test = [](GXCompare comp, u32 ref, u32 a) {
++    switch (comp) {
++    case GX_NEVER:
++      return false;
++    case GX_LESS:
++      return a < ref;
++    case GX_EQUAL:
++      return a == ref;
++    case GX_LEQUAL:
++      return a <= ref;
++    case GX_GREATER:
++      return a > ref;
++    case GX_NEQUAL:
++      return a != ref;
++    case GX_GEQUAL:
++      return a >= ref;
++    default:
++      return true;
++    }
++  };
++  const auto passes = [&](u32 a) {
++    const bool p0 = test(compare.comp0, compare.ref0, a), p1 = test(compare.comp1, compare.ref1, a);
++    switch (compare.op) {
++    case GX_AOP_AND:
++      return p0 && p1;
++    case GX_AOP_OR:
++      return p0 || p1;
++    case GX_AOP_XOR:
++      return p0 != p1;
++    default:
++      return p0 == p1;
++    }
++  };
++  int first = -1;
++  for (u32 a = 0; a < 256; ++a) {
++    if (passes(a)) {
++      if (first < 0) {
++        first = static_cast<int>(a);
++      }
++    } else if (first >= 0) {
++      return -1.f; // not a threshold
++    }
++  }
++  if (first < 0) {
++    return 2.f;
++  }
++  return first == 0 ? -1.f : static_cast<float>(first) / 255.f;
++}
++
++// Blend weights from GX's factors: colour = rgb * (base + alpha * a); opacity = 1 - dst factor.
++bool blend_weights(MirrorPart& part) {
++  const auto& st = g_gxState;
++  if (st.blendMode == GX_BM_NONE || (st.blendMode == GX_BM_LOGIC && st.blendOp == GX_LO_COPY)) {
++    return true;
++  }
++  if (st.blendMode != GX_BM_BLEND) {
++    return false; // subtractive and other logic ops
++  }
++  part.kind = aurora::mirror::PartBlend;
++  float colourBase = 0, colourAlpha = 0, opacityBase = 1, opacityAlpha = 0, opacityLuma = 0;
++  switch (st.blendFacSrc) {
++  case GX_BL_ZERO:
++    break;
++  case GX_BL_ONE:
++    colourBase = 1;
++    break;
++  case GX_BL_SRCALPHA:
++    colourAlpha = 1;
++    break;
++  case GX_BL_INVSRCALPHA:
++    colourBase = 1;
++    colourAlpha = -1;
++    break;
++  case GX_BL_DSTCLR: // src * dst: a darkening by src
++    part.colourBase = 0;
++    part.colourAlpha = 0;
++    part.opacityBase = 1;
++    part.opacityAlpha = 0;
++    part.opacityLuma = -1;
++    return st.blendFacDst == GX_BL_ZERO;
++  default:
++    colourBase = 1;
++    break;
++  }
++  switch (st.blendFacDst) {
++  case GX_BL_ZERO:
++    opacityBase = 1;
++    break;
++  case GX_BL_ONE:
++    opacityBase = 0;
++    break;
++  case GX_BL_SRCALPHA:
++    opacityBase = 1;
++    opacityAlpha = -1;
++    break;
++  case GX_BL_INVSRCALPHA:
++    opacityBase = 0;
++    opacityAlpha = 1;
++    break;
++  case GX_BL_SRCCLR:
++    opacityBase = 1;
++    opacityLuma = -1;
++    break;
++  case GX_BL_INVSRCCLR:
++    opacityBase = 0;
++    opacityLuma = 1;
++    break;
++  default:
++    opacityBase = 0;
++    break;
++  }
++  part.colourBase = colourBase;
++  part.colourAlpha = colourAlpha;
++  part.opacityBase = opacityBase;
++  part.opacityAlpha = opacityAlpha;
++  part.opacityLuma = opacityLuma;
++  // A blend that's opaque after all (src one, dst zero).
++  if (colourBase == 1 && colourAlpha == 0 && opacityBase == 1 && opacityAlpha == 0 && opacityLuma == 0) {
++    part.kind = aurora::mirror::PartOpaque;
++  }
++  return true;
++}
++
++uint64_t part_key(const MirrorPart& part) {
++  struct Key {
++    uint64_t texture;
++    uint32_t kind, flags;
++    int32_t cutoff, weights[5];
++    uint8_t wrapS, wrapT;
++  } key{};
++  key.texture = part.texture;
++  key.kind = part.kind;
++  key.flags = part.flags;
++  key.cutoff = static_cast<int32_t>(std::lround(part.cutoff * 255.f));
++  const float weights[5] = {part.colourBase, part.colourAlpha, part.opacityBase, part.opacityAlpha, part.opacityLuma};
++  for (int i = 0; i < 5; ++i) {
++    key.weights[i] = static_cast<int32_t>(std::lround(weights[i] * 16.f));
++  }
++  key.wrapS = part.wrapS;
++  key.wrapT = part.wrapT;
++  return xxh3_hash_s(&key, sizeof key);
++}
++
++Group& group_for(const MirrorPart& part) {
++  const uint64_t key = part_key(part);
++  if (part.kind != aurora::mirror::PartBlend) {
++    if (auto found = g_solidGroups.find(key); found != g_solidGroups.end()) {
++      return g_groups[found->second];
++    }
++    g_solidGroups.emplace(key, g_groups.size());
++    g_groups.push_back({key, part, {}, false});
++    return g_groups.back();
++  }
++  // Blended draws keep the game's order: a run of one material is one group.
++  if (g_lastBlended >= 0 && g_groups[g_lastBlended].key == key) {
++    return g_groups[g_lastBlended];
++  }
++  g_lastBlended = static_cast<int>(g_groups.size());
++  g_groups.push_back({key, part, {}, true});
++  return g_groups.back();
++}
++
++// The texture coordinate GX generates for `coord` at vertex `v`.
++std::array<float, 2> tex_coord(const Decoder& decoder, const ShaderConfig& config, int coord, uint32_t v,
++                               const float position[3], F3 normal, const F4 colours[2], int depth = 0) {
++  if (coord < 0 || coord >= static_cast<int>(MaxTexCoord) || depth > 2) {
++    return {0, 0};
++  }
++  const TcgConfig& tcg = config.tcgs[coord];
++  if (tcg.type >= GX_TG_BUMP0 && tcg.type <= GX_TG_BUMP7) {
++    return tex_coord(decoder, config, tcg.embossSrc, v, position, normal, colours, depth + 1);
++  }
++  float src[4] = {0, 0, 1, 1};
++  if (tcg.src >= GX_TG_TEX0 && tcg.src <= GX_TG_TEX7) {
++    float uv[2] = {0, 0};
++    decoder.numbers(static_cast<GXAttr>(GX_VA_TEX0 + (tcg.src - GX_TG_TEX0)), v,
++                    std::min<int>(config.attrs[GX_VA_TEX0 + (tcg.src - GX_TG_TEX0)].cnt, 2), uv);
++    src[0] = uv[0];
++    src[1] = uv[1];
++  } else if (tcg.src == GX_TG_POS) {
++    src[0] = position[0];
++    src[1] = position[1];
++    src[2] = position[2];
++  } else if (tcg.src == GX_TG_NRM) {
++    src[0] = normal.x;
++    src[1] = normal.y;
++    src[2] = normal.z;
++  } else if (tcg.src == GX_TG_COLOR0 || tcg.src == GX_TG_COLOR1) {
++    const F4& c = colours[tcg.src == GX_TG_COLOR1];
++    for (int i = 0; i < 4; ++i) {
++      src[i] = c[i];
++    }
++  }
++  F3 tmp{src[0], src[1], src[2]};
++  if (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4) {
++    const GXAttr mtxAttr = static_cast<GXAttr>(GX_VA_TEX0MTXIDX + coord);
++    if (config.attrs[mtxAttr].attrType != GX_NONE) {
++      tmp = transform(postex_matrix(decoder.u8(mtxAttr, v, 0) / 3), src[0], src[1], src[2], src[3]);
++    } else if (tcg.mtx != GX_IDENTITY) {
++      tmp = transform(postex_matrix(tcg.mtx / 3), src[0], src[1], src[2], src[3]);
++    }
++    if (tcg.type == GX_TG_MTX2x4) {
++      tmp.z = 1.f;
++    }
++  } else {
++    tmp.z = 1.f;
++  }
++  if (tcg.normalize) {
++    tmp = normalized(tmp);
++  }
++  if (tcg.postMtx != GX_PTIDENTITY) {
++    const u32 index = std::min<u32>((tcg.postMtx - GX_PTTEXMTX0) / 3, MaxPTTexMtx - 1);
++    tmp = transform(g_gxState.ptTexMtxs[index], tmp.x, tmp.y, tmp.z, 1.f);
++  }
++  if (tcg.type == GX_TG_MTX3x4 && std::fabs(tmp.z) > 1e-6f) {
++    return {tmp.x / tmp.z, tmp.y / tmp.z};
++  }
++  return {tmp.x, tmp.y};
++}
++
++// The fog factor at a view-space point, as the fragment shader computes it from its depth.
++float fog_at(F3 view) {
++  const auto& fog = g_gxState.fog;
++  if (fog.type == GX_FOG_NONE) {
++    return 0.f;
++  }
++  const auto& p = g_gxState.proj;
++  float depth;
++  if ((fog.type & 0x08) != 0) {
++    depth = p.m2[2] * view.z + p.m2[3]; // orthographic: z' directly
++    depth = 1.f - depth;
++  } else {
++    // GX's depth: 1 - (p4 z + p5) / z (0 at the near plane, 1 at the far one).
++    depth = std::fabs(view.z) > 1e-6f ? 1.f - (p.m2[2] * view.z + p.m2[3]) / view.z : 0.f;
++  }
++  float base = (fog.type & 0x08) != 0 ? fog.a * depth : (std::fabs(fog.b - depth) > 1e-9f ? fog.a / (fog.b - depth) : 0.f);
++  float f = std::clamp(base - fog.c, 0.f, 1.f);
++  float z;
++  switch (fog.type) {
++  case GX_FOG_PERSP_EXP:
++  case GX_FOG_ORTHO_EXP:
++    z = 1.f - std::exp2(-8.f * f);
++    break;
++  case GX_FOG_PERSP_EXP2:
++  case GX_FOG_ORTHO_EXP2:
++    z = 1.f - std::exp2(-8.f * f * f);
++    break;
++  case GX_FOG_PERSP_REVEXP:
++  case GX_FOG_ORTHO_REVEXP:
++    z = std::exp2(-8.f * (1.f - f));
++    break;
++  case GX_FOG_PERSP_REVEXP2:
++  case GX_FOG_ORTHO_REVEXP2:
++    f = 1.f - f;
++    z = std::exp2(-8.f * f * f);
++    break;
++  default:
++    z = f;
++    break;
++  }
++  return std::clamp(z, 0.f, 1.f);
++}
++
++void begin_frame() {
++  g_building.vertices.clear();
++  g_groups.clear();
++  g_solidGroups.clear();
++  g_lastBlended = -1;
++  g_backgroundRanges.clear();
++  g_haveProjection = false;
++  g_sawDepthWrite = false;
++  g_farthest = 0;
++  g_nearestBackground = INFINITY;
++  g_offscreen = 0;
++}
++
++// Splits every group's triangles that reach in front of `plane` wherever an edge's far end is more
++// than 40% deeper than its near end, edge midpoints shared.
++void subdivide_near(std::vector<MirrorVertex>& vertices, std::vector<Group>& groups, float plane) {
++  const size_t budget = vertices.size() + 400000;
++  std::unordered_map<uint64_t, uint32_t> midpoints;
++  const auto depth = [&](uint32_t i) { return -vertices[i].position[2]; };
++  const auto splits = [&](uint32_t i, uint32_t j) {
++    const float a = depth(i), b = depth(j), near = std::min(a, b), far = std::max(a, b);
++    if (near >= plane || far <= near * 1.4f || vertices.size() >= budget) {
++      return false;
++    }
++    float length2 = 0;
++    for (int c = 0; c < 3; ++c) {
++      const float d = vertices[i].position[c] - vertices[j].position[c];
++      length2 += d * d;
++    }
++    return length2 > (plane / 128) * (plane / 128);
++  };
++  const auto midpoint = [&](uint32_t i, uint32_t j) {
++    const uint64_t key = static_cast<uint64_t>(std::min(i, j)) << 32 | std::max(i, j);
++    if (auto found = midpoints.find(key); found != midpoints.end()) {
++      return found->second;
++    }
++    const MirrorVertex a = vertices[i], b = vertices[j];
++    MirrorVertex m{};
++    for (int c = 0; c < 3; ++c) {
++      m.position[c] = (a.position[c] + b.position[c]) * 0.5f;
++    }
++    for (int c = 0; c < 2; ++c) {
++      m.uv[c] = (a.uv[c] + b.uv[c]) * 0.5f;
++    }
++    for (int c = 0; c < 4; ++c) {
++      m.mul[c] = half((from_half(a.mul[c]) + from_half(b.mul[c])) * 0.5f);
++      m.add[c] = half((from_half(a.add[c]) + from_half(b.add[c])) * 0.5f);
++    }
++    vertices.push_back(m);
++    const auto index = static_cast<uint32_t>(vertices.size() - 1);
++    midpoints.emplace(key, index);
++    return index;
++  };
++  std::vector<uint32_t> out;
++  // Children keep their parent's winding.
++  const auto emit = [&](auto& self, uint32_t v0, uint32_t v1, uint32_t v2, int level) -> void {
++    const bool s01 = level < 24 && splits(v0, v1), s12 = level < 24 && splits(v1, v2), s20 = level < 24 && splits(v2, v0);
++    const int count = s01 + s12 + s20;
++    if (count == 0) {
++      out.insert(out.end(), {v0, v1, v2});
++      return;
++    }
++    if (count == 3) {
++      const uint32_t m01 = midpoint(v0, v1), m12 = midpoint(v1, v2), m20 = midpoint(v2, v0);
++      self(self, v0, m01, m20, level + 1);
++      self(self, m01, v1, m12, level + 1);
++      self(self, m20, m12, v2, level + 1);
++      self(self, m01, m12, m20, level + 1);
++      return;
++    }
++    // Rotated so the split edges come first: (v0 v1), then (v1 v2).
++    if (count == 1) {
++      if (s12) {
++        return self(self, v1, v2, v0, level);
++      }
++      if (s20) {
++        return self(self, v2, v0, v1, level);
++      }
++      const uint32_t m01 = midpoint(v0, v1);
++      self(self, v0, m01, v2, level + 1);
++      self(self, m01, v1, v2, level + 1);
++      return;
++    }
++    if (!s01) {
++      return self(self, v1, v2, v0, level);
++    }
++    if (!s12) {
++      return self(self, v2, v0, v1, level);
++    }
++    const uint32_t m01 = midpoint(v0, v1), m12 = midpoint(v1, v2);
++    self(self, m01, v1, m12, level + 1);
++    self(self, v0, m01, m12, level + 1);
++    self(self, v0, m12, v2, level + 1);
++  };
++  for (Group& group : groups) {
++    bool near = false;
++    for (uint32_t i : group.indices) {
++      if (depth(i) < plane) {
++        near = true;
++        break;
++      }
++    }
++    if (!near) {
++      continue;
++    }
++    out.clear();
++    for (size_t t = 0; t + 2 < group.indices.size(); t += 3) {
++      emit(emit, group.indices[t], group.indices[t + 1], group.indices[t + 2], 0);
++    }
++    group.indices.swap(out);
++  }
++}
++
++// --- Finishing a frame: on a worker of its own, so neither the FIFO thread nor the game thread
++// (which drains the FIFO before the HUD and at the frame's end) waits for it.
++
++struct Job {
++  Built built;
++  std::vector<Group> groups;
++  std::vector<std::pair<uint32_t, uint32_t>> backgroundRanges;
++  float farthest = 0, nearestBackground = INFINITY;
++  bool scene = false;
++  float focus = 0, tanHalfX = 1, tanHalfY = 1;
++  std::vector<OwnedTexture> textures;
++  std::vector<uint64_t> removed;
++};
++
++std::mutex g_jobMutex;
++std::condition_variable g_jobReady;
++Job g_job; // handed over, waiting for the worker
++bool g_jobPending = false;
++std::atomic<uint64_t> g_finishNanos{0}, g_finished{0}, g_dropped{0};
++std::atomic<uint32_t> g_lastParts{0};
++
++void finish(Job& job) {
++  Built& out = job.built;
++  out.scene = job.scene && !job.groups.empty();
++  out.focus = job.focus;
++  out.plane = std::clamp(job.focus * 0.85f, 50.f, 20000.f);
++  out.tanHalfX = job.tanHalfX;
++  out.tanHalfY = job.tanHalfY;
++  out.indices.clear();
++  out.parts.clear();
++  if (!out.scene) {
++    out.vertices.clear();
++  } else {
++    // The background behind everything else.
++    if (!job.backgroundRanges.empty() && job.nearestBackground < INFINITY && job.farthest > 0) {
++      const float push = std::max(1.f, 1.25f * job.farthest / std::max(job.nearestBackground, 1e-3f));
++      for (const auto& [first, end] : job.backgroundRanges) {
++        for (uint32_t i = first; i < end && i < out.vertices.size(); ++i) {
++          for (float& c : out.vertices[i].position) {
++            c *= push;
++          }
++        }
++      }
++    }
++    // Nothing in front of the glass: what's nearer than the plane goes back onto it along its own
++    // line of sight (the ground at the picture's foot, grass by the camera). That changes the
++    // triangles' shapes, so their textures would no longer be spread as the game spreads them: the
++    // ground nearest the camera came out streaked. So first the near triangles are subdivided
++    // until the depth along each edge changes little (the decision is the edge's own, so two
++    // triangles sharing an edge split it alike, with one midpoint: no cracks).
++    const float onPlane = out.plane * 1.0005f;
++    subdivide_near(out.vertices, job.groups, onPlane);
++    for (MirrorVertex& vertex : out.vertices) {
++      const float depth = -vertex.position[2];
++      if (depth > 1e-3f && depth < onPlane) {
++        const float scale = onPlane / depth;
++        for (float& c : vertex.position) {
++          c *= scale;
++        }
++      }
++    }
++    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
++    for (const MirrorVertex& vertex : out.vertices) {
++      for (int c = 0; c < 3; ++c) {
++        low[c] = std::min(low[c], vertex.position[c]);
++        high[c] = std::max(high[c], vertex.position[c]);
++      }
++    }
++    std::copy(low, low + 3, out.boundsMin);
++    std::copy(high, high + 3, out.boundsMax);
++    // Solid groups, then the blended ones in the game's order.
++    for (int pass = 0; pass < 2; ++pass) {
++      for (Group& group : job.groups) {
++        if (group.blended != (pass == 1) || group.indices.empty()) {
++          continue;
++        }
++        group.part.firstIndex = static_cast<uint32_t>(out.indices.size());
++        group.part.indexCount = static_cast<uint32_t>(group.indices.size());
++        out.indices.insert(out.indices.end(), group.indices.begin(), group.indices.end());
++        out.parts.push_back(group.part);
++      }
++    }
++  }
++  g_lastParts = static_cast<uint32_t>(out.parts.size());
++  std::lock_guard lock(g_mutex);
++  out.serial = ++g_serial;
++  std::swap(g_latest, out);
++  g_latestFresh = true;
++  for (auto& texture : job.textures) {
++    g_pendingTextures.push_back(std::move(texture));
++  }
++  g_pendingRemoved.insert(g_pendingRemoved.end(), job.removed.begin(), job.removed.end());
++  job.textures.clear();
++  job.removed.clear();
++}
++
++void worker_main() {
++  Job work;
++  while (true) {
++    {
++      std::unique_lock lock(g_jobMutex);
++      g_jobReady.wait(lock, [] { return g_jobPending; });
++      std::swap(work, g_job);
++      g_jobPending = false;
++    }
++    const auto started = std::chrono::steady_clock::now();
++    finish(work);
++    g_finishNanos += static_cast<uint64_t>(
++        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - started).count());
++    ++g_finished;
++  }
++}
++
++// FIFO thread: the recorded frame to the worker. If it's still busy with the last one, this
++// frame's geometry is dropped (the window keeps the last); its new textures still go.
++void publish(bool scene, float focus) {
++  ++g_frame;
++  if (g_frame % 300 == 0) {
++    sweep_textures();
++  }
++  static std::once_flag started;
++  std::call_once(started, [] { std::thread(worker_main).detach(); });
++  {
++    std::lock_guard lock(g_jobMutex);
++    if (g_jobPending) {
++      ++g_dropped;
++    } else {
++      std::swap(g_job.built, g_building);
++      std::swap(g_job.groups, g_groups);
++      std::swap(g_job.backgroundRanges, g_backgroundRanges);
++      g_job.farthest = g_farthest;
++      g_job.nearestBackground = g_nearestBackground;
++      g_job.scene = scene;
++      g_job.focus = focus;
++      g_job.tanHalfX = g_haveProjection ? 1.f / g_p0 : 1.f;
++      g_job.tanHalfY = g_haveProjection ? 1.f / g_p2 : 1.f;
++      g_jobPending = true;
++    }
++    for (auto& texture : g_newTextures) {
++      g_job.textures.push_back(std::move(texture));
++    }
++    g_job.removed.insert(g_job.removed.end(), g_removedTextures.begin(), g_removedTextures.end());
++  }
++  g_jobReady.notify_one();
++  g_newTextures.clear();
++  g_removedTextures.clear();
++
++  ++g_stats.frames;
++  if (g_stats.frames == 600) {
++    const double f = static_cast<double>(g_stats.frames);
++    const uint64_t finished = std::max<uint64_t>(g_finished.exchange(0), 1);
++    Log.info("mirror: per frame {:.0f} draws, {:.0f} recorded ({:.0f} background), skipped {:.0f} lines, {:.0f} screen, "
++             "{:.0f} no colour, {:.0f} small viewport, {:.0f} other projection, {:.0f} blend, {:.0f} framebuffer "
++             "copies, {:.0f} alpha-never; {:.0f} vertices, {:.0f} triangles, {} parts; recording {:.2f} ms, finishing "
++             "{:.2f} ms (worker), {} frames dropped; {} textures known",
++             g_stats.draws / f, g_stats.recorded / f, g_stats.background / f, g_stats.lines / f, g_stats.screen / f,
++             g_stats.noColour / f, g_stats.viewport / f, g_stats.projection / f, g_stats.blend / f, g_stats.copyOnly / f,
++             g_stats.alphaNever / f, g_stats.vertices / f, g_stats.triangles / f, g_lastParts.load(),
++             g_stats.seconds / f * 1000.0, static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6,
++             g_dropped.exchange(0), g_textures.size());
++    g_stats = {};
++  }
++}
++} // namespace
++
++bool recording() noexcept { return g_recording; }
++
++void mark(u32 mark, f32 value) noexcept {
++  if (mark == AURORA_MIRROR_MARK_BEGIN) {
++    g_recording = g_enabled.load(std::memory_order_relaxed);
++    if (g_reset.exchange(false)) {
++      forget_textures();
++    }
++    if (g_recording) {
++      begin_frame();
++    }
++  } else if (mark == AURORA_MIRROR_MARK_END || mark == AURORA_MIRROR_MARK_NO_SCENE) {
++    if (!g_recording) {
++      return;
++    }
++    g_recording = false;
++    publish(mark == AURORA_MIRROR_MARK_END, value);
++  }
++}
++
++void offscreen(bool begin) noexcept { g_offscreen = std::max(0, g_offscreen + (begin ? 1 : -1)); }
++
++void record(GXPrimitive prim, const ShaderConfig& config, u16 vtxCount, const u8* vertices, const u16* indices,
++            u32 indexCount) noexcept {
++  if (!g_recording || g_offscreen > 0 || vtxCount == 0) {
++    return;
++  }
++  const auto started = std::chrono::steady_clock::now();
++  struct Timer {
++    std::chrono::steady_clock::time_point started;
++    ~Timer() { g_stats.seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(); }
++  } timer{started};
++  const auto& st = g_gxState;
++  ++g_stats.draws;
++  if (config.lineMode != 0) {
++    ++g_stats.lines;
++    return;
++  }
++  if (st.projType == GX_ORTHOGRAPHIC || st.proj.m0[0] <= 0.f || st.proj.m1[1] <= 0.f) {
++    ++g_stats.screen;
++    return;
++  }
++  if (!st.colorUpdate) {
++    ++g_stats.noColour;
++    return;
++  }
++  const auto fb = logical_fb_size();
++  if (st.logicalViewport.width * st.logicalViewport.height < 0.8f * static_cast<float>(fb.x) * static_cast<float>(fb.y)) {
++    ++g_stats.viewport;
++    return;
++  }
++  if (!g_haveProjection) {
++    g_haveProjection = true;
++    g_p0 = st.proj.m0[0];
++    g_p2 = st.proj.m1[1];
++  } else if (std::fabs(st.proj.m0[0] - g_p0) > 0.03f * g_p0 || std::fabs(st.proj.m1[1] - g_p2) > 0.03f * g_p2) {
++    ++g_stats.projection;
++    return;
++  }
++
++  // The material.
++  MirrorPart part{};
++  if (!blend_weights(part)) {
++    ++g_stats.blend;
++    return;
++  }
++  const float threshold = alpha_threshold(config.alphaCompare);
++  if (threshold > 1.f) {
++    ++g_stats.alphaNever;
++    return;
++  }
++  if (threshold > 0.f) {
++    // Alpha-tested blending (foliage, fences) is a cut-out that keeps its depth.
++    // (Only those writing depth: a "greater than 0" test on smoke or a glow keeps its soft edge.)
++    if (part.kind == aurora::mirror::PartOpaque ||
++        (st.depthUpdate && part.colourBase == 0 && part.colourAlpha == 1 && part.opacityBase == 0 &&
++         part.opacityAlpha == 1 && part.opacityLuma == 0)) {
++      part.kind = aurora::mirror::PartCutout;
++    }
++    part.cutoff = threshold;
++  }
++  const bool depthTest = st.depthCompare && st.depthFunc != GX_ALWAYS;
++  if (depthTest) {
++    part.flags |= aurora::mirror::PartDepthTest;
++  }
++  if (st.depthUpdate) {
++    part.flags |= aurora::mirror::PartDepthWrite;
++  }
++  if (st.cullMode == GX_CULL_BACK) {
++    part.flags |= aurora::mirror::PartCullBack;
++  } else if (st.cullMode == GX_CULL_FRONT) {
++    part.flags |= aurora::mirror::PartCullFront;
++  } else if (st.cullMode == GX_CULL_ALL) {
++    return;
++  }
++  // The sky: drawn before the level writes any depth, writing none itself (its dome and its blended
++  // cloud and glow layers), or solid without a depth test.
++  const bool solid = part.kind != aurora::mirror::PartBlend;
++  const bool background = (solid && !depthTest) || (!st.depthUpdate && !g_sawDepthWrite);
++  if (background) {
++    part.flags |= aurora::mirror::PartBackground;
++  } else if (solid && depthTest && st.depthUpdate) {
++    g_sawDepthWrite = true;
++  }
++
++  DrawPlan plan;
++  if (!plan_draw(config, plan)) {
++    ++g_stats.copyOnly;
++    return;
++  }
++  if (plan.primary != nullptr) {
++    const auto& obj = st.loadedTextures[plan.primaryMap];
++    part.wrapS = static_cast<uint8_t>(std::min<int>(obj.wrap_s(), 2));
++    part.wrapT = static_cast<uint8_t>(std::min<int>(obj.wrap_t(), 2));
++  }
++
++  const Decoder decoder{config, vertices, static_cast<size_t>(vtxCount) * config.vtxStride};
++  const uint32_t base = static_cast<uint32_t>(g_building.vertices.size());
++  const auto fogColour = st.fog.color;
++  int8_t channelSel[4] = {-2, -2, -2, -2}; // fixed by the first vertex
++  const auto& stages = config.tevStages;
++  const u32 stageCount = std::min<u32>(config.tevStageCount, MaxTevStages);
++  // Without vertex colours or lighting, every vertex's TEV result is the same: run it once.
++  bool perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE;
++  for (int c = 0; c < 2; ++c) {
++    perVertex = perVertex || (plan.rasterUsed[c] && (st.colorChannelConfig[c].lightingEnabled ||
++                                                     st.colorChannelConfig[c + GX_ALPHA0].lightingEnabled));
++  }
++  std::array<Sym, 4> result{};
++  bool haveResult = false;
++  for (uint32_t v = 0; v < vtxCount; ++v) {
++    float position[3] = {0, 0, 0};
++    const int posCount = config.attrs[GX_VA_POS].cnt == 2 ? 2 : 3;
++    decoder.numbers(GX_VA_POS, v, posCount, position);
++    const uint32_t matrix = std::min<uint32_t>(decoder.u8(GX_VA_PNMTXIDX, v, st.currentPnMtx * 3) / 3, MaxPnMtx - 1);
++    const F3 view = transform(st.pnMtx[matrix].pos, position[0], position[1], position[2], 1.f);
++    float rawNormal[3] = {1, 0, 0};
++    if (config.attrs[GX_VA_NRM].attrType != GX_NONE) {
++      decoder.numbers(GX_VA_NRM, v, 3, rawNormal);
++    }
++    const F3 normal = normalized(transform(st.pnMtx[matrix].nrm, rawNormal[0], rawNormal[1], rawNormal[2], 0.f));
++    const F4 colours[2] = {decoder.colour(GX_VA_CLR0, v), decoder.colour(GX_VA_CLR1, v)};
++    if (perVertex || !haveResult) {
++      haveResult = true;
++      F4 raster[2];
++      for (int c = 0; c < 2; ++c) {
++        if (!plan.rasterUsed[c]) {
++          continue;
++        }
++        const F4 rgb = light_channel(st.colorChannelConfig[c], st.colorChannelState[c], colours[c], view, normal);
++        // The alpha channel, lit the same way as the colour (the usual case), is the colour's alpha.
++        const F4 alpha = plan.alphaAsColour[c] ? rgb
++                                               : light_channel(st.colorChannelConfig[c + GX_ALPHA0],
++                                                               st.colorChannelState[c + GX_ALPHA0], colours[c], view, normal);
++        raster[c] = {{rgb[0], rgb[1], rgb[2], alpha[3]}};
++      }
++
++      // The TEV stages with T unknown.
++      std::array<std::array<Sym, 4>, MaxTevRegs> regs;
++      for (u32 r = 0; r < MaxTevRegs; ++r) {
++        for (int c = 0; c < 4; ++c) {
++          regs[r][c] = constant(st.colorRegs[r][c]);
++        }
++      }
++      for (u32 s = 0; s < stageCount; ++s) {
++        const TevStage& stage = stages[s];
++        const bool primaryStage = plan.primary != nullptr && stage.texMapId == plan.primaryMap;
++        const auto& texSwap = config.tevSwapTable[stage.tevSwapTex];
++        const auto& rasSwap = config.tevSwapTable[stage.tevSwapRas];
++        const int texChannel[4] = {swap_channel(texSwap.red), swap_channel(texSwap.green), swap_channel(texSwap.blue),
++                                   swap_channel(texSwap.alpha)};
++        const int rasChannel[4] = {swap_channel(rasSwap.red), swap_channel(rasSwap.green), swap_channel(rasSwap.blue),
++                                   swap_channel(rasSwap.alpha)};
++        const auto texture = [&](int channel) -> Sym {
++          if (stage.texMapId == GX_TEXMAP_NULL) {
++            return constant(1.f);
++          }
++          const int from = texChannel[channel];
++          if (primaryStage) {
++            return {static_cast<int8_t>(from), 1.f, 0.f};
++          }
++          return constant(stage.texMapId < MaxTextures ? plan.average[stage.texMapId][from] : 0.5f);
++        };
++        const auto raster_value = [&](int channel) -> Sym {
++          if (stage.channelId == GX_COLOR_NULL || stage.channelId == GX_COLOR_ZERO || is_bump_channel(stage.channelId)) {
++            return constant(0.f);
++          }
++          return constant(raster[color_channel(stage.channelId) & 1][rasChannel[channel]]);
++        };
++        const auto colour_arg = [&](GXTevColorArg arg, int c) -> Sym {
++          switch (arg) {
++          case GX_CC_CPREV:
++            return regs[0][c];
++          case GX_CC_APREV:
++            return regs[0][3];
++          case GX_CC_C0:
++            return regs[1][c];
++          case GX_CC_A0:
++            return regs[1][3];
++          case GX_CC_C1:
++            return regs[2][c];
++          case GX_CC_A1:
++            return regs[2][3];
++          case GX_CC_C2:
++            return regs[3][c];
++          case GX_CC_A2:
++            return regs[3][3];
++          case GX_CC_TEXC:
++            return texture(c);
++          case GX_CC_TEXA:
++            return texture(3);
++          case GX_CC_RASC:
++            return raster_value(c);
++          case GX_CC_RASA:
++            return raster_value(3);
++          case GX_CC_ONE:
++            return constant(1.f);
++          case GX_CC_HALF:
++            return constant(0.5f);
++          case GX_CC_KONST:
++            return constant(plan.konst[s][c]);
++          default:
++            return constant(0.f);
++          }
++        };
++        const auto alpha_arg = [&](GXTevAlphaArg arg) -> Sym {
++          switch (arg) {
++          case GX_CA_APREV:
++            return regs[0][3];
++          case GX_CA_A0:
++            return regs[1][3];
++          case GX_CA_A1:
++            return regs[2][3];
++          case GX_CA_A2:
++            return regs[3][3];
++          case GX_CA_TEXA:
++            return texture(3);
++          case GX_CA_RASA:
++            return raster_value(3);
++          case GX_CA_KONST:
++            return constant(plan.konst[s][3]);
++          default:
++            return constant(0.f);
++          }
++        };
++        Sym colour[3];
++        for (int c = 0; c < 3; ++c) {
++          colour[c] = tev(plan.ctx, stage.colorOp, colour_arg(stage.colorPass.a, c), colour_arg(stage.colorPass.b, c),
++                          colour_arg(stage.colorPass.c, c), colour_arg(stage.colorPass.d, c));
++        }
++        const Sym alpha = tev(plan.ctx, stage.alphaOp, alpha_arg(stage.alphaPass.a), alpha_arg(stage.alphaPass.b),
++                              alpha_arg(stage.alphaPass.c), alpha_arg(stage.alphaPass.d));
++        for (int c = 0; c < 3; ++c) {
++          regs[std::min<u32>(stage.colorOp.outReg, MaxTevRegs - 1)][c] = colour[c];
++        }
++        regs[std::min<u32>(stage.alphaOp.outReg, MaxTevRegs - 1)][3] = alpha;
++      }
++      result = regs[0];
++      if (stageCount > 0) {
++        const TevStage& last = stages[stageCount - 1];
++        for (int c = 0; c < 3; ++c) {
++          result[c] = regs[std::min<u32>(last.colorOp.outReg, MaxTevRegs - 1)][c];
++        }
++        result[3] = regs[std::min<u32>(last.alphaOp.outReg, MaxTevRegs - 1)][3];
++      }
++    }
++    const float fog = fog_at(view);
++
++    MirrorVertex out{};
++    out.position[0] = view.x;
++    out.position[1] = view.y;
++    out.position[2] = view.z;
++    if (plan.primary != nullptr) {
++      const auto uv =
++          tex_coord(decoder, config, plan.primaryCoord, v, position, F3{rawNormal[0], rawNormal[1], rawNormal[2]}, colours);
++      out.uv[0] = std::isfinite(uv[0]) ? uv[0] : 0.f;
++      out.uv[1] = std::isfinite(uv[1]) ? uv[1] : 0.f;
++    }
++    for (int c = 0; c < 4; ++c) {
++      Sym s = result[c];
++      if (plan.primary == nullptr) {
++        s = constant(average_of(plan.ctx, s));
++      }
++      if (channelSel[c] == -2) {
++        channelSel[c] = s.sel;
++      } else if (s.sel != channelSel[c]) {
++        s = channelSel[c] < 0 ? constant(average_of(plan.ctx, s))
++                              : Sym{channelSel[c], 0.f, average_of(plan.ctx, s)};
++      }
++      float mul = s.sel < 0 ? 0.f : s.k, addend = s.c;
++      if (c < 3 && fog > 0.f) {
++        mul *= 1.f - fog;
++        addend = addend * (1.f - fog) + fog * fogColour[c];
++      }
++      out.mul[c] = half(mul);
++      out.add[c] = half(addend);
++    }
++    if (background) {
++      g_nearestBackground = std::min(g_nearestBackground, std::sqrt(dot(view, view)));
++    } else {
++      g_farthest = std::max(g_farthest, std::sqrt(dot(view, view)));
++    }
++    g_building.vertices.push_back(out);
++  }
++
++  // The texture as the TEV reads it.
++  if (plan.primary != nullptr) {
++    uint8_t swizzle = 0;
++    for (int c = 0; c < 4; ++c) {
++      const int from = channelSel[c] >= 0 ? channelSel[c] : c;
++      swizzle |= static_cast<uint8_t>(from << (2 * c));
++    }
++    part.texture = texture_variant(*plan.primary, st.loadedTextures[plan.primaryMap], swizzle);
++  }
++
++  Group& group = group_for(part);
++  // Clipped as the GPU clips them, at the camera's near plane and the sides of its view (with a
++  // margin, for a viewer leaning to look past the window's edges): a large triangle (the ground,
++  // the sky) can reach behind the camera, and kept whole it would lie in front of the window's
++  // glass; the ground below the picture would only be subdivided for nothing (subdivide_near).
++  const auto& proj = st.proj;
++  const float far = std::fabs(proj.m2[2]) > 1e-9f ? proj.m2[3] / proj.m2[2] : 1e6f;
++  const float nearClip = std::max(1.f, std::fabs(1.f - proj.m2[2]) > 1e-9f ? -proj.m2[2] * far / (1.f - proj.m2[2]) : 1.f);
++  constexpr float kMargin = 1.4f;
++  const float kx = kMargin / proj.m0[0], ky = kMargin / proj.m1[1];
++  auto& built = g_building.vertices;
++  // Inside where >= 0: near, left, right, bottom, top.
++  const auto inside = [&](int plane, uint32_t i) {
++    const float* p = built[i].position;
++    const float d = -p[2];
++    switch (plane) {
++    case 0:
++      return d - nearClip;
++    case 1:
++      return kx * d + p[0];
++    case 2:
++      return kx * d - p[0];
++    case 3:
++      return ky * d + p[1];
++    default:
++      return ky * d - p[1];
++    }
++  };
++  const auto between = [&](uint32_t p, uint32_t q, float fp, float fq) {
++    const MirrorVertex a = built[p], b = built[q];
++    const float t = fp / (fp - fq);
++    MirrorVertex out{};
++    for (int i = 0; i < 3; ++i) {
++      out.position[i] = a.position[i] + (b.position[i] - a.position[i]) * t;
++    }
++    for (int i = 0; i < 2; ++i) {
++      out.uv[i] = a.uv[i] + (b.uv[i] - a.uv[i]) * t;
++    }
++    const auto lerp16 = [t](uint16_t x, uint16_t y) {
++      const float fx = from_half(x), fy = from_half(y);
++      return half(fx + (fy - fx) * t);
++    };
++    for (int i = 0; i < 4; ++i) {
++      out.mul[i] = lerp16(a.mul[i], b.mul[i]);
++      out.add[i] = lerp16(a.add[i], b.add[i]);
++    }
++    built.push_back(out);
++    return static_cast<uint32_t>(built.size() - 1);
++  };
++  const auto triangle = [&](uint32_t a, uint32_t b, uint32_t c) {
++    if (a == b || b == c || a == c || a >= vtxCount || b >= vtxCount || c >= vtxCount) {
++      return;
++    }
++    uint32_t polygon[9] = {base + a, base + b, base + c};
++    int count = 3;
++    for (int plane = 0; plane < 5 && count >= 3; ++plane) {
++      float values[9];
++      int outside = 0;
++      for (int i = 0; i < count; ++i) {
++        values[i] = inside(plane, polygon[i]);
++        outside += values[i] < 0.f;
++      }
++      if (outside == 0) {
++        continue;
++      }
++      if (outside == count) {
++        return;
++      }
++      uint32_t next[9];
++      int nextCount = 0;
++      for (int i = 0; i < count && nextCount < 8; ++i) {
++        const int j = (i + 1) % count;
++        if (values[i] >= 0.f) {
++          next[nextCount++] = polygon[i];
++        }
++        if ((values[i] >= 0.f) != (values[j] >= 0.f)) {
++          next[nextCount++] = between(polygon[i], polygon[j], values[i], values[j]);
++        }
++      }
++      std::copy(next, next + nextCount, polygon);
++      count = nextCount;
++    }
++    // Turned round: GX's front faces wind clockwise on screen, RealityKit's counter-clockwise.
++    for (int i = 1; i + 1 < count; ++i) {
++      group.indices.insert(group.indices.end(), {polygon[0], polygon[i + 1], polygon[i]});
++      ++g_stats.triangles;
++    }
++  };
++  if (indices != nullptr) {
++    for (u32 i = 0; i + 2 < indexCount; i += 3) {
++      triangle(indices[i], indices[i + 1], indices[i + 2]);
++    }
++  } else if (prim == GX_TRIANGLES) {
++    for (uint32_t i = 0; i + 2 < vtxCount; i += 3) {
++      triangle(i, i + 1, i + 2);
++    }
++  } else if (prim == GX_QUADS) {
++    for (uint32_t i = 0; i + 3 < vtxCount; i += 4) {
++      triangle(i, i + 1, i + 2);
++      triangle(i + 2, i + 3, i);
++    }
++  } else if (prim == GX_TRIANGLESTRIP) {
++    for (uint32_t i = 2; i < vtxCount; ++i) {
++      if (i == 2 || (i & 1) == 0) {
++        triangle(i - 2, i - 1, i);
++      } else {
++        triangle(i - 1, i - 2, i);
++      }
++    }
++  } else if (prim == GX_TRIANGLEFAN) {
++    for (uint32_t i = 2; i < vtxCount; ++i) {
++      triangle(0, i - 1, i);
++    }
++  }
++  if (background) {
++    g_backgroundRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
++    ++g_stats.background;
++  }
++  ++g_stats.recorded;
++  g_stats.vertices += vtxCount;
++}
++} // namespace aurora::gx::mirror
++
++namespace aurora::mirror {
++void set_enabled(bool enabled) noexcept {
++  if (enabled && !gx::mirror::g_enabled.load()) {
++    gx::mirror::g_reset = true;
++  }
++  gx::mirror::g_enabled = enabled;
++}
++
++bool enabled() noexcept { return gx::mirror::g_enabled.load(); }
++
++bool acquire(Frame& frame) noexcept {
++  using namespace gx::mirror;
++  {
++    std::lock_guard lock(g_mutex);
++    if (g_latestFresh) {
++      std::swap(g_latest, g_acquired);
++      g_latestFresh = false;
++    }
++    g_acquiredTextures.clear();
++    g_acquiredTextures.swap(g_pendingTextures);
++    g_acquiredRemoved.clear();
++    g_acquiredRemoved.swap(g_pendingRemoved);
++  }
++  g_textureViews.clear();
++  for (const auto& texture : g_acquiredTextures) {
++    g_textureViews.push_back({texture.id, texture.rgba.data(), texture.width, texture.height, texture.mipmapped,
++                              texture.cutout});
++  }
++  const Built& built = g_acquired;
++  frame = {};
++  frame.serial = built.serial;
++  frame.scene = built.scene;
++  frame.vertices = built.vertices.data();
++  frame.vertexCount = static_cast<uint32_t>(built.vertices.size());
++  frame.indices = built.indices.data();
++  frame.indexCount = static_cast<uint32_t>(built.indices.size());
++  frame.parts = built.parts.data();
++  frame.partCount = static_cast<uint32_t>(built.parts.size());
++  std::copy(built.boundsMin, built.boundsMin + 3, frame.boundsMin);
++  std::copy(built.boundsMax, built.boundsMax + 3, frame.boundsMax);
++  frame.tanHalfX = built.tanHalfX;
++  frame.tanHalfY = built.tanHalfY;
++  frame.focus = built.focus;
++  frame.plane = built.plane;
++  frame.textures = g_textureViews.data();
++  frame.textureCount = static_cast<uint32_t>(g_textureViews.size());
++  frame.removed = g_acquiredRemoved.data();
++  frame.removedCount = static_cast<uint32_t>(g_acquiredRemoved.size());
++  return built.serial != 0;
++}
++} // namespace aurora::mirror
+diff --git a/lib/gx/mirror.hpp b/lib/gx/mirror.hpp
+new file mode 100644
+index 0000000..9ffe163
+--- /dev/null
++++ b/lib/gx/mirror.hpp
+@@ -0,0 +1,17 @@
++#pragma once
++
++// The scene mirror's hooks in the command processor (see aurora/mirror.h). FIFO thread.
++
++#include "gx.hpp"
++
++namespace aurora::gx::mirror {
++// Cheap: whether draws are being recorded right now.
++bool recording() noexcept;
++void mark(u32 mark, f32 value) noexcept;
++// GX_AURORA_BEGIN_OFFSCREEN / END_OFFSCREEN: draws into an offscreen pass aren't the scene.
++void offscreen(bool begin) noexcept;
++// A draw as the command processor pushes it: `vertices` are vtxCount raw GX vertices laid out as
++// `config` says; `indices` (host-endian, triangles) or none for `prim`'s own order.
++void record(GXPrimitive prim, const ShaderConfig& config, u16 vtxCount, const u8* vertices, const u16* indices,
++            u32 indexCount) noexcept;
++} // namespace aurora::gx::mirror

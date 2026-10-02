@@ -23,6 +23,8 @@
 #include "../../../extern/aurora/lib/rmlui.hpp"
 #include <aurora/aurora.h>
 #include <aurora/gfx.hpp>
+#include <aurora/mirror.h>
+#include <dolphin/gx/GXAurora.h>
 #include <webgpu/webgpu_cpp.h>
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -34,7 +36,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstddef>
 #include <mutex>
+#include <vector>
 
 #define WINDOW_LOG(...) std::fprintf(stderr, "[dusk::visionos::window] " __VA_ARGS__)
 
@@ -89,6 +93,7 @@ uint64_t g_handed = 0;
 int g_frameSlot = -1;
 bool g_sceneThisFrame = false;
 bool g_scenePushed = false;  // this frame's scene task is on its way for g_frameSlot
+bool g_mirrorBegun = false;  // a scene-mirror frame was opened this frame, and must be closed
 CameraInfo g_camera;
 
 aurora::gfx::EncoderTaskId g_sceneTask = aurora::gfx::InvalidEncoderTask;
@@ -470,6 +475,11 @@ void begin_frame() {
     g_frameSlot = -1;
     g_sceneThisFrame = false;
     g_scenePushed = false;
+    // The scene mirror records the frame's draws from here to before_hud().
+    if (aurora::mirror::enabled()) {
+        GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, 0.0f);
+        g_mirrorBegun = true;
+    }
 }
 
 void note_scene(const view_class* view) {
@@ -489,7 +499,21 @@ void note_scene(const view_class* view) {
 }
 
 void before_hud() {
-    if (!enabled() || !g_sceneThisFrame) {
+    // The scene mirror's frame ends here, whatever happens below, once the snapshots are taken:
+    // their resolves wait for the FIFO, and the mirror's finishing work then overlaps the HUD.
+    struct CloseMirror {
+        ~CloseMirror() {
+            if (g_mirrorBegun) {
+                g_mirrorBegun = false;
+                GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
+                                   g_camera.focus);
+            }
+        }
+    } closeMirror;
+    if (!enabled()) {
+        return;
+    }
+    if (!g_sceneThisFrame) {
         return;
     }
     const int index = ClaimSlot();
@@ -602,6 +626,45 @@ bool dusk_visionos_window_acquire(dusk_visionos_window_frame* frame) {
     frame->tan_half_y = slot.camera.tanHalfY;
     frame->focus = slot.camera.focus;
     return true;
+}
+
+void dusk_visionos_set_mirror_enabled(bool enabled) {
+    aurora::mirror::set_enabled(enabled);
+}
+
+static_assert(sizeof(dusk_visionos_mirror_vertex) == sizeof(aurora::mirror::Vertex));
+static_assert(sizeof(dusk_visionos_mirror_part) == sizeof(aurora::mirror::Part));
+static_assert(offsetof(dusk_visionos_mirror_part, wrap_s) == offsetof(aurora::mirror::Part, wrapS));
+
+bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame) {
+    static std::vector<dusk_visionos_mirror_texture> textures;
+    aurora::mirror::Frame source;
+    const bool ok = aurora::mirror::acquire(source);
+    textures.clear();
+    for (uint32_t i = 0; i < source.textureCount; ++i) {
+        const auto& t = source.textures[i];
+        textures.push_back({t.id, t.rgba, t.width, t.height, t.mipmapped, t.cutout});
+    }
+    *frame = {};
+    frame->serial = source.serial;
+    frame->scene = source.scene;
+    frame->vertices = reinterpret_cast<const dusk_visionos_mirror_vertex*>(source.vertices);
+    frame->vertex_count = source.vertexCount;
+    frame->indices = source.indices;
+    frame->index_count = source.indexCount;
+    frame->parts = reinterpret_cast<const dusk_visionos_mirror_part*>(source.parts);
+    frame->part_count = source.partCount;
+    std::copy(source.boundsMin, source.boundsMin + 3, frame->bounds_min);
+    std::copy(source.boundsMax, source.boundsMax + 3, frame->bounds_max);
+    frame->tan_half_x = source.tanHalfX;
+    frame->tan_half_y = source.tanHalfY;
+    frame->focus = source.focus;
+    frame->plane = source.plane;
+    frame->textures = textures.data();
+    frame->texture_count = static_cast<uint32_t>(textures.size());
+    frame->removed = source.removed;
+    frame->removed_count = source.removedCount;
+    return ok;
 }
 
 void dusk_visionos_window_release(uint64_t serial) {

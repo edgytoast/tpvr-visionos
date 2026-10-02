@@ -102,6 +102,77 @@ typedef struct dusk_visionos_window_frame {
 bool dusk_visionos_window_acquire(dusk_visionos_window_frame* frame);
 void dusk_visionos_window_release(uint64_t serial);
 
+// The window's scene mirror (aurora/mirror.h, visionos/App/Sources/MirrorScene.swift): the 3D
+// scene's draws as triangles in the camera's view space (right-handed, -z ahead), for RealityKit
+// to render from the viewer's real eyes. Each vertex carries the TEV result as an affine function
+// of its texture's sample T, in the game's gamma space: colour = T.rgb * mul.rgb + add.rgb,
+// alpha = T.a * mul.a + add.a (mul and add half floats).
+typedef struct dusk_visionos_mirror_vertex {
+    float position[3];
+    float uv[2];
+    uint16_t mul[4];
+    uint16_t add[4];
+} dusk_visionos_mirror_vertex;
+
+#define DUSK_MIRROR_PART_OPAQUE 0u
+#define DUSK_MIRROR_PART_CUTOUT 1u
+#define DUSK_MIRROR_PART_BLEND 2u
+#define DUSK_MIRROR_CULL_BACK 1u
+#define DUSK_MIRROR_CULL_FRONT 2u
+#define DUSK_MIRROR_DEPTH_WRITE 4u
+#define DUSK_MIRROR_DEPTH_TEST 8u
+#define DUSK_MIRROR_BACKGROUND 16u
+#define DUSK_MIRROR_WRAP_CLAMP 0u
+#define DUSK_MIRROR_WRAP_REPEAT 1u
+#define DUSK_MIRROR_WRAP_MIRROR 2u
+
+// A run of triangles with one material. Blends are premultiplied (colour + dst * (1 - opacity)):
+// colour = rgb * (colour_base + colour_alpha * a), opacity = opacity_base + opacity_alpha * a +
+// opacity_luma * luma(rgb).
+typedef struct dusk_visionos_mirror_part {
+    uint32_t first_index, index_count;
+    uint64_t texture;  // 0: none (white)
+    uint32_t kind;     // DUSK_MIRROR_PART_*
+    uint32_t flags;
+    float cutoff;
+    float colour_base, colour_alpha, opacity_base, opacity_alpha, opacity_luma;
+    uint8_t wrap_s, wrap_t;
+    uint8_t pad[6];
+} dusk_visionos_mirror_part;
+
+// A texture, sent once: RGBA8, the top row first.
+typedef struct dusk_visionos_mirror_texture {
+    uint64_t id;
+    const uint8_t* rgba;
+    uint32_t width, height;
+    bool mipmapped, cutout;
+} dusk_visionos_mirror_texture;
+
+typedef struct dusk_visionos_mirror_frame {
+    uint64_t serial;
+    bool scene;  // false: no 3D scene this frame
+    const dusk_visionos_mirror_vertex* vertices;
+    uint32_t vertex_count;
+    const uint32_t* indices;
+    uint32_t index_count;
+    const dusk_visionos_mirror_part* parts;
+    uint32_t part_count;
+    float bounds_min[3], bounds_max[3];
+    float tan_half_x, tan_half_y, focus;
+    // Where the window's glass goes (view units): nothing in the frame is nearer.
+    float plane;
+    const dusk_visionos_mirror_texture* textures;  // new since the last acquire
+    uint32_t texture_count;
+    const uint64_t* removed;  // textures no longer used
+    uint32_t removed_count;
+} dusk_visionos_mirror_frame;
+
+// Whether the window wants the mirror (set before or while it shows). Turning it on sends every
+// texture again.
+void dusk_visionos_set_mirror_enabled(bool enabled);
+// The newest frame; its pointers last until the next call (main thread). False before the first.
+bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame);
+
 #ifdef __cplusplus
 }
 #endif

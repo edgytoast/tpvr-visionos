@@ -4,12 +4,12 @@ import SwiftUI
 
 /// Twilight Princess in a window in the shared space (Immersion: Window), beside other apps,
 /// moved and resized with visionOS's own controls. visionOS gives no head pose outside a Full
-/// Space, so the game plays flat, with its own camera, and hands each frame over
-/// (src/dusk/visionos/visionos_window.hpp). Its picture becomes a relief: a grid whose vertices
-/// sit where the game's depth says the scene is, seen through a portal in the window. RealityKit
-/// draws it from the viewer's real eyes, so Hyrule has depth and parallax as you look and lean;
-/// the HUD and Dusklight's menus sit flat on the window's glass. The approach is the SHAR port's
-/// relief window, with one view instead of a stereo pair.
+/// Space, so the game plays flat, with its own camera. Behind a portal in the window, the scene
+/// mirror (MirrorScene) rebuilds the game's 3D draws each frame for RealityKit to render from the
+/// viewer's real eyes, so Hyrule has true depth from any angle; the HUD and Dusklight's menus
+/// come from the game's frames (src/dusk/visionos/visionos_window.hpp) and sit flat on the
+/// window's glass. As the SHAR port's window does. The frames' relief (a grid displaced by the
+/// game's depth) is the fallback: TPVR_TEST_WINDOW_RELIEF=1, or until the mirror has a frame.
 struct GameWindowView: View {
     @EnvironmentObject private var model: GameModel
     @Environment(\.dismissWindow) private var dismissWindow
@@ -85,6 +85,8 @@ final class GameScreen {
     private let queue: MTLCommandQueue
     private let pipelines: Pipelines
     private var frames = 0
+    private var mirror: MirrorScene?
+    private var mirrorShowing = false
 
     private static let rows = 216
 
@@ -106,6 +108,17 @@ final class GameScreen {
         root.addChild(world)
         makePlanes(aspect: aspect)
         root.isEnabled = false  // until the first frame
+        if (ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_RELIEF"] ?? "").isEmpty {
+            do {
+                let mirror = try await MirrorScene()
+                world.addChild(mirror.root)
+                self.mirror = mirror
+                dusk_visionos_set_mirror_enabled(true)
+            } catch {
+                print("[TPVR] the scene mirror failed to load, so the window shows the relief: \(error)")
+                dusk_visionos_set_mirror_enabled(false)
+            }
+        }
     }
 
     /// Window units onto the window: its face is the back of the view's bounds (visionOS clips what
@@ -122,6 +135,7 @@ final class GameScreen {
 
     func update() {
         dusk_visionos_window_tick()
+        mirrorShowing = mirror?.update() ?? false
         var frame = dusk_visionos_window_frame()
         guard dusk_visionos_window_acquire(&frame) else { return }
         let serial = frame.serial
@@ -171,6 +185,13 @@ final class GameScreen {
               frame.tan_half_x > 0, frame.tan_half_y > 0 else {
             // No 3D scene (title, loading, films): the whole picture is flat on the glass.
             pipelines.flat(commands, final: final, ui: ui, hud: hud)
+            primary?.isEnabled = false
+            backstop?.isEnabled = false
+            return true
+        }
+        if mirrorShowing {
+            // The mirror draws the world; only the HUD comes from the frame.
+            pipelines.hud(commands, final: final, scene: scene, ui: ui, hud: hud)
             primary?.isEnabled = false
             backstop?.isEnabled = false
             return true
@@ -248,7 +269,11 @@ final class GameScreen {
         hud.removeFromParent()
         let height = 1 / aspect
         portal = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [PortalMaterial()])
-        portal.components.set(PortalComponent(target: world))
+        // Clipped at the glass, as a real window is (the side towards the viewer, +z, goes): nothing
+        // of the mirror's level may come out between the window and the viewer.
+        portal.components.set(PortalComponent(target: world,
+                                              clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),
+                                              crossingMode: .disabled))
         hud = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [hudMaterial])
         hud.position.z = 0.002
         root.addChild(portal)

@@ -63,9 +63,11 @@ Window plays Twilight Princess as the GameCube game, in third person, in a
 window you can move and resize beside your other apps. visionOS gives an app no
 head tracking outside a full space, so the VR mod is off there and you play with
 a gamepad (DualSense, Xbox or another Bluetooth controller). The picture isn't
-flat: each frame becomes a relief built from the game's depth, behind a portal
-in the window, so Hyrule has depth and parallax as you look and lean. The HUD and
-Dusklight's menus sit on the window's glass. Close the window to quit (the game
+flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
+(its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
+depth and holds up from any angle as you look and lean. The HUD and Dusklight's
+menus sit on the glass. Water and the game's screen effects (bloom, heat haze)
+don't appear in the window yet. Close the window to quit (the game
 saves); the game pauses while the window is in the background.
 
 Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight
@@ -100,7 +102,11 @@ The app takes a few environment variables for headless runs (pass each as
   turns the window to show the relief from the side, `TPVR_TEST_WINDOW_LAYERS=p`
   or `=b` shows one relief layer, `TPVR_TEST_WINDOW_FLAT=1` lays the picture flat
   for comparison, and `TPVR_TEST_WINDOW_DUMP=<frame>` writes that frame's scene,
-  distances and final image raw into Documents.
+  distances and final image raw into Documents. The scene mirror is the default;
+  `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
+  `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
+  parts, textures) into Documents/mirror-dump, which
+  `visionos/scripts/render-mirror-dump.py` renders from the game camera.
 
 ## Layout
 

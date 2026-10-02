@@ -108,9 +108,27 @@ owns the swapchain images and Dawn imports them.
       telephoto shots are laid out for a normal viewing distance. The HUD (what the 2D pass
       changed) and Dusklight's menus sit flat on the glass.
 - [x] Simulator: title attract, Ordon gameplay, straight on and at 15/35 degrees. Headset: untried.
+- [x] The scene mirror, as SHAR's window (the user's call: the relief's disocclusion smears are why
+      SHAR built one). aurora records every perspective draw of the 3D scene between two in-stream
+      marks (extern/aurora/lib/gx/mirror.cpp, GXAuroraMirrorMark) and decodes it on its FIFO
+      thread as the generated shaders would: vertices from the raw GX data, matrices, both colour
+      channels lit by GX's lights, the primary texture's texgen, fog per vertex, and the TEV run
+      with that texture's sample as an unknown, so each vertex carries colour = T x mul + add.
+      Other textures stand in as their average; draws sampling only framebuffer copies (bloom,
+      refraction, haze) are skipped. Triangles are clipped to the camera's near plane and view
+      (40% margin), the sky pushed behind the level, geometry nearer than the glass (0.85 x the
+      camera's focus) moved onto it along its sight line after subdividing it (no streaks).
+      MirrorScene.swift rebuilds one LowLevelMesh a frame with a part per material (ShaderGraph,
+      generated: visionos/scripts/gen-mirror-materials.py); the portal clips at the glass; the HUD
+      still comes from the frames. The relief stays as the fallback (TPVR_TEST_WINDOW_RELIEF=1).
+- [x] Simulator: Ordon and Faron Woods match the game's picture straight on and stand in depth at
+      25 degrees; ~290 draws, ~71k vertices, ~9.4 ms of FIFO-thread time a frame, game at 60 fps.
+      Headset: untried.
+- [ ] Water and screen effects (refraction, bloom, heat haze, DOF) aren't in the mirror: draws that
+      only sample framebuffer copies are skipped. Water could be blended with its own texture.
+- [ ] FIFO-thread cost on the headset; if it limits frame rate, cache decoded static draws in
+      model space (lighting is camera-invariant for world-fixed lights).
 - [ ] Sense controllers in the window (today a gamepad; each Sense half may show up as its own pad).
-- [ ] SHAR's scene mirror for GX: not attempted (TEV materials have no RealityKit equivalent; see
-      the plugin's windowed-mode notes).
 
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
