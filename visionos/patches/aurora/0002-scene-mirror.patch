@@ -12,10 +12,10 @@ index 02a96af..9fcbde8 100644
          lib/gx/shader.cpp
 diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
 new file mode 100644
-index 0000000..9117caf
+index 0000000..80ed4dd
 --- /dev/null
 +++ b/include/aurora/mirror.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,106 @@
 +#pragma once
 +
 +// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
@@ -105,7 +105,8 @@ index 0000000..9117caf
 +  // focus. Nothing is nearer: what was is moved back onto it along its own line of sight, so the
 +  // picture from the camera is unchanged.
 +  float plane;
-+  // Textures new since the last acquire (or new pixels for one sent before), and ones no longer used.
++  // Textures new since the last acquire, and ones no longer used. A texture whose id was sent
++  // before is new pixels for it (a shadow, read back from the GPU each frame): replace it in place.
 +  const Texture* textures;
 +  uint32_t textureCount;
 +  const uint64_t* removed;
@@ -115,11 +116,6 @@ index 0000000..9117caf
 +// Whether to record (any thread). Turning it on starts the textures over: each is sent again.
 +void set_enabled(bool enabled) noexcept;
 +bool enabled() noexcept;
-+
-+// Game thread, after the 3D scene and before the HUD: queues the GPU readback of the framebuffer
-+// copies the scene's mirrored draws use as masks (character shadows). Their pixels arrive with a
-+// later frame, as updates: a Texture whose id was sent before, to be replaced in place.
-+void capture_copies() noexcept;
 +
 +// The newest recorded frame, or false before the first. Its pointers stay valid until the next
 +// call. One consumer thread.
@@ -172,6 +168,35 @@ index f4572a1..1c27b7e 100644
 +  GX_WRITE_U32(mark);
 +  GX_WRITE_F32(value);
 +}
+diff --git a/lib/gfx/recording.cpp b/lib/gfx/recording.cpp
+index 3cc2a95..b09a13d 100644
+--- a/lib/gfx/recording.cpp
++++ b/lib/gfx/recording.cpp
+@@ -1376,7 +1376,10 @@ bool push_encoder_task(EncoderTaskId type, const void* payload, size_t payloadSi
+   }
+ 
+   gx::fifo::drain();
++  return push_encoder_task_in_stream(type, payload, payloadSize);
++}
+ 
++bool push_encoder_task_in_stream(EncoderTaskId type, const void* payload, size_t payloadSize) {
+   if (!g_recorder.active() || g_recorder.currentRenderPass == UINT32_MAX) {
+     Log.warn("push_encoder_task: called outside an active render pass");
+     return false;
+diff --git a/lib/gfx/recording.hpp b/lib/gfx/recording.hpp
+index c799d7a..f36495a 100644
+--- a/lib/gfx/recording.hpp
++++ b/lib/gfx/recording.hpp
+@@ -51,6 +51,9 @@ struct ColorPassDescriptor {
+ };
+ 
+ void finish();
++// push_encoder_task from the thread recording the GX stream (the FIFO thread), which mustn't drain
++// itself: the task lands exactly where the stream is (aurora/mirror.h's shadow captures).
++bool push_encoder_task_in_stream(EncoderTaskId type, const void* payload, size_t payloadSize);
+ void begin_color_pass(const ColorPassDescriptor& desc);
+ void end_color_pass();
+ void queue_texture_copy(wgpu::TexelCopyTextureInfo src, wgpu::TexelCopyTextureInfo dst, wgpu::Extent3D size);
 diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
 index d51516f..2c6fa6f 100644
 --- a/lib/gx/command_processor.cpp
@@ -236,10 +261,10 @@ index d51516f..2c6fa6f 100644
      gfx::push_debug_group(std::move(label));
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..1a1871d
+index 0000000..02012ce
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2470 @@
+@@ -0,0 +1,2483 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -267,7 +292,7 @@ index 0000000..1a1871d
 +#include "../gfx/hash.hpp"
 +#include "../gfx/texture_convert.hpp"
 +#include "../internal.hpp"
-+#include "fifo.hpp"
++#include "../gfx/recording.hpp"
 +#include "shader_info.hpp"
 +#include "texture.hpp"
 +
@@ -279,6 +304,7 @@ index 0000000..1a1871d
 +#include <cmath>
 +#include <cstdlib>
 +#include <cstring>
++#include <deque>
 +#include <string>
 +#include <memory>
 +#include <mutex>
@@ -588,7 +614,7 @@ index 0000000..1a1871d
 +struct TexEntry {
 +  uint64_t id = 0;
 +  bool ok = false; // decoded: otherwise drawn white
-+  bool captured = false; // a framebuffer copy read back from the GPU each frame (capture_copies)
++  bool captured = false; // a framebuffer copy read back from the GPU each frame (capture_entry)
 +  std::array<float, 4> average{0.5f, 0.5f, 0.5f, 1.f};
 +  bool cutout = false;
 +  bool mipmapped = false;
@@ -646,15 +672,33 @@ index 0000000..1a1871d
 +std::unordered_map<uint64_t, uint64_t> g_variants; // (base id << 8 | swizzle) -> id
 +uint64_t g_nextTextureId = 1;
 +
-+// Framebuffer copies to read back (capture_entry, capture_copies).
++// Framebuffer copies read back (capture_entry): one per revision of a copy destination used this
++// frame and per channel arrangement it's read with. TP draws its shadows into one copy, four at a
++// time, one per channel, and a ground patch picks its character's channel with the swap table;
++// and it copies again for the next four. Each is read back right after the draw that uses it, under
++// an id that stays the same from frame to frame (the n-th copy, read this way).
 +struct Capture {
 +  uint64_t id;
 +  gfx::TextureHandle handle;
 +  uint8_t swizzle; // the channels as the TEV reads them (a swap table's red as alpha, for a shadow)
 +};
++struct CaptureVariant {
++  uint64_t id = 0;
++  uint64_t frame = UINT64_MAX;
++  uint32_t revision = 0;
++};
++struct CopySlot {
++  uint64_t frame = UINT64_MAX;
++  uint32_t revision = 0;
++  size_t occurrence = 0;
++  std::deque<TexEntry> entries; // per occurrence (the TEV's view of it); a deque, so they stay put
++  std::deque<std::unordered_map<uint8_t, CaptureVariant>> variants; // per occurrence, by swizzle
++};
++std::unordered_map<const void*, CopySlot> g_copySlots; // FIFO thread
++constexpr size_t kCaptureRing = 256;
 +std::mutex g_captureMutex;
-+std::vector<Capture> g_wanted;                              // this frame's, FIFO thread (under the mutex)
-+std::unordered_map<const void*, TexEntry> g_captureEntries; // FIFO thread: by copy destination
++std::array<Capture, kCaptureRing> g_captureRing; // FIFO thread writes, render worker reads (the mutex)
++uint32_t g_captureNext = 0;                       // FIFO thread
 +std::vector<OwnedTexture> g_newTextures;
 +std::vector<uint64_t> g_removedTextures;
 +Stats g_stats;
@@ -824,11 +868,7 @@ index 0000000..1a1871d
 +
 +void forget_textures() {
 +  g_textures.clear();
-+  g_captureEntries.clear();
-+  {
-+    std::lock_guard lock(g_captureMutex);
-+    g_wanted.clear();
-+  }
++  g_copySlots.clear();
 +  g_variants.clear();
 +  g_newTextures.clear();
 +  g_removedTextures.clear();
@@ -1079,7 +1119,9 @@ index 0000000..1a1871d
 +
 +
 +// A copy the draw samples only through its alpha, as a texture to capture; null if it isn't one.
-+TexEntry* capture_entry(const ShaderConfig& config, int texMap) {
++// record() picks the id and pushes the capture once it knows the swizzle.
++TexEntry* capture_entry(const ShaderConfig& config, int texMap, gfx::TextureHandle* handle, CopySlot** slotOut,
++                        size_t* occurrence, uint32_t* revision) {
 +  for (u32 i = 0; i < config.tevStageCount; ++i) {
 +    const TevStage& stage = config.tevStages[i];
 +    if (stage.texMapId != texMap) {
@@ -1095,19 +1137,27 @@ index 0000000..1a1871d
 +  if (copy == g_gxState.copyTextures.end() || !copy->second.handle) {
 +    return nullptr;
 +  }
-+  auto [found, added] = g_captureEntries.try_emplace(obj.data);
-+  TexEntry& entry = found->second;
-+  if (added) {
-+    entry.id = g_nextTextureId++;
++  CopySlot& slot = g_copySlots[obj.data];
++  if (slot.frame != g_frame) {
++    slot.frame = g_frame;
++    slot.occurrence = 0;
++    slot.revision = copy->second.revision;
++  } else if (slot.revision != copy->second.revision) {
++    ++slot.occurrence;
++    slot.revision = copy->second.revision;
++  }
++  while (slot.entries.size() <= slot.occurrence) {
++    TexEntry& entry = slot.entries.emplace_back();
 +    entry.ok = true;
 +    entry.captured = true;
 +    entry.average = {0.f, 0.f, 0.f, 0.5f};
++    slot.variants.emplace_back();
 +  }
-+  std::lock_guard lock(g_captureMutex);
-+  if (std::none_of(g_wanted.begin(), g_wanted.end(), [&](const Capture& c) { return c.id == entry.id; })) {
-+    g_wanted.push_back({entry.id, copy->second.handle, kIdentitySwizzle});
-+  }
-+  return &entry;
++  *handle = copy->second.handle;
++  *slotOut = &slot;
++  *occurrence = slot.occurrence;
++  *revision = slot.revision;
++  return &slot.entries[slot.occurrence];
 +}
 +
 +// The GPU side, on the render worker: each copy drawn into a 256 x 256 RGBA8 target (a box
@@ -1158,10 +1208,7 @@ index 0000000..1a1871d
 +wgpu::BindGroupLayout g_captureLayout;
 +bool g_captureFailed = false;
 +gfx::EncoderTaskId g_captureTask = gfx::InvalidEncoderTask;
-+constexpr size_t kCaptureBatches = 4;
-+std::array<std::vector<Capture>, kCaptureBatches> g_captureBatches; // under g_captureMutex
-+std::array<std::vector<Readback*>, kCaptureBatches> g_captureEncoded; // render worker
-+uint32_t g_nextCaptureBatch = 0;                                    // game thread
++std::array<Readback*, kCaptureRing> g_captureEncoded{}; // render worker: each ring slot's readback
 +
 +bool ensure_capture_pipeline(const wgpu::Device& device) {
 +  if (g_capturePipeline || g_captureFailed) {
@@ -1249,66 +1296,61 @@ index 0000000..1a1871d
 +
 +void capture_task(const gfx::EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, const void* payload, size_t,
 +                  void*) {
-+  const uint32_t batch = *static_cast<const uint32_t*>(payload) % kCaptureBatches;
-+  std::vector<Capture> captures;
++  const uint32_t slot = *static_cast<const uint32_t*>(payload) % kCaptureRing;
++  Capture capture;
 +  {
 +    std::lock_guard lock(g_captureMutex);
-+    captures.swap(g_captureBatches[batch]);
++    capture = g_captureRing[slot];
 +  }
-+  g_captureEncoded[batch].clear();
-+  if (captures.empty() || !ensure_capture_pipeline(ctx.device)) {
++  g_captureEncoded[slot] = nullptr;
++  const auto& ref = capture.handle;
++  if (!ref || !ref->sampleTextureView || !capturable_format(ref->format) || !ensure_capture_pipeline(ctx.device)) {
 +    return;
 +  }
-+  wgpu::CommandEncoder encoder = cmd;
-+  for (const Capture& capture : captures) {
-+    const auto& ref = capture.handle;
-+    if (!ref || !ref->sampleTextureView || !capturable_format(ref->format)) {
-+      continue;
-+    }
-+    Readback* readback = readback_for(ctx.device, capture.id);
-+    if (readback == nullptr || readback->busy) {
-+      continue;
-+    }
-+    wgpu::BindGroupEntry entry{};
-+    entry.binding = 0;
-+    entry.textureView = ref->sampleTextureView;
-+    wgpu::BindGroupDescriptor groupDesc{};
-+    groupDesc.layout = g_captureLayout;
-+    groupDesc.entryCount = 1;
-+    groupDesc.entries = &entry;
-+    wgpu::BindGroup group = ctx.device.CreateBindGroup(&groupDesc);
-+    wgpu::RenderPassColorAttachment colour{};
-+    colour.view = readback->target.CreateView();
-+    colour.loadOp = wgpu::LoadOp::Clear;
-+    colour.storeOp = wgpu::StoreOp::Store;
-+    colour.clearValue = {0, 0, 0, 0};
-+    wgpu::RenderPassDescriptor passDesc{};
-+    passDesc.label = "Mirror capture";
-+    passDesc.colorAttachmentCount = 1;
-+    passDesc.colorAttachments = &colour;
-+    wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
-+    pass.SetPipeline(g_capturePipeline);
-+    pass.SetBindGroup(0, group);
-+    pass.Draw(3);
-+    pass.End();
-+    wgpu::TexelCopyTextureInfo source{};
-+    source.texture = readback->target;
-+    wgpu::TexelCopyBufferInfo destination{};
-+    destination.buffer = readback->buffer;
-+    destination.layout.bytesPerRow = kCaptureSize * 4;
-+    destination.layout.rowsPerImage = kCaptureSize;
-+    const wgpu::Extent3D size{kCaptureSize, kCaptureSize, 1};
-+    encoder.CopyTextureToBuffer(&source, &destination, &size);
-+    readback->swizzle = capture.swizzle;
-+    readback->busy = true;
-+    g_captureEncoded[batch].push_back(readback);
++  Readback* readback = readback_for(ctx.device, capture.id);
++  if (readback == nullptr || readback->busy) {
++    return; // the last one is still on its way: this one is skipped
 +  }
++  wgpu::CommandEncoder encoder = cmd;
++  wgpu::BindGroupEntry entry{};
++  entry.binding = 0;
++  entry.textureView = ref->sampleTextureView;
++  wgpu::BindGroupDescriptor groupDesc{};
++  groupDesc.layout = g_captureLayout;
++  groupDesc.entryCount = 1;
++  groupDesc.entries = &entry;
++  wgpu::BindGroup group = ctx.device.CreateBindGroup(&groupDesc);
++  wgpu::RenderPassColorAttachment colour{};
++  colour.view = readback->target.CreateView();
++  colour.loadOp = wgpu::LoadOp::Clear;
++  colour.storeOp = wgpu::StoreOp::Store;
++  colour.clearValue = {0, 0, 0, 0};
++  wgpu::RenderPassDescriptor passDesc{};
++  passDesc.label = "Mirror capture";
++  passDesc.colorAttachmentCount = 1;
++  passDesc.colorAttachments = &colour;
++  wgpu::RenderPassEncoder pass = encoder.BeginRenderPass(&passDesc);
++  pass.SetPipeline(g_capturePipeline);
++  pass.SetBindGroup(0, group);
++  pass.Draw(3);
++  pass.End();
++  wgpu::TexelCopyTextureInfo source{};
++  source.texture = readback->target;
++  wgpu::TexelCopyBufferInfo destination{};
++  destination.buffer = readback->buffer;
++  destination.layout.bytesPerRow = kCaptureSize * 4;
++  destination.layout.rowsPerImage = kCaptureSize;
++  const wgpu::Extent3D size{kCaptureSize, kCaptureSize, 1};
++  encoder.CopyTextureToBuffer(&source, &destination, &size);
++  readback->swizzle = capture.swizzle;
++  readback->busy = true;
++  g_captureEncoded[slot] = readback;
 +}
 +
 +// After the frame's submission: the readbacks mapped; their pixels go to the window as updates.
 +void capture_submitted(const gfx::EncoderTaskCompletionContext&, const void* payload, size_t, void*) {
-+  const uint32_t batch = *static_cast<const uint32_t*>(payload) % kCaptureBatches;
-+  for (Readback* readback : g_captureEncoded[batch]) {
++  const uint32_t slot = *static_cast<const uint32_t*>(payload) % kCaptureRing;
++  if (Readback* readback = std::exchange(g_captureEncoded[slot], nullptr)) {
 +    readback->buffer.MapAsync(
 +        wgpu::MapMode::Read, 0, kCaptureBytes, wgpu::CallbackMode::AllowSpontaneous,
 +        [readback](wgpu::MapAsyncStatus status, wgpu::StringView) {
@@ -1332,7 +1374,6 @@ index 0000000..1a1871d
 +          readback->busy = false;
 +        });
 +  }
-+  g_captureEncoded[batch].clear();
 +}
 +
 +struct DrawPlan {
@@ -1344,6 +1385,12 @@ index 0000000..1a1871d
 +  bool alphaAsColour[2] = {false, false};
 +  // A framebuffer copy it samples (refraction, water): the unknown B, what's behind the surface.
 +  int behindMap = -1;
++  // The primary texture is a mask read back from a framebuffer copy (a shadow): which copy, which
++  // time this frame it was made, and its revision.
++  gfx::TextureHandle captureHandle;
++  CopySlot* captureSlot = nullptr;
++  size_t captureOccurrence = 0;
++  uint32_t captureRevision = 0;
 +  TevContext ctx;
 +  // Per stage: its konst colour and alpha.
 +  std::array<std::array<float, 4>, MaxTevStages> konst{};
@@ -1364,8 +1411,9 @@ index 0000000..1a1871d
 +    }
 +    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
 +    TexEntry* entry = texture_entry(obj);
-+    if (entry == nullptr && blended) {
-+      entry = capture_entry(config, stage.texMapId);
++    if (entry == nullptr && blended && plan.primary == nullptr) {
++      entry = capture_entry(config, stage.texMapId, &plan.captureHandle, &plan.captureSlot, &plan.captureOccurrence,
++                            &plan.captureRevision);
 +    }
 +    if (entry == nullptr || !entry->ok) {
 +      if (entry == nullptr && plan.behindMap < 0) {
@@ -1958,7 +2006,9 @@ index 0000000..1a1871d
 +    }
 +    uint32_t polygon[9] = {a, b, c};
 +    int count = 3;
-+    for (int plane = 0; plane < 5 && count >= 3; ++plane) {
++    // The sky only at the near plane: it goes on past the view's sides, for a viewer leaning in.
++    const int planes = job.background ? 1 : 5;
++    for (int plane = 0; plane < planes && count >= 3; ++plane) {
 +      float values[9];
 +      int outside = 0;
 +      for (int i = 0; i < count; ++i) {
@@ -2584,13 +2634,26 @@ index 0000000..1a1871d
 +      swizzle |= static_cast<uint8_t>(from << (2 * c));
 +    }
 +    if (plan.primary->captured) {
-+      // A read-back copy: swizzled as it arrives.
-+      part.texture = plan.primary->id;
-+      std::lock_guard lock(g_captureMutex);
-+      for (Capture& capture : g_wanted) {
-+        if (capture.id == part.texture) {
-+          capture.swizzle = swizzle;
++      // A read-back copy, swizzled as it arrives: read back right here, after this draw, before the
++      // game draws the next shadow into the same copy.
++      CaptureVariant& variant = plan.captureSlot->variants[plan.captureOccurrence][swizzle];
++      if (variant.id == 0) {
++        variant.id = g_nextTextureId++;
++      }
++      part.texture = variant.id;
++      if (variant.frame != g_frame || variant.revision != plan.captureRevision) {
++        variant.frame = g_frame;
++        variant.revision = plan.captureRevision;
++        if (g_captureTask == gfx::InvalidEncoderTask) {
++          g_captureTask = gfx::register_encoder_task_type(
++              {.label = "Mirror capture", .callback = capture_task, .afterSubmit = capture_submitted});
 +        }
++        const uint32_t slot = g_captureNext++ % kCaptureRing;
++        {
++          std::lock_guard lock(g_captureMutex);
++          g_captureRing[slot] = {part.texture, plan.captureHandle, swizzle};
++        }
++        gfx::push_encoder_task_in_stream(g_captureTask, &slot, sizeof slot);
 +      }
 +    } else {
 +      part.texture = texture_variant(*plan.primary, st.loadedTextures[plan.primaryMap], swizzle);
@@ -2643,31 +2706,6 @@ index 0000000..1a1871d
 +}
 +
 +bool enabled() noexcept { return gx::mirror::g_enabled.load(); }
-+
-+void capture_copies() noexcept {
-+  using namespace gx::mirror;
-+  if (!g_enabled.load()) {
-+    return;
-+  }
-+  gx::fifo::drain(); // the scene's draws, and so the copies they use, all noted
-+  {
-+    std::lock_guard lock(g_captureMutex);
-+    if (g_wanted.empty()) {
-+      return;
-+    }
-+  }
-+  if (g_captureTask == gfx::InvalidEncoderTask) {
-+    g_captureTask = gfx::register_encoder_task_type(
-+        {.label = "Mirror capture", .callback = capture_task, .afterSubmit = capture_submitted});
-+  }
-+  const uint32_t batch = g_nextCaptureBatch++ % kCaptureBatches;
-+  {
-+    std::lock_guard lock(g_captureMutex);
-+    g_captureBatches[batch].clear();
-+    g_captureBatches[batch].swap(g_wanted);
-+  }
-+  gfx::push_encoder_task(g_captureTask, &batch, sizeof batch);
-+}
 +
 +bool acquire(Frame& frame) noexcept {
 +  using namespace gx::mirror;

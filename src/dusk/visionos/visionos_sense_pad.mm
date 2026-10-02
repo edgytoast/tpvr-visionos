@@ -5,10 +5,12 @@
 #import <Foundation/Foundation.h>
 #import <GameController/GameController.h>
 
+#include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_joystick.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -108,6 +110,11 @@ void ClaimPort() {
 }  // namespace
 
 void update() {
+    // Spatial controllers (and their element names) arrived with visionOS 26.
+    if (@available(visionOS 26.0, *)) {
+    } else {
+        return;
+    }
     @autoreleasepool {
         Half halves[2];
         GCController* unnamed[2] = {nil, nil};
@@ -144,7 +151,11 @@ void update() {
         const Half& left = halves[0];
         const Half& right = halves[1];
         const auto axis = [](float v) { return static_cast<Sint16>(std::clamp(v, -1.f, 1.f) * 32767.f); };
-        const auto trigger = [](float v) { return static_cast<Sint16>(std::clamp(v, 0.f, 1.f) * 32767.f); };
+        // A virtual gamepad's trigger reads the whole axis range: released is the minimum (written as 0,
+        // it read half pressed, and TP's L and R holds never let go).
+        const auto trigger = [](float v) {
+            return static_cast<Sint16>(std::lround(std::clamp(v, 0.f, 1.f) * 65535.f) - 32768);
+        };
         SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTX, axis(left.stickX));
         SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_LEFTY, axis(-left.stickY));
         SDL_SetJoystickVirtualAxis(joystick, SDL_GAMEPAD_AXIS_RIGHTX, axis(right.stickX));
@@ -162,7 +173,44 @@ void update() {
         SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_DPAD_DOWN, left.stickClick);
         SDL_SetJoystickVirtualButton(joystick, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, right.stickClick);
         ClaimPort();
+        // The writes are only staged until SDL next updates its joysticks: now, not a frame later.
+        SDL_UpdateJoysticks();
     }
+}
+
+bool ignores(const SDL_Event& event) {
+    SDL_JoystickID which = 0;
+    switch (event.type) {
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+        which = event.gaxis.which;
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        which = event.gbutton.which;
+        break;
+    case SDL_EVENT_GAMEPAD_ADDED:
+    case SDL_EVENT_GAMEPAD_REMOVED:
+    case SDL_EVENT_GAMEPAD_REMAPPED:
+        which = event.gdevice.which;
+        break;
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+        which = event.jaxis.which;
+        break;
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+    case SDL_EVENT_JOYSTICK_BUTTON_UP:
+        which = event.jbutton.which;
+        break;
+    default:
+        return false;
+    }
+    if (which == 0 || which == g_pad) {
+        return false;
+    }
+    const char* name = SDL_GetGamepadNameForID(which);
+    if (name == nullptr) {
+        name = SDL_GetJoystickNameForID(which);
+    }
+    return name != nullptr && std::strstr(name, "Sense") != nullptr;
 }
 
 }  // namespace dusk::visionos::sense_pad

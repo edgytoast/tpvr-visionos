@@ -39,6 +39,8 @@ final class MirrorScene {
     private var materialReady: [Bool] = []
     private var serial: UInt64 = 0
     private(set) var hasScene = false
+    private static let cullTest = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_CULL"] ?? ""
+    private static let addRed = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ADD_RED"] == "1"
 
     private var timing = (updates: 0, frames: 0, seconds: 0.0, since: CACurrentMediaTime(), vertices: 0, parts: 0, total: 0)
     private var counts = (texturesMade: 0, texturesFailed: 0, materialSets: 0)
@@ -188,6 +190,15 @@ final class MirrorScene {
         // headset's renderer drew between the vertices and the indices).
         mesh.replaceUnsafeMutableBytes(bufferIndex: 0) { raw in
             raw.copyMemory(from: UnsafeRawBufferPointer(start: vertices, count: vertexCount * 36))
+            // Test runs: TPVR_TEST_MIRROR_ADD_RED=1 makes every vertex mul 0, add opaque red: the
+            // window should be solid red where the mirror draws (it checks uv1/uv2 reach the materials).
+            if Self.addRed {
+                let red: [UInt16] = [0, 0, 0, 0, 0x3C00, 0, 0, 0x3C00]  // half 1.0 = 0x3C00
+                for index in 0..<vertexCount {
+                    let at = raw.baseAddress! + index * 36 + 20
+                    red.withUnsafeBytes { at.copyMemory(from: $0.baseAddress!, byteCount: 16) }
+                }
+            }
         }
         mesh.replaceUnsafeMutableIndices { raw in
             raw.copyMemory(from: UnsafeRawBufferPointer(start: indices, count: indexCount * 4))
@@ -244,6 +255,12 @@ final class MirrorScene {
         made.readsDepth = key.flags & (DUSK_MIRROR_DEPTH_TEST | DUSK_MIRROR_BACKGROUND) != 0 || key.kind != DUSK_MIRROR_PART_BLEND
         made.faceCulling = key.flags & DUSK_MIRROR_CULL_BACK != 0 ? .back
             : key.flags & DUSK_MIRROR_CULL_FRONT != 0 ? .front : .none
+        // Test runs: TPVR_TEST_MIRROR_CULL=none draws both sides, =flip culls the other side.
+        switch Self.cullTest {
+        case "none": made.faceCulling = .none
+        case "flip": made.faceCulling = made.faceCulling == .back ? .front : made.faceCulling == .front ? .back : .none
+        default: break
+        }
         if materials.count > 4096 { materials.removeAll(keepingCapacity: true) }
         materials[key] = made
         return made
@@ -263,9 +280,15 @@ final class MirrorScene {
                     Self.upload(queue: queue, pixels: rgba, width: Int(texture.width), height: Int(texture.height), into: existing)
                     continue
                 }
-                pendingTextures.append(PendingTexture(id: texture.id, pixels: Data(bytes: rgba, count: count),
-                                                      width: Int(texture.width), height: Int(texture.height),
-                                                      mipmapped: texture.mipmapped, cutout: texture.cutout))
+                let pending = PendingTexture(id: texture.id, pixels: Data(bytes: rgba, count: count),
+                                             width: Int(texture.width), height: Int(texture.height),
+                                             mipmapped: texture.mipmapped, cutout: texture.cutout)
+                // A newer read-back of one still waiting replaces it.
+                if let waiting = pendingTextures.firstIndex(where: { $0.id == texture.id }) {
+                    pendingTextures[waiting] = pending
+                } else {
+                    pendingTextures.append(pending)
+                }
             }
         }
         // After the new ones: a texture can arrive and be gone in the same frame. An area's
@@ -291,6 +314,16 @@ final class MirrorScene {
             let pending = pendingTextures.removeFirst()
             if Self.dumpFrame >= 0 {
                 dumpTextures[pending.id] = pending
+            }
+            // Read back again before its first was made: into the texture already there.
+            if let existing = lowLevelTextures[pending.id], existing.descriptor.width == pending.width,
+               existing.descriptor.height == pending.height, existing.descriptor.mipmapLevelCount == 1, !pending.mipmapped {
+                pending.pixels.withUnsafeBytes {
+                    Self.upload(queue: queue, pixels: $0.bindMemory(to: UInt8.self).baseAddress!, width: pending.width,
+                                height: pending.height, into: existing)
+                }
+                made += 1
+                continue
             }
             if let (lowLevel, resource) = makeTexture(pending) {
                 textures[pending.id] = resource

@@ -141,6 +141,7 @@ static RENDERDOC_API_1_1_2* getRenderDocApi() {
 #endif
 #if defined(__APPLE__) && TARGET_OS_VISION
 #include "dusk/visionos/visionos_window.hpp"
+#include "dusk/visionos/visionos_sense_pad.hpp"
 #endif
 
 // --- GLOBALS ---
@@ -198,6 +199,11 @@ bool launchUILoop() {
                 if (dusk::mods::svc::window_dispatch_event(event->sdl)) {
                     break;
                 }
+#if defined(__APPLE__) && TARGET_OS_VISION
+                if (dusk::visionos::window::enabled() && dusk::visionos::sense_pad::ignores(event->sdl)) {
+                    break;  // a Sense half: its presses come through the joined gamepad
+                }
+#endif
                 dusk::mouse::handle_event(event->sdl);
                 dusk::ui::handle_event(event->sdl);
                 dusk::g_imguiConsole.HandleSDLEvent(event->sdl);
@@ -288,6 +294,11 @@ void main01(void) {
                 if (dusk::mods::svc::window_dispatch_event(event->sdl)) {
                     break;
                 }
+#if defined(__APPLE__) && TARGET_OS_VISION
+                if (dusk::visionos::window::enabled() && dusk::visionos::sense_pad::ignores(event->sdl)) {
+                    break;  // a Sense half: its presses come through the joined gamepad
+                }
+#endif
                 dusk::mouse::handle_event(event->sdl);
                 dusk::ui::handle_event(event->sdl);
                 dusk::g_imguiConsole.HandleSDLEvent(event->sdl);

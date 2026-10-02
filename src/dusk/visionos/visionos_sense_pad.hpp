@@ -11,10 +11,16 @@
 //
 // It takes player 1 unless a real gamepad already has it.
 
+union SDL_Event;
+
 namespace dusk::visionos::sense_pad {
 
 // Game thread, once a frame in window mode. Attaches the gamepad while a Sense controller is
 // connected, detaches it when none is.
 void update();
+
+// SDL's own view of a Sense half (its MFi driver lists each as a gamepad): the game's UI skips
+// these events, or each press arrived twice (the half's, then the joined pad's).
+bool ignores(const SDL_Event& event);
 
 }  // namespace dusk::visionos::sense_pad

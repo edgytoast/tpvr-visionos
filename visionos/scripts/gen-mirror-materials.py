@@ -38,7 +38,15 @@ def material(kind, wrapS, wrapT):
         f"float inputs:in1.connect = {a}", f"float inputs:in2.connect = {b}", f"float inputs:in3.connect = {cc}"],
         "float3 outputs:out")
     nodes = [
-        node("UV", "ND_texcoord_vector2", [], "float2 outputs:out"),
+        # GX's v runs down from the texture's top row; RealityKit's (even with no_flip_v) up from its
+        # bottom one, as the relief's UVs found (1 - v). Uncorrected, tiled ground looked right and
+        # Link's clothing atlas came out scrambled, with holes where it sampled transparent texels.
+        node("RawUV", "ND_texcoord_vector2", [], "float2 outputs:out"),
+        node("RawUVSplit", "ND_separate2_vector2", [f"float2 inputs:in.connect = {c('RawUV')}"], SPLIT2),
+        node("FlippedV", "ND_subtract_float", ["float inputs:in1 = 1", f"float inputs:in2.connect = {c('RawUVSplit', 'outy')}"],
+             "float outputs:out"),
+        node("UV", "ND_combine2_vector2", [f"float inputs:in1.connect = {c('RawUVSplit', 'outx')}",
+                                           f"float inputs:in2.connect = {c('FlippedV')}"], "float2 outputs:out"),
         node("Sample", "ND_RealityKitTexture2D_vector4", [
             f"asset inputs:file.connect = {i('Frame')}", f"float2 inputs:texcoord.connect = {c('UV')}",
             "uniform bool inputs:no_flip_v = 1",
@@ -84,10 +92,24 @@ def material(kind, wrapS, wrapT):
         nodes.append(node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Linear')}"], "color3f outputs:out"))
         surface.append(f"color3f inputs:color.connect = {c('RGB')}")
     elif kind == "Cutout":
+        # An alpha test, as GX's: discarded below Cutoff, fully opaque at or above it. Passed straight
+        # through, the texture's alpha left what passed see-through (TP's skin and cloth textures
+        # carry alpha that isn't transparency): opacity is made 0 or 1 first.
         inputs.append("        float inputs:Cutoff = 0.5")
-        nodes.append(node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Linear')}"], "color3f outputs:out"))
-        surface += [f"color3f inputs:color.connect = {c('RGB')}", f"float inputs:opacity.connect = {c('Alpha')}",
-                    f"float inputs:opacityThreshold.connect = {i('Cutoff')}"]
+        nodes += [
+            node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Linear')}"], "color3f outputs:out"),
+            node("AboveCutoff", "ND_subtract_float", [
+                f"float inputs:in1.connect = {c('Alpha')}", f"float inputs:in2.connect = {i('Cutoff')}"], "float outputs:out"),
+            node("Sharpened", "ND_multiply_float", [
+                f"float inputs:in1.connect = {c('AboveCutoff')}", "float inputs:in2 = 100000"], "float outputs:out"),
+            node("Centred", "ND_add_float", [
+                f"float inputs:in1.connect = {c('Sharpened')}", "float inputs:in2 = 0.5"], "float outputs:out"),
+            node("Mask", "ND_clamp_float", [
+                f"float inputs:in.connect = {c('Centred')}", "float inputs:low = 0", "float inputs:high = 1"],
+                "float outputs:out"),
+        ]
+        surface += [f"color3f inputs:color.connect = {c('RGB')}", f"float inputs:opacity.connect = {c('Mask')}",
+                    "float inputs:opacityThreshold = 0.5"]
     else:
         inputs += ["        float inputs:ColourBase = 0", "        float inputs:ColourAlpha = 1",
                    "        float inputs:OpacityBase = 0", "        float inputs:OpacityAlpha = 1",

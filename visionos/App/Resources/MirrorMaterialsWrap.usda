@@ -23,9 +23,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_RC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_RC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_RC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_RC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -216,14 +240,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_RC/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_RC/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_RC.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_RC/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_RC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_RC/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_RC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_RC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -400,6 +448,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_RC/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RC/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RC.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RC/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RC/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_RC/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_RC"
@@ -423,9 +504,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_RC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_RC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_RC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_RC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -682,9 +787,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_RM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_RM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_RM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_RM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -875,14 +1004,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_RM/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_RM/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_RM.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_RM/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_RM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_RM/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_RM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_RM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -1059,6 +1212,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_RM/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RM/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RM.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RM/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RM/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_RM/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_RM"
@@ -1082,9 +1268,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_RM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_RM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_RM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_RM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -1341,9 +1551,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_CR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_CR/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_CR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_CR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -1534,14 +1768,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_CR/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_CR/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_CR.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_CR/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_CR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_CR/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_CR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_CR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -1718,6 +1976,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_CR/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CR/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_CR.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CR/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CR/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_CR/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_CR"
@@ -1741,9 +2032,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_CR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_CR/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_CR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_CR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -2000,9 +2315,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_CC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_CC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_CC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_CC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -2193,14 +2532,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_CC/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_CC/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_CC.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_CC/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_CC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_CC/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_CC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_CC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -2377,6 +2740,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_CC/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CC/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_CC.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CC/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CC/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_CC/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_CC"
@@ -2400,9 +2796,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_CC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_CC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_CC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_CC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -2659,9 +3079,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_CM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_CM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_CM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_CM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -2852,14 +3296,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_CM/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_CM/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_CM.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_CM/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_CM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_CM/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_CM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_CM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -3036,6 +3504,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_CM/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CM/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_CM.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CM/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_CM/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_CM/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_CM"
@@ -3059,9 +3560,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_CM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_CM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_CM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_CM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -3318,9 +3843,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_MR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_MR/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_MR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_MR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -3511,14 +4060,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_MR/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_MR/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_MR.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_MR/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_MR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_MR/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_MR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_MR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -3695,6 +4268,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_MR/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MR/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_MR.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MR/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MR/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_MR/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_MR"
@@ -3718,9 +4324,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_MR/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_MR/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_MR/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_MR/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -3977,9 +4607,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_MC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_MC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_MC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_MC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -4170,14 +4824,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_MC/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_MC/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_MC.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_MC/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_MC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_MC/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_MC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_MC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -4354,6 +5032,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_MC/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MC/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_MC.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MC/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MC/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_MC/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_MC"
@@ -4377,9 +5088,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_MC/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_MC/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_MC/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_MC/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -4636,9 +5371,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorOpaque_MM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_MM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_MM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_MM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -4829,14 +5588,38 @@ def Xform "Root"
             uniform token info:id = "ND_realitykit_unlit_surfaceshader"
             bool inputs:applyPostProcessToneMap = 0
             color3f inputs:color.connect = </Root/MirrorCutout_MM/RGB.outputs:out>
-            float inputs:opacity.connect = </Root/MirrorCutout_MM/Alpha.outputs:out>
-            float inputs:opacityThreshold.connect = </Root/MirrorCutout_MM.inputs:Cutoff>
+            float inputs:opacity.connect = </Root/MirrorCutout_MM/Mask.outputs:out>
+            float inputs:opacityThreshold = 0.5
             token outputs:out
+        }
+
+        def Shader "RawUV"
+        {
+            uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorCutout_MM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_MM/RawUVSplit.outputs:outy>
+            float outputs:out
         }
 
         def Shader "UV"
         {
-            uniform token info:id = "ND_texcoord_vector2"
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_MM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_MM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
@@ -5013,6 +5796,39 @@ def Xform "Root"
             float3 inputs:in.connect = </Root/MirrorCutout_MM/Linear.outputs:out>
             color3f outputs:out
         }
+
+        def Shader "AboveCutoff"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MM/Alpha.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_MM.inputs:Cutoff>
+            float outputs:out
+        }
+
+        def Shader "Sharpened"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MM/AboveCutoff.outputs:out>
+            float inputs:in2 = 100000
+            float outputs:out
+        }
+
+        def Shader "Centred"
+        {
+            uniform token info:id = "ND_add_float"
+            float inputs:in1.connect = </Root/MirrorCutout_MM/Sharpened.outputs:out>
+            float inputs:in2 = 0.5
+            float outputs:out
+        }
+
+        def Shader "Mask"
+        {
+            uniform token info:id = "ND_clamp_float"
+            float inputs:in.connect = </Root/MirrorCutout_MM/Centred.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float outputs:out
+        }
     }
 
     def Material "MirrorBlend_MM"
@@ -5036,9 +5852,33 @@ def Xform "Root"
             token outputs:out
         }
 
-        def Shader "UV"
+        def Shader "RawUV"
         {
             uniform token info:id = "ND_texcoord_vector2"
+            float2 outputs:out
+        }
+
+        def Shader "RawUVSplit"
+        {
+            uniform token info:id = "ND_separate2_vector2"
+            float2 inputs:in.connect = </Root/MirrorBlend_MM/RawUV.outputs:out>
+            float outputs:outx
+            float outputs:outy
+        }
+
+        def Shader "FlippedV"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_MM/RawUVSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "UV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_MM/RawUVSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_MM/FlippedV.outputs:out>
             float2 outputs:out
         }
 
