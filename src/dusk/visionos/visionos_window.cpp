@@ -3,6 +3,8 @@
 // Data path, per frame:
 //   game thread   begin_frame()  waits for the window's tick (the app's RealityKit update)
 //                 note_scene()   the camera's projection and focus, if a 3D scene is drawn
+//                 scene_drawn()  with the scene mirror: resolve_pass(colour) -> encoder task: the
+//                                3D picture before the screen effects (bloom, mist, fades)
 //                 before_hud()   resolve_pass(colour + depth) -> encoder task: scene, distance
 //                 after_hud()    resolve_pass(colour) -> encoder task: final frame, Dusklight UI
 //   render worker the tasks copy the snapshots into the slot's IOSurfaces (Dawn imports them),
@@ -71,16 +73,18 @@ struct CameraInfo {
 // pending fields) and then the render worker; Ready and Reading belong to the app.
 struct Slot {
     SlotState state = SlotState::Free;
-    Surface scene, distance, final, ui;
+    Surface scene, distance, final, ui, base;
     wgpu::Buffer uniforms;
     uint64_t serial = 0;
+    uint32_t gameFrame = 0;
     CameraInfo camera;
-    bool hasScene = false, hasUi = false, hasFinal = false;
+    bool hasScene = false, hasUi = false, hasFinal = false, hasBase = false;
     void* event = nullptr;  // MTLSharedEvent (Dawn's), borrowed
     uint64_t value = 0;
     // Snapshots taken on the game thread, copied on the render worker.
-    wgpu::TextureView pendingScene, pendingDepth, pendingFinal, pendingUi;
+    wgpu::TextureView pendingScene, pendingDepth, pendingFinal, pendingUi, pendingBase;
     uint32_t sceneWidth = 0, sceneHeight = 0, finalWidth = 0, finalHeight = 0, uiWidth = 0, uiHeight = 0;
+    uint32_t baseWidth = 0, baseHeight = 0;
 };
 
 constexpr size_t kSlots = 4;
@@ -94,11 +98,14 @@ uint64_t g_handed = 0;
 int g_frameSlot = -1;
 bool g_sceneThisFrame = false;
 bool g_scenePushed = false;  // this frame's scene task is on its way for g_frameSlot
+bool g_basePushed = false;   // and its base task (the picture before the screen effects)
 bool g_mirrorBegun = false;  // a scene-mirror frame was opened this frame, and must be closed
+uint32_t g_gameFrame = 0;     // this frame's number (24 bits), shared by its window frame and mirror frame
 CameraInfo g_camera;
 
 aurora::gfx::EncoderTaskId g_sceneTask = aurora::gfx::InvalidEncoderTask;
 aurora::gfx::EncoderTaskId g_finalTask = aurora::gfx::InvalidEncoderTask;
+aurora::gfx::EncoderTaskId g_baseTask = aurora::gfx::InvalidEncoderTask;
 
 struct TaskPayload {
     uint32_t slot;
@@ -362,6 +369,24 @@ void SceneTask(const aurora::gfx::EncoderTaskContext& ctx, const wgpu::CommandEn
     slot.hasScene = true;
 }
 
+// Render worker: the 3D picture before the screen effects into the slot.
+void BaseTask(const aurora::gfx::EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, const void* payload,
+              size_t, void*) {
+    Slot& slot = g_slots[static_cast<const TaskPayload*>(payload)->slot];
+    wgpu::CommandEncoder encoder = cmd;
+    slot.hasBase = false;
+    if (!EnsurePipelines(ctx.device) || !slot.pendingBase) {
+        return;
+    }
+    EnsureUniforms(ctx.device, slot);
+    if (!EnsureSurface(ctx.device, slot, slot.base, slot.baseWidth, slot.baseHeight, false) ||
+        !BeginAccess(slot.base)) {
+        return;
+    }
+    Draw(ctx.device, encoder, CopyPipelineFor(slot.base), slot.pendingBase, slot.uniforms, slot.base);
+    slot.hasBase = true;
+}
+
 // Render worker: the finished frame and Dusklight's UI into the slot.
 void FinalTask(const aurora::gfx::EncoderTaskContext& ctx, const wgpu::CommandEncoder& cmd, const void* payload,
                size_t, void*) {
@@ -396,7 +421,9 @@ void FinalSubmitted(const aurora::gfx::EncoderTaskCompletionContext&, const void
     EndAccess(slot.distance, event, value);
     EndAccess(slot.final, event, value);
     EndAccess(slot.ui, event, value);
+    EndAccess(slot.base, event, value);
     slot.pendingScene = nullptr;
+    slot.pendingBase = nullptr;
     slot.pendingDepth = nullptr;
     slot.pendingFinal = nullptr;
     slot.pendingUi = nullptr;
@@ -428,6 +455,10 @@ void RegisterTasks() {
     final.callback = &FinalTask;
     final.afterSubmit = &FinalSubmitted;
     g_finalTask = aurora::gfx::register_encoder_task_type(final);
+    aurora::gfx::EncoderTaskDescriptor base{};
+    base.label = "visionOS window base";
+    base.callback = &BaseTask;
+    g_baseTask = aurora::gfx::register_encoder_task_type(base);
 }
 
 // Game thread: a free slot for this frame, or -1 (the app holds them all: skip this frame).
@@ -476,11 +507,13 @@ void begin_frame() {
     g_frameSlot = -1;
     g_sceneThisFrame = false;
     g_scenePushed = false;
+    g_basePushed = false;
+    g_gameFrame = (g_gameFrame + 1) & 0xFFFFFFu;
     // The Sense controllers, if any, as a gamepad (no controller tracking outside a Full Space).
     sense_pad::update();
     // The scene mirror records the frame's draws from here to before_hud().
     if (aurora::mirror::enabled()) {
-        GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, 0.0f);
+        GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, static_cast<float>(g_gameFrame));
         g_mirrorBegun = true;
     }
 }
@@ -501,8 +534,45 @@ void note_scene(const view_class* view) {
     g_camera.farZ = view->far_;
 }
 
+bool mirroring() {
+    return g_mirrorBegun;
+}
+
+void scene_drawn() {
+    if (!g_mirrorBegun) {
+        return;
+    }
+    // The scene mirror's frame ends here, once the snapshot is taken (its resolve waits for the
+    // FIFO; the mirror's finishing work then overlaps the screen effects and the HUD).
+    struct CloseMirror {
+        ~CloseMirror() {
+            g_mirrorBegun = false;
+            GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
+                               g_camera.focus);
+        }
+    } closeMirror;
+    if (!enabled() || !g_sceneThisFrame) {
+        return;
+    }
+    const int index = ClaimSlot();
+    if (index < 0) {
+        return;
+    }
+    aurora::gfx::ResolvedTargets targets;
+    if (!aurora::gfx::resolve_pass({.color = true}, targets) || !targets.color) {
+        return;
+    }
+    Slot& slot = g_slots[index];
+    slot.pendingBase = targets.color;
+    slot.baseWidth = targets.width;
+    slot.baseHeight = targets.height;
+    const TaskPayload payload{static_cast<uint32_t>(index)};
+    g_basePushed = aurora::gfx::push_encoder_task(g_baseTask, &payload, sizeof(payload));
+}
+
 void before_hud() {
-    // The scene mirror's frame ends here, whatever happens below, once the snapshots are taken:
+    // The scene mirror's frame ends here if scene_drawn() didn't end it, whatever happens below,
+    // once the snapshots are taken:
     // their resolves wait for the FIFO, and the mirror's finishing work then overlaps the HUD.
     struct CloseMirror {
         ~CloseMirror() {
@@ -548,7 +618,17 @@ void after_hud() {
     Slot& slot = g_slots[index];
     if (g_sceneThisFrame && !g_scenePushed) {
         // A 3D frame whose scene didn't make it into this slot (no slot was free before the HUD,
-        // or the snapshot failed): its finished frame and scene wouldn't match. Skip it.
+        // or the snapshot failed): its finished frame and scene wouldn't match. Skip it. If its
+        // base task is queued, that still uses the slot: the final task, with nothing to copy,
+        // hands it back on the render worker after it.
+        if (g_basePushed) {
+            slot.pendingFinal = nullptr;
+            slot.pendingUi = nullptr;
+            const TaskPayload payload{static_cast<uint32_t>(index)};
+            if (aurora::gfx::push_encoder_task(g_finalTask, &payload, sizeof(payload))) {
+                return;
+            }
+        }
         std::lock_guard lock(g_mutex);
         slot.state = SlotState::Free;
         g_frameSlot = -1;
@@ -559,6 +639,10 @@ void after_hud() {
         slot.hasScene = false;
         slot.pendingScene = nullptr;
         slot.pendingDepth = nullptr;
+    }
+    if (!g_basePushed) {
+        slot.hasBase = false;
+        slot.pendingBase = nullptr;
     }
     aurora::gfx::ResolvedTargets targets;
     if (aurora::gfx::resolve_pass({.color = true}, targets) && targets.color) {
@@ -579,6 +663,7 @@ void after_hud() {
             slot.uiHeight = canvas.size.height;
         }
     }
+    slot.gameFrame = g_gameFrame;
     const TaskPayload payload{static_cast<uint32_t>(index)};
     if (!aurora::gfx::push_encoder_task(g_finalTask, &payload, sizeof(payload))) {
         // No pass to put it in: the scene task (if any) still ran, so its access ends with the next
@@ -623,11 +708,13 @@ bool dusk_visionos_window_acquire(dusk_visionos_window_frame* frame) {
     frame->distance = slot.hasScene ? slot.distance.surface : nullptr;
     frame->final = slot.final.surface;
     frame->ui = slot.hasUi ? slot.ui.surface : nullptr;
+    frame->base = slot.hasScene && slot.hasBase ? slot.base.surface : nullptr;
     frame->event = slot.event;
     frame->value = slot.value;
     frame->tan_half_x = slot.camera.tanHalfX;
     frame->tan_half_y = slot.camera.tanHalfY;
     frame->focus = slot.camera.focus;
+    frame->game_frame = slot.gameFrame;
     return true;
 }
 
@@ -639,10 +726,10 @@ static_assert(sizeof(dusk_visionos_mirror_vertex) == sizeof(aurora::mirror::Vert
 static_assert(sizeof(dusk_visionos_mirror_part) == sizeof(aurora::mirror::Part));
 static_assert(offsetof(dusk_visionos_mirror_part, wrap_s) == offsetof(aurora::mirror::Part, wrapS));
 
-bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame) {
+bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame, uint32_t up_to) {
     static std::vector<dusk_visionos_mirror_texture> textures;
     aurora::mirror::Frame source;
-    const bool ok = aurora::mirror::acquire(source);
+    const bool ok = aurora::mirror::acquire(source, up_to);
     textures.clear();
     for (uint32_t i = 0; i < source.textureCount; ++i) {
         const auto& t = source.textures[i];
@@ -650,6 +737,7 @@ bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame) {
     }
     *frame = {};
     frame->serial = source.serial;
+    frame->game_frame = source.tag;
     frame->scene = source.scene;
     frame->vertices = reinterpret_cast<const dusk_visionos_mirror_vertex*>(source.vertices);
     frame->vertex_count = source.vertexCount;

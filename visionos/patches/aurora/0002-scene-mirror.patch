@@ -12,10 +12,10 @@ index 02a96af..9fcbde8 100644
          lib/gx/shader.cpp
 diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
 new file mode 100644
-index 0000000..80ed4dd
+index 0000000..ebedd90
 --- /dev/null
 +++ b/include/aurora/mirror.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,108 @@
 +#pragma once
 +
 +// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
@@ -91,7 +91,8 @@ index 0000000..80ed4dd
 +
 +struct Frame {
 +  uint64_t serial;
-+  bool scene; // false: the frame had no 3D scene
++  uint32_t tag; // the game's number for the frame (the BEGIN mark's value, 24 bits)
++  bool scene;   // false: the frame had no 3D scene
 +  const Vertex* vertices;
 +  uint32_t vertexCount;
 +  const uint32_t* indices;
@@ -117,13 +118,14 @@ index 0000000..80ed4dd
 +void set_enabled(bool enabled) noexcept;
 +bool enabled() noexcept;
 +
-+// The newest recorded frame, or false before the first. Its pointers stay valid until the next
++// The newest recorded frame whose tag is no later than `upTo` (the game frame the caller shows
++// alongside, so the two match), or false before the first. Its pointers stay valid until the next
 +// call. One consumer thread.
-+bool acquire(Frame& frame) noexcept;
++bool acquire(Frame& frame, uint32_t upTo) noexcept;
 +
 +} // namespace aurora::mirror
 diff --git a/include/dolphin/gx/GXAurora.h b/include/dolphin/gx/GXAurora.h
-index 1626d56..3184be6 100644
+index 1626d56..7524b61 100644
 --- a/include/dolphin/gx/GXAurora.h
 +++ b/include/dolphin/gx/GXAurora.h
 @@ -127,6 +127,12 @@ extern "C" {
@@ -146,7 +148,7 @@ index 1626d56..3184be6 100644
 +/**
 + * Scene mirror marks (see GX_AURORA_MIRROR_MARK and aurora/mirror.h).
 + */
-+#define AURORA_MIRROR_MARK_BEGIN 1u     /* the frame's 3D scene starts */
++#define AURORA_MIRROR_MARK_BEGIN 1u     /* the frame's 3D scene starts; value: the game's frame number (< 2^24) */
 +#define AURORA_MIRROR_MARK_END 2u       /* it ends (before the 2D/HUD); value: the camera's focus distance */
 +#define AURORA_MIRROR_MARK_NO_SCENE 3u  /* the frame had no 3D scene */
 +void GXAuroraMirrorMark(u32 mark, f32 value);
@@ -198,7 +200,7 @@ index c799d7a..f36495a 100644
  void end_color_pass();
  void queue_texture_copy(wgpu::TexelCopyTextureInfo src, wgpu::TexelCopyTextureInfo dst, wgpu::Extent3D size);
 diff --git a/lib/gx/command_processor.cpp b/lib/gx/command_processor.cpp
-index d51516f..2c6fa6f 100644
+index d51516f..cf1ba3f 100644
 --- a/lib/gx/command_processor.cpp
 +++ b/lib/gx/command_processor.cpp
 @@ -6,6 +6,7 @@
@@ -248,7 +250,7 @@ index d51516f..2c6fa6f 100644
      }
    } else if (subCmd == GX_AURORA_SET_STEREO) {
      auto& stereo = g_gxState.stereo;
-@@ -845,6 +858,10 @@ void handle_aurora(ByteReader& reader) noexcept {
+@@ -845,10 +858,16 @@ void handle_aurora(ByteReader& reader) noexcept {
        dests.erase(dest);
      }
      g_gxState.dirty |= DirtyTextures; // re-collect the sampled fresh-only dests
@@ -258,13 +260,19 @@ index d51516f..2c6fa6f 100644
 +    mirror::mark(mark, value);
    } else if (subCmd == GX_AURORA_DEBUG_GROUP_PUSH) {
      auto label = reader.read_string();
++    mirror::debug_group(&label);
      gfx::push_debug_group(std::move(label));
+   } else if (subCmd == GX_AURORA_DEBUG_GROUP_POP) {
++    mirror::debug_group(nullptr);
+     pop_debug_group();
+   } else if (subCmd == GX_AURORA_DEBUG_MARKER_INSERT) {
+     auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..02012ce
+index 0000000..431afb3
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2483 @@
+@@ -0,0 +1,2593 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -638,6 +646,7 @@ index 0000000..02012ce
 +
 +struct Built {
 +  uint64_t serial = 0;
++  uint32_t tag = 0; // the game's frame number (the BEGIN mark's value)
 +  bool scene = false;
 +  std::vector<MirrorVertex> vertices;
 +  std::vector<uint32_t> indices;
@@ -668,6 +677,7 @@ index 0000000..02012ce
 +int g_lastBlended = -1;
 +Built g_building;
 +uint32_t g_frame = 0;
++uint32_t g_frameTag = 0; // the game's number for the frame being recorded (the BEGIN mark's value)
 +std::unordered_map<uint64_t, TexEntry> g_textures;  // by source key
 +std::unordered_map<uint64_t, uint64_t> g_variants; // (base id << 8 | swizzle) -> id
 +uint64_t g_nextTextureId = 1;
@@ -705,9 +715,16 @@ index 0000000..02012ce
 +
 +// Shared with the consumer.
 +std::mutex g_mutex;
-+Built g_latest, g_acquired;
-+bool g_latestFresh = false;
++// The finished frames not yet taken, oldest first (a few: the window takes the one matching the
++// game frame it shows, which may be a frame or two behind), and spent ones to reuse.
++constexpr size_t kKeptFrames = 3;
++std::deque<Built> g_finishedFrames;
++std::vector<Built> g_spareFrames;
++Built g_acquired;
 +uint64_t g_serial = 0;
++
++// Frame numbers are 24 bits (they travel as a float): whether `a` is `b` or before it.
++bool not_after(uint32_t a, uint32_t b) { return ((b - a) & 0xFFFFFFu) < 0x800000u; }
 +std::vector<OwnedTexture> g_pendingTextures, g_acquiredTextures;
 +std::vector<uint64_t> g_pendingRemoved, g_acquiredRemoved;
 +std::vector<aurora::mirror::Texture> g_textureViews;
@@ -1111,18 +1128,26 @@ index 0000000..02012ce
 +
 +// --- Per draw.
 +
-+// --- Framebuffer copies used as masks (character shadows: the shadow is drawn into the EFB from
-+// the light, copied, and projected onto the ground through the copy's alpha), read back from the
-+// GPU: the FIFO thread notes them; just before the HUD the game thread queues a GPU task that
-+// renders each, small, into a readable texture; the pixels reach the window a frame later, as a
-+// texture updated in place.
++// --- Framebuffer copies a blended draw samples, read back from the GPU: masks (character shadows:
++// the shadow is drawn into the EFB from the light, copied, and projected onto the ground through
++// the copy's alpha) and pictures of the screen (water's reflection layer, which samples a copy of
++// the scene through a projection). The FIFO thread notes each and, right after the draw, pushes a
++// GPU task that renders the copy, small, into a readable texture; the pixels reach the window a
++// frame later, as a texture updated in place. (Screen effects after the 3D world don't come
++// here: the window lays them on its glass.)
 +
 +
-+// A copy the draw samples only through its alpha, as a texture to capture; null if it isn't one.
++// A copy the draw samples, as a texture to capture; null if it isn't one.
 +// record() picks the id and pushes the capture once it knows the swizzle.
 +TexEntry* capture_entry(const ShaderConfig& config, int texMap, gfx::TextureHandle* handle, CopySlot** slotOut,
 +                        size_t* occurrence, uint32_t* revision) {
-+  for (u32 i = 0; i < config.tevStageCount; ++i) {
++  // AURORA_MIRROR_COPY_COLOUR=0 (a test switch): only masks, as before the screen effects moved
++  // to the window's glass.
++  static const bool colour = [] {
++    const char* value = std::getenv("AURORA_MIRROR_COPY_COLOUR");
++    return value == nullptr || std::strcmp(value, "0") != 0;
++  }();
++  for (u32 i = 0; !colour && i < config.tevStageCount; ++i) {
 +    const TevStage& stage = config.tevStages[i];
 +    if (stage.texMapId != texMap) {
 +      continue;
@@ -2125,6 +2150,46 @@ index 0000000..02012ce
 +  g_jobCount = 0;
 +}
 +
++// AURORA_MIRROR_GROUPS=1 (a test switch, in a build with DUSK_GFX_DEBUG_GROUPS on): per debug
++// group, how many draws the mirror kept and why it skipped the others, every 600 frames.
++enum Tally { TallyKept, TallyLines, TallyScreen, TallyNoColour, TallyViewport, TallyProjection, TallyBlend,
++             TallyAlphaNever, TallyCopyOnly, TallyOutside, TallyOffscreen, TallyCount };
++const bool kGroupLog = std::getenv("AURORA_MIRROR_GROUPS") != nullptr;
++std::vector<std::string> g_debugGroups;
++std::unordered_map<std::string, std::array<uint32_t, TallyCount>> g_groupTally;
++
++void tally(Tally what) {
++  if (!kGroupLog) {
++    return;
++  }
++  std::string key;
++  for (const auto& group : g_debugGroups) {
++    key += '/';
++    key += group;
++  }
++  ++g_groupTally[key.empty() ? std::string("-") : key][what];
++}
++
++void log_tally(double frames) {
++  if (!kGroupLog) {
++    return;
++  }
++  std::vector<std::pair<std::string, std::array<uint32_t, TallyCount>>> rows(g_groupTally.begin(), g_groupTally.end());
++  std::sort(rows.begin(), rows.end());
++  static constexpr const char* kNames[TallyCount] = {"kept", "lines", "screen", "no-colour", "viewport", "projection",
++                                                     "blend", "alpha-never", "copy-only", "outside", "offscreen"};
++  for (const auto& [group, counts] : rows) {
++    std::string text;
++    for (int i = 0; i < TallyCount; ++i) {
++      if (counts[i] != 0) {
++        text += fmt::format(" {} {:.1f}", kNames[i], counts[i] / frames);
++      }
++    }
++    Log.info("mirror group {}:{}", group, text);
++  }
++  g_groupTally.clear();
++}
++
 +// AURORA_MIRROR_LOG=1 (a test switch): what the skipped framebuffer-copy draws are, each kind once.
 +void log_skipped(const ShaderConfig& config, const MirrorPart& part, u16 vtxCount) {
 +  static const bool enabled = std::getenv("AURORA_MIRROR_LOG") != nullptr;
@@ -2282,6 +2347,7 @@ index 0000000..02012ce
 +  std::vector<std::pair<uint32_t, uint32_t>> backgroundRanges;
 +  float farthest = 0, nearestBackground = INFINITY;
 +  bool scene = false;
++  uint32_t tag = 0;
 +  float focus = 0, tanHalfX = 1, tanHalfY = 1;
 +  std::vector<OwnedTexture> textures;
 +  std::vector<uint64_t> removed;
@@ -2296,6 +2362,7 @@ index 0000000..02012ce
 +
 +void finish(Job& job) {
 +  Built& out = job.built;
++  out.tag = job.tag;
 +  out.scene = job.scene && !job.groups.empty();
 +  out.focus = job.focus;
 +  out.plane = std::clamp(job.focus * 0.85f, 50.f, 20000.f);
@@ -2361,8 +2428,17 @@ index 0000000..02012ce
 +  g_lastParts = static_cast<uint32_t>(out.parts.size());
 +  std::lock_guard lock(g_mutex);
 +  out.serial = ++g_serial;
-+  std::swap(g_latest, out);
-+  g_latestFresh = true;
++  g_finishedFrames.push_back(std::move(out));
++  while (g_finishedFrames.size() > kKeptFrames) {
++    g_spareFrames.push_back(std::move(g_finishedFrames.front()));
++    g_finishedFrames.pop_front();
++  }
++  // The job builds its next frame in a spent one's buffers.
++  out = Built{};
++  if (!g_spareFrames.empty()) {
++    out = std::move(g_spareFrames.back());
++    g_spareFrames.pop_back();
++  }
 +  for (auto& texture : job.textures) {
 +    g_pendingTextures.push_back(std::move(texture));
 +  }
@@ -2408,6 +2484,7 @@ index 0000000..02012ce
 +      g_job.farthest = g_farthest;
 +      g_job.nearestBackground = g_nearestBackground;
 +      g_job.scene = scene;
++      g_job.tag = g_frameTag;
 +      g_job.focus = focus;
 +      g_job.tanHalfX = g_haveProjection ? 1.f / g_p0 : 1.f;
 +      g_job.tanHalfY = g_haveProjection ? 1.f / g_p2 : 1.f;
@@ -2436,6 +2513,7 @@ index 0000000..02012ce
 +             g_stats.alphaNever / f, g_stats.behind / f, g_stats.vertices / f, g_stats.triangles / f,
 +             g_lastParts.load(), g_stats.seconds / f * 1000.0, static_cast<double>(g_decodeNanos.exchange(0)) / f / 1e6,
 +             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
++    log_tally(f);
 +    g_stats = {};
 +  }
 +}
@@ -2446,6 +2524,7 @@ index 0000000..02012ce
 +void mark(u32 mark, f32 value) noexcept {
 +  if (mark == AURORA_MIRROR_MARK_BEGIN) {
 +    discard_jobs(); // a frame that never ended
++    g_frameTag = static_cast<uint32_t>(std::max(value, 0.f)) & 0xFFFFFFu;
 +    g_recording = g_enabled.load(std::memory_order_relaxed);
 +    if (g_reset.exchange(false)) {
 +      forget_textures();
@@ -2469,9 +2548,21 @@ index 0000000..02012ce
 +
 +void offscreen(bool begin) noexcept { g_offscreen = std::max(0, g_offscreen + (begin ? 1 : -1)); }
 +
++void debug_group(const std::string* label) noexcept {
++  if (!kGroupLog) {
++    return;
++  }
++  if (label != nullptr) {
++    g_debugGroups.push_back(*label);
++  } else if (!g_debugGroups.empty()) {
++    g_debugGroups.pop_back();
++  }
++}
++
 +void record(GXPrimitive prim, const ShaderConfig& config, u16 vtxCount, const u8* vertices, const u16* indices,
 +            u32 indexCount) noexcept {
 +  if (!g_recording || g_offscreen > 0 || vtxCount == 0) {
++    tally(g_offscreen > 0 ? TallyOffscreen : TallyOutside);
 +    return;
 +  }
 +  const auto started = std::chrono::steady_clock::now();
@@ -2483,19 +2574,23 @@ index 0000000..02012ce
 +  ++g_stats.draws;
 +  if (config.lineMode != 0) {
 +    ++g_stats.lines;
++    tally(TallyLines);
 +    return;
 +  }
 +  if (st.projType == GX_ORTHOGRAPHIC || st.proj.m0[0] <= 0.f || st.proj.m1[1] <= 0.f) {
 +    ++g_stats.screen;
++    tally(TallyScreen);
 +    return;
 +  }
 +  if (!st.colorUpdate) {
 +    ++g_stats.noColour;
++    tally(TallyNoColour);
 +    return;
 +  }
 +  const auto fb = logical_fb_size();
 +  if (st.logicalViewport.width * st.logicalViewport.height < 0.8f * static_cast<float>(fb.x) * static_cast<float>(fb.y)) {
 +    ++g_stats.viewport;
++    tally(TallyViewport);
 +    return;
 +  }
 +  if (!g_haveProjection) {
@@ -2504,6 +2599,7 @@ index 0000000..02012ce
 +    g_p2 = st.proj.m1[1];
 +  } else if (std::fabs(st.proj.m0[0] - g_p0) > 0.03f * g_p0 || std::fabs(st.proj.m1[1] - g_p2) > 0.03f * g_p2) {
 +    ++g_stats.projection;
++    tally(TallyProjection);
 +    return;
 +  }
 +
@@ -2511,11 +2607,13 @@ index 0000000..02012ce
 +  MirrorPart part{};
 +  if (!blend_weights(part)) {
 +    ++g_stats.blend;
++    tally(TallyBlend);
 +    return;
 +  }
 +  const float threshold = alpha_threshold(config.alphaCompare);
 +  if (threshold > 1.f) {
 +    ++g_stats.alphaNever;
++    tally(TallyAlphaNever);
 +    return;
 +  }
 +  if (threshold > 0.f) {
@@ -2571,6 +2669,7 @@ index 0000000..02012ce
 +    } else if (plan.primary == nullptr) {
 +      // Only a framebuffer copy (bloom, heat haze, a shadow image): a screen effect.
 +      ++g_stats.copyOnly;
++      tally(TallyCopyOnly);
 +      log_skipped(config, part, vtxCount);
 +      return;
 +    } else {
@@ -2587,6 +2686,7 @@ index 0000000..02012ce
 +    g_jobs.push_back(std::make_unique<DrawJob>());
 +  }
 +  DrawJob& job = *g_jobs[g_jobCount++];
++  tally(TallyKept);
 +  job.state.capture();
 +  job.config = config;
 +  job.plan = plan;
@@ -2707,18 +2807,35 @@ index 0000000..02012ce
 +
 +bool enabled() noexcept { return gx::mirror::g_enabled.load(); }
 +
-+bool acquire(Frame& frame) noexcept {
++bool acquire(Frame& frame, uint32_t upTo) noexcept {
 +  using namespace gx::mirror;
 +  {
 +    std::lock_guard lock(g_mutex);
-+    if (g_latestFresh) {
-+      std::swap(g_latest, g_acquired);
-+      g_latestFresh = false;
++    // The newest finished frame no later than upTo (or, if they're all later, the oldest).
++    size_t take = g_finishedFrames.size();
++    for (size_t i = 0; i < g_finishedFrames.size(); ++i) {
++      if (not_after(g_finishedFrames[i].tag, upTo & 0xFFFFFFu)) {
++        take = i;
++      }
 +    }
++    if (take == g_finishedFrames.size() && !g_finishedFrames.empty() && g_finishedFrames.size() == kKeptFrames) {
++      take = 0;
++    }
++    if (take < g_finishedFrames.size()) {
++      std::swap(g_acquired, g_finishedFrames[take]);
++      for (size_t i = 0; i <= take; ++i) {
++        g_spareFrames.push_back(std::move(g_finishedFrames.front()));
++        g_finishedFrames.pop_front();
++      }
++    }
++    // Textures go with the first frame taken and then each call (before it, the caller has no
++    // frame to take them with).
 +    g_acquiredTextures.clear();
-+    g_acquiredTextures.swap(g_pendingTextures);
 +    g_acquiredRemoved.clear();
-+    g_acquiredRemoved.swap(g_pendingRemoved);
++    if (g_acquired.serial != 0) {
++      g_acquiredTextures.swap(g_pendingTextures);
++      g_acquiredRemoved.swap(g_pendingRemoved);
++    }
 +  }
 +  g_textureViews.clear();
 +  for (const auto& texture : g_acquiredTextures) {
@@ -2728,6 +2845,7 @@ index 0000000..02012ce
 +  const Built& built = g_acquired;
 +  frame = {};
 +  frame.serial = built.serial;
++  frame.tag = built.tag;
 +  frame.scene = built.scene;
 +  frame.vertices = built.vertices.data();
 +  frame.vertexCount = static_cast<uint32_t>(built.vertices.size());
@@ -2750,15 +2868,17 @@ index 0000000..02012ce
 +} // namespace aurora::mirror
 diff --git a/lib/gx/mirror.hpp b/lib/gx/mirror.hpp
 new file mode 100644
-index 0000000..9ffe163
+index 0000000..01217fc
 --- /dev/null
 +++ b/lib/gx/mirror.hpp
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,21 @@
 +#pragma once
 +
 +// The scene mirror's hooks in the command processor (see aurora/mirror.h). FIFO thread.
 +
 +#include "gx.hpp"
++
++#include <string>
 +
 +namespace aurora::gx::mirror {
 +// Cheap: whether draws are being recorded right now.
@@ -2766,6 +2886,8 @@ index 0000000..9ffe163
 +void mark(u32 mark, f32 value) noexcept;
 +// GX_AURORA_BEGIN_OFFSCREEN / END_OFFSCREEN: draws into an offscreen pass aren't the scene.
 +void offscreen(bool begin) noexcept;
++// GX_AURORA_DEBUG_GROUP_PUSH / POP (a test switch's labels): the label pushed, or null for a pop.
++void debug_group(const std::string* label) noexcept;
 +// A draw as the command processor pushes it: `vertices` are vtxCount raw GX vertices laid out as
 +// `config` says; `indices` (host-endian, triangles) or none for `prim`'s own order.
 +void record(GXPrimitive prim, const ShaderConfig& config, u16 vtxCount, const u8* vertices, const u16* indices,

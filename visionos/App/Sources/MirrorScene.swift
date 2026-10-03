@@ -17,6 +17,10 @@ import RealityKit
 final class MirrorScene {
     let root = Entity()
     private let entity = ModelEntity()
+    // Behind everything: where the game drew nothing the mirror can show (past the edges of its
+    // view, seen from the side), black, as the game's own picture is, not the room.
+    private let backdrop = ModelEntity(mesh: .generatePlane(width: 1, height: 1),
+                                       materials: [UnlitMaterial(color: .black)])
     private var mesh: (mesh: LowLevelMesh, resource: MeshResource)?
     private let queue: MTLCommandQueue
 
@@ -39,6 +43,10 @@ final class MirrorScene {
     private var materialReady: [Bool] = []
     private var serial: UInt64 = 0
     private(set) var hasScene = false
+    /// The view distance the glass is at (game units), as last placed.
+    private(set) var plane: Float = 1
+    /// How much depths are compressed for a narrow view (1 for a normal one), as last placed.
+    private(set) var depthScale: Float = 1
     private static let cullTest = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_CULL"] ?? ""
     private static let addRed = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ADD_RED"] == "1"
 
@@ -89,15 +97,23 @@ final class MirrorScene {
         white = Self.makeTexture(queue: queue, pixels: [255, 255, 255, 255], width: 1, height: 1)
         entity.isEnabled = false
         root.addChild(entity)
+        backdrop.isEnabled = false
+        root.addChild(backdrop)
     }
 
-    /// Takes the game's newest mirror frame into the mesh. False while there's no 3D scene to show
-    /// (the window then shows the game's flat picture).
-    func update() -> Bool {
+    /// Draws the level as `order` in `group`, so that what the window lays over it comes after.
+    func sort(in group: ModelSortGroup, order: Int32) {
+        entity.components.set(ModelSortGroupComponent(group: group, order: order))
+    }
+
+    /// Takes the game's newest mirror frame no later than game frame `upTo` (the window frame shown
+    /// with it) into the mesh. False while there's no 3D scene to show (the window then shows the
+    /// game's flat picture).
+    func update(upTo: UInt32) -> Bool {
         let start = CACurrentMediaTime()
         defer { report(start) }
         var frame = dusk_visionos_mirror_frame()
-        guard dusk_visionos_mirror_acquire(&frame) else { return false }
+        guard dusk_visionos_mirror_acquire(&frame, upTo) else { return false }
         takeTextures(frame, start: start)
         guard frame.serial != serial else { return hasScene }
         serial = frame.serial
@@ -106,6 +122,7 @@ final class MirrorScene {
         guard frame.scene, frame.index_count > 0, frame.part_count > 0, frame.tan_half_x > 0,
               let vertices = frame.vertices, let indices = frame.indices, let parts = frame.parts else {
             entity.isEnabled = false
+            backdrop.isEnabled = false
             hasScene = false
             return false
         }
@@ -134,6 +151,7 @@ final class MirrorScene {
             dump(frame)
         }
         entity.isEnabled = true
+        backdrop.isEnabled = true
         hasScene = true
         timing.vertices += Int(frame.vertex_count)
         timing.parts += Int(frame.part_count)
@@ -142,12 +160,23 @@ final class MirrorScene {
 
     /// View space into window units: the window spans the camera's view at the frame's `plane` (a
     /// little short of its focus, nothing nearer), so the camera sits 1 / (2 tan) window widths in
-    /// front of the glass.
+    /// front of the glass. A narrower view than ReliefParams.minViewTangent (a cutscene's telephoto
+    /// shot) has its depths compressed to the picture it would have from a camera that close, which
+    /// is the same picture; left as it was, its camera sat two window widths out and anyone nearer
+    /// saw past the edges of what the game drew.
     private func place(_ frame: dusk_visionos_mirror_frame) {
         let plane = max(frame.plane, 1)
-        let scale = 1 / (2 * plane * frame.tan_half_x)
-        root.scale = SIMD3(repeating: scale)
-        root.position = [0, 0, scale * plane]
+        let tan = frame.tan_half_x
+        let depthScale = tan / max(tan, ReliefParams.minViewTangent)
+        self.plane = plane
+        self.depthScale = depthScale
+        let scale = 1 / (2 * plane * tan)
+        root.scale = SIMD3(scale, scale, scale * depthScale)
+        root.position = [0, 0, scale * depthScale * plane]
+        let far = max(-frame.bounds_min.2, plane) * 1.05
+        let wide = 2 * far * max(tan, ReliefParams.minViewTangent) * 8
+        backdrop.position = [0, 0, -far]
+        backdrop.scale = [wide, wide, 1]
     }
 
     // MARK: - The mesh

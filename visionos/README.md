@@ -69,8 +69,9 @@ Start; left half Square X, Triangle Y, L2 L (targeting); the D-pad is L1 up
 flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
-menus sit on the glass. Characters cast their shadows. The game's screen
-effects (bloom, heat haze, light shafts) don't appear in the window. Close the window to quit (the game
+menus sit on the glass. Characters cast their shadows. The game's screen effects
+(bloom, mist, light shafts, depth of field, fades and cutscene bars) are laid
+over the scene, each glow on what it lights. Close the window to quit (the game
 saves); the game pauses while the window is in the background.
 
 Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight
@@ -105,7 +106,12 @@ The app takes a few environment variables for headless runs (pass each as
   turns the window to show the relief from the side, `TPVR_TEST_WINDOW_LAYERS=p`
   or `=b` shows one relief layer, `TPVR_TEST_WINDOW_FLAT=1` lays the picture flat
   for comparison, and `TPVR_TEST_WINDOW_DUMP=<frame>` writes that frame's scene,
-  distances and final image raw into Documents. The scene mirror is the default;
+  distances, final image and (with the mirror) the scene before its screen effects
+  raw into Documents. `TPVR_TEST_WINDOW_EFFECTS=0` leaves the screen effects out,
+  `=ghost` shows the game's own picture in their layer at half opacity (one Link
+  if the layer lines up with the mirror, two if not); `AURORA_MIRROR_GROUPS=1`
+  (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the
+  mirror kept and skipped. The scene mirror is the default;
   `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
   `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
   parts, textures) into Documents/mirror-dump, which

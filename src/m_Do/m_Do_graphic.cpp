@@ -1048,7 +1048,9 @@ static void drawDepth_blurTex(TGXTexObj &dst) {
 }
 #endif
 
-static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_2) {
+// copyOnly (window mode's scene mirror): only the frame and depth copies the invisible lists
+// (water's refraction) sample next, the depth of field itself drawn later (mDoGph_Painter).
+static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_2, bool copyOnly = false) {
     ZoneScoped;
     static GXColorS10 l_tevColor0 = {0, 0, 0, 0};
 
@@ -1184,6 +1186,9 @@ static void drawDepth2(view_class* param_0, view_port_class* param_1, int param_
             GXInvalidateTexAll();
             GXLoadTexObj(mDoGph_gInf_c::getFrameBufferTexObj(), GX_TEXMAP1);
             GXLoadTexObj(mDoGph_gInf_c::getZbufferTexObj(), GX_TEXMAP0);
+            if (copyOnly) {
+                return;
+            }
 
             if (0.0f != g_env_light.mDemoAttentionPoint) {
                 if (g_env_light.mDemoAttentionPoint >= 0.0f) {
@@ -2722,8 +2727,17 @@ int mDoGph_Painter() {
                 // Skip while actually rendering stereo eyes; real fix is
                 // giving offscreen passes protected identity in common.cpp
                 // (option (b), not done here).
+#if DUSK_VISIONOS_WINDOW
+                // Window mode's scene mirror: the depth of field is a screen effect, drawn after
+                // the 3D world (below) so that the window lays it on its glass. Its frame and depth
+                // copies stay here: the invisible lists next (water's refraction) sample them.
+                const bool deferDepth = dusk::visionos::window::mirroring();
+#else
+                const bool deferDepth = false;
+#endif
                 if (!dusk::vr::isRenderingToHeadset()) {
-                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id),
+                                   deferDepth);
                 }
                 GXInvalidateTexAll();
                 GXSetClipMode(GX_CLIP_ENABLE);
@@ -2832,6 +2846,18 @@ int mDoGph_Painter() {
 
                 fapGm_HIO_c::startCpuTimer();
                 #endif
+
+#if DUSK_VISIONOS_WINDOW
+                // Window mode: the 3D world is drawn; what follows are screen effects (copies of
+                // the picture, bloom, lens flare, letterbox bars, fades), which the window lays on
+                // its glass over the scene mirror.
+                dusk::visionos::window::scene_drawn();
+                if (deferDepth) {
+                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
+                    GXInvalidateTexAll();
+                    GXSetClipMode(GX_CLIP_ENABLE);
+                }
+#endif
 
                 // RE-ENABLED this session (VR water-black investigation):
                 // this capture feeds mDoGph_gInf_c::getFrameBufferTex() --

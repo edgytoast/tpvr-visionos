@@ -70,11 +70,18 @@ final class GameScreen {
     private let world = Entity()
     private var portal: ModelEntity
     private var hud: ModelEntity
+    // With the mirror: the screen effects (bloom, mist, fades) as a layer over its world, each part
+    // at the depth of what it lies on (the game's depth buffer), so that it stays on it from any
+    // angle: Link's glow on Link, the sky's in the sky.
+    private let effects = ModelEntity()
+    private var effectsMesh: LowLevelMesh?
+    private var effectsGrid = SIMD2<Int>.zero
     private var reliefMaterial: ShaderGraphMaterial
     private var hudMaterial: ShaderGraphMaterial
+    private var effectsMaterial: ShaderGraphMaterial
     private var primary: ModelEntity?, backstop: ModelEntity?
     private var primaryMesh: LowLevelMesh?, backstopMesh: LowLevelMesh?
-    private var colour: LowLevelTexture?, hudTexture: LowLevelTexture?
+    private var colour: LowLevelTexture?, hudTexture: LowLevelTexture?, effectsTexture: LowLevelTexture?
     private var colourSize = SIMD2<Int>.zero, hudSize = SIMD2<Int>.zero
     private var grid = SIMD2<Int>.zero  // columns, rows
     private var aspect: Float = 16.0 / 9.0
@@ -87,6 +94,7 @@ final class GameScreen {
     private var frames = 0
     private var mirror: MirrorScene?
     private var mirrorShowing = false
+    private var shownGameFrame: UInt32 = 0
 
     private static let rows = 216
 
@@ -96,6 +104,12 @@ final class GameScreen {
         relief.faceCulling = .none
         reliefMaterial = relief
         hudMaterial = try await ShaderGraphMaterial(named: "/Root/HudFrame", from: "WindowFrame.usda", in: .main)
+        // Over the whole level, after it (a sort group, below). What only darkens the picture (a
+        // fade, letterbox bars) goes on the glass with the HUD instead (WindowHud): on this layer,
+        // seen from the side, its farther parts painted over a bar.
+        effectsMaterial = hudMaterial
+        effectsMaterial.readsDepth = false
+        effectsMaterial.writesDepth = false
         guard let device = MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw CancellationError()
         }
@@ -112,6 +126,13 @@ final class GameScreen {
             do {
                 let mirror = try await MirrorScene()
                 world.addChild(mirror.root)
+                effects.isEnabled = false
+                world.addChild(effects)
+                // After every part of the level, translucent ones included: RealityKit's own
+                // back-to-front order put the level's translucent rocks over a letterbox bar.
+                let group = ModelSortGroup(depthPass: nil)
+                mirror.sort(in: group, order: 0)
+                effects.components.set(ModelSortGroupComponent(group: group, order: 1))
                 self.mirror = mirror
                 dusk_visionos_set_mirror_enabled(true)
             } catch {
@@ -135,9 +156,15 @@ final class GameScreen {
 
     func update() {
         dusk_visionos_window_tick()
-        mirrorShowing = mirror?.update() ?? false
         var frame = dusk_visionos_window_frame()
-        guard dusk_visionos_window_acquire(&frame) else { return }
+        let fresh = dusk_visionos_window_acquire(&frame)
+        if fresh {
+            shownGameFrame = frame.game_frame
+        }
+        // The mirror's frame from the same game frame as the HUD and screen effects shown with it
+        // (its frames are ready a little sooner): drawn from different frames, they slid apart.
+        mirrorShowing = mirror?.update(upTo: shownGameFrame) ?? false
+        guard fresh else { return }
         let serial = frame.serial
         guard let commands = queue.makeCommandBuffer() else {
             dusk_visionos_window_release(serial)
@@ -160,7 +187,7 @@ final class GameScreen {
         frames += 1
         if frames == 1 || frames % 900 == 0 {
             print("[TPVR] window frame \(frames): scene \(frame.scene != nil), ui \(frame.ui != nil), "
-                  + "tangents \(frame.tan_half_x) x \(frame.tan_half_y), focus \(frame.focus)")
+                  + "tangents \(frame.tan_half_x) x \(frame.tan_half_y), focus \(frame.focus), effects \(effects.isEnabled)")
         }
     }
 
@@ -187,13 +214,30 @@ final class GameScreen {
             pipelines.flat(commands, final: final, ui: ui, hud: hud)
             primary?.isEnabled = false
             backstop?.isEnabled = false
+            effects.isEnabled = false
             return true
         }
-        if mirrorShowing {
-            // The mirror draws the world; only the HUD comes from the frame.
-            pipelines.hud(commands, final: final, scene: scene, ui: ui, hud: hud)
+        if mirrorShowing, let mirror {
+            // The mirror draws the world; the HUD and the screen effects come from the frame.
+            let base = Self.showEffects ? texture(frame.base, format: .bgra8Unorm_srgb) : nil
+            var layer: MTLTexture?
+            if base != nil, let effectsTexture, let effectsMesh, mirror.plane > 1 {
+                layer = effectsTexture.replace(using: commands)
+                // Laid out as the mirror is: the glass spans the camera's view at the mirror's plane.
+                var params = EffectsGridParams(tanHalf: [frame.tan_half_x, frame.tan_half_y], planeDistance: mirror.plane,
+                                               columns: UInt32(effectsGrid.x), rows: UInt32(effectsGrid.y), radius: 8,
+                                               depthScale: mirror.depthScale)
+                pipelines.effectsGrid(commands, distance: distance, params: &params,
+                                      positions: effectsMesh.replace(bufferIndex: 0, using: commands))
+            }
+            pipelines.hud(commands, final: final, scene: scene, base: base, ui: ui, hud: hud, effects: layer,
+                          ghost: Self.ghostEffects)
+            effects.isEnabled = layer != nil
             primary?.isEnabled = false
             backstop?.isEnabled = false
+            if Self.dumpFrame == frames {
+                Self.dump(frame)
+            }
             return true
         }
         let sceneSize = SIMD2(scene.width, scene.height)
@@ -203,7 +247,8 @@ final class GameScreen {
             blit.copy(from: scene, to: colour.replace(using: commands))
             blit.endEncoding()
         }
-        pipelines.hud(commands, final: final, scene: scene, ui: ui, hud: hud)
+        pipelines.hud(commands, final: final, scene: scene, base: nil, ui: ui, hud: hud, effects: nil)
+        effects.isEnabled = false
         var params = ReliefParams(frame: frame, columns: grid.x, rows: grid.y)
         pipelines.relief(commands, distance: distance, params: &params,
                          primary: primaryMesh.replace(bufferIndex: 0, using: commands),
@@ -224,13 +269,20 @@ final class GameScreen {
         return shown.isEmpty ? "pb" : shown
     }()
 
-    // Test runs: TPVR_TEST_WINDOW_DUMP=<frame> writes that frame's scene (BGRA8) and distances
-    // (RGBA16F) raw into Documents, named with their sizes.
+    // Test runs: TPVR_TEST_WINDOW_EFFECTS=0 leaves the screen effects out of the mirror; =ghost puts
+    // the game's own picture in their layer at half opacity (one Link if it lines up, two if not).
+    private static let showEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] != "0"
+    private static let ghostEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] == "ghost"
+
+    // Test runs: TPVR_TEST_WINDOW_DUMP=<frame> writes that frame's scene, finished frame and (with
+    // the mirror) pre-effects scene (BGRA8) and distances (RGBA16F) raw into Documents, named with
+    // their sizes.
     private static let dumpFrame = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_DUMP"].flatMap(Int.init) ?? -1
 
     private static func dump(_ frame: dusk_visionos_window_frame) {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        for (name, pointer) in [("scene", frame.scene), ("distance", frame.distance), ("final", frame.final)] {
+        for (name, pointer) in [("scene", frame.scene), ("distance", frame.distance), ("final", frame.final),
+                                ("base", frame.base)] {
             guard let pointer else { continue }
             let surface = Unmanaged<IOSurfaceRef>.fromOpaque(pointer).takeUnretainedValue()
             IOSurfaceLock(surface, .readOnly, nil)
@@ -292,6 +344,21 @@ final class GameScreen {
         hud.model?.materials = [hudMaterial]
         hudTexture = texture
         hudSize = size
+        let rows = Self.rows
+        let columns = max(16, Int((Float(rows) * Float(size.x) / Float(max(size.y, 1))).rounded()))
+        if mirror != nil, let layer = try? LowLevelTexture(descriptor: descriptor),
+           let layerResource = try? TextureResource(from: layer),
+           let mesh = try? Self.makeGridMesh(columns: columns, rows: rows),
+           let meshResource = try? MeshResource(from: mesh) {
+            try? effectsMaterial.setParameter(name: "Frame", value: .textureResource(layerResource))
+            effects.model = ModelComponent(mesh: meshResource, materials: [effectsMaterial])
+            effectsTexture = layer
+            effectsMesh = mesh
+            effectsGrid = [columns, rows]
+        } else {
+            effectsTexture = nil
+            effectsMesh = nil
+        }
         return true
     }
 
@@ -327,6 +394,45 @@ final class GameScreen {
         colourSize = size
         grid = [columns, rows]
         return true
+    }
+
+    /// The screen effects' layer: (columns + 1) x (rows + 1) vertices over the picture, positions from
+    /// the GPU each frame, UVs fixed.
+    private static func makeGridMesh(columns: Int, rows: Int) throws -> LowLevelMesh {
+        let across = columns + 1, down = rows + 1
+        let indexCount = columns * rows * 6
+        let descriptor = LowLevelMesh.Descriptor(
+            vertexCapacity: across * down,
+            vertexAttributes: [.init(semantic: .position, format: .float3, layoutIndex: 0, offset: 0),
+                               .init(semantic: .uv0, format: .float2, layoutIndex: 1, offset: 0)],
+            vertexLayouts: [.init(bufferIndex: 0, bufferStride: 12), .init(bufferIndex: 1, bufferStride: 8)],
+            indexCapacity: indexCount, indexType: .uint32)
+        let mesh = try LowLevelMesh(descriptor: descriptor)
+        mesh.withUnsafeMutableBytes(bufferIndex: 1) { raw in
+            let uvs = raw.bindMemory(to: SIMD2<Float>.self)
+            for row in 0..<down {
+                for column in 0..<across {
+                    uvs[row * across + column] = [Float(column) / Float(columns), 1 - Float(row) / Float(rows)]
+                }
+            }
+        }
+        mesh.withUnsafeMutableIndices { raw in
+            let indices = raw.bindMemory(to: UInt32.self)
+            var next = 0
+            for row in 0..<rows {
+                for column in 0..<columns {
+                    // Two counter-clockwise triangles, facing the viewer.
+                    let topLeft = UInt32(row * across + column), bottomLeft = topLeft + UInt32(across)
+                    for index in [topLeft, bottomLeft, topLeft + 1, topLeft + 1, bottomLeft, bottomLeft + 1] {
+                        indices[next] = index
+                        next += 1
+                    }
+                }
+            }
+        }
+        let bounds = BoundingBox(min: [-60, -40, -60], max: [60, 40, 1])
+        mesh.parts.replaceAll([LowLevelMesh.Part(indexCount: indexCount, topology: .triangle, bounds: bounds)])
+        return mesh
     }
 
     /// A relief layer: (columns + 3) x (rows + 3) vertices, the grid and a skirt ring past its edge.
@@ -424,10 +530,25 @@ struct ReliefParams {
     }
 }
 
+private struct EffectsGridParams {
+    var tanHalf: SIMD2<Float>
+    var planeDistance: Float
+    var columns: UInt32
+    var rows: UInt32
+    var radius: UInt32
+    var depthScale: Float
+}
+
+private struct HudFlags {
+    var hasUi: UInt32
+    var hasBase: UInt32
+    var ghost: UInt32
+}
+
 /// The window's Metal kernels (adapted from the SHAR port's visionos_window.mm).
 @MainActor
 private struct Pipelines {
-    let relief, cut, hud, flat: MTLComputePipelineState
+    let relief, cut, hud, flat, effectsGrid: MTLComputePipelineState
 
     init(device: MTLDevice) throws {
         let library = try device.makeLibrary(source: Self.source, options: nil)
@@ -439,6 +560,7 @@ private struct Pipelines {
         cut = try make("WindowCut")
         hud = try make("WindowHud")
         flat = try make("WindowFlat")
+        effectsGrid = try make("WindowEffectsGrid")
     }
 
     func relief(_ commands: MTLCommandBuffer, distance: MTLTexture, params: inout ReliefParams,
@@ -464,16 +586,34 @@ private struct Pipelines {
         compute.endEncoding()
     }
 
-    func hud(_ commands: MTLCommandBuffer, final: MTLTexture, scene: MTLTexture, ui: MTLTexture?, hud: MTLTexture) {
+    /// The HUD over the scene, and (given `base`, the scene before the screen effects, and an
+    /// `effects` target) what those effects did to it.
+    func hud(_ commands: MTLCommandBuffer, final: MTLTexture, scene: MTLTexture, base: MTLTexture?, ui: MTLTexture?,
+             hud: MTLTexture, effects: MTLTexture?, ghost: Bool = false) {
         guard let compute = commands.makeComputeCommandEncoder() else { return }
-        var hasUi: UInt32 = ui != nil ? 1 : 0
+        var flags = HudFlags(hasUi: ui != nil ? 1 : 0, hasBase: base != nil && effects != nil ? 1 : 0,
+                             ghost: ghost ? 1 : 0)
         compute.setComputePipelineState(self.hud)
         compute.setTexture(final, index: 0)
         compute.setTexture(scene, index: 1)
         compute.setTexture(ui ?? final, index: 2)
         compute.setTexture(hud, index: 3)
-        compute.setBytes(&hasUi, length: 4, index: 0)
+        compute.setTexture(base ?? scene, index: 4)
+        compute.setTexture(effects ?? hud, index: 5)
+        compute.setBytes(&flags, length: MemoryLayout<HudFlags>.stride, index: 0)
         compute.dispatchThreads(MTLSize(width: hud.width, height: hud.height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        compute.endEncoding()
+    }
+
+    func effectsGrid(_ commands: MTLCommandBuffer, distance: MTLTexture, params: inout EffectsGridParams,
+                     positions: MTLBuffer) {
+        guard let compute = commands.makeComputeCommandEncoder() else { return }
+        compute.setComputePipelineState(effectsGrid)
+        compute.setTexture(distance, index: 0)
+        compute.setBuffer(positions, offset: 0, index: 0)
+        compute.setBytes(&params, length: MemoryLayout<EffectsGridParams>.stride, index: 1)
+        compute.dispatchThreads(MTLSize(width: Int(params.columns) + 1, height: Int(params.rows) + 1, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         compute.endEncoding()
     }
@@ -644,21 +784,87 @@ private struct Pipelines {
     // Premultiplied `over`.
     static float4 Over(float4 top, float4 under) { return top + under * (1.0 - top.a); }
 
+    // The screen effects (bloom, mist, light shafts, fades, letterbox bars): what they did to the
+    // game's 3D picture, as a premultiplied layer over the window's own 3D. The picture went from
+    // `before` to `after`; as `after = before * (1 - a) + e` the layer takes the least cover `a`
+    // that leaves `e` no darker than black, so a glow only adds light, a fade only covers, and from
+    // straight ahead the window matches the game exactly. (Linear values: the views are sRGB.)
+    static float4 Effects(float3 after, float3 before)
+    {
+        if (all(after == before)) return float4(0);
+        if (all(after < 1e-4)) return float4(0, 0, 0, 1);  // black: a fade's end, letterbox bars
+        // Darkening within a step or two of 8-bit noise doesn't count as cover.
+        const float3 slack = 0.004 + 0.02 * after;
+        const float3 kept = (after + slack) / max(before, 1e-4);
+        const float a = saturate(1.0 - min(min(kept.r, kept.g), kept.b));
+        return float4(max(after - before * (1.0 - a), 0.0), a);
+    }
+
+    struct HudFlags { uint hasUi, hasBase, ghost; };
+
+    struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; float depthScale; };
+
+    // The screen effects' layer, laid out as the scene mirror is (the glass spans the camera's view
+    // at planeDistance, depths times depthScale): each vertex at the nearest distance within
+    // `radius` pixels, so a glow just outside a figure stays on the figure; never in front of the
+    // glass.
+    kernel void WindowEffectsGrid(texture2d<float, access::read> distance [[texture(0)]],
+                                  device packed_float3* positions [[buffer(0)]],
+                                  constant EffectsGridParams& p [[buffer(1)]],
+                                  uint2 id [[thread_position_in_grid]])
+    {
+        if (id.x > p.columns || id.y > p.rows) return;
+        const float u = float(id.x) / float(p.columns), v = float(id.y) / float(p.rows);
+        const int2 size = int2(distance.get_width(), distance.get_height());
+        const int2 centre = int2(float2(u, v) * float2(size));
+        const int r = int(p.radius), step = max(1, r / 2);
+        float nearest = 1e9;
+        for (int dy = -r; dy <= r; dy += step)
+        {
+            for (int dx = -r; dx <= r; dx += step)
+            {
+                const int2 at = clamp(centre + int2(dx, dy), int2(0), size - 1);
+                nearest = min(nearest, distance.read(uint2(at)).r);
+            }
+        }
+        // A hair behind the glass at the least: on it, the portal's clipping plane cut it away.
+        nearest = clamp(nearest, p.planeDistance * 1.0005, 60000.0);
+        const float tanX = mix(-p.tanHalf.x, p.tanHalf.x, u), tanY = mix(p.tanHalf.y, -p.tanHalf.y, v);
+        const float scale = 1.0 / (2.0 * p.planeDistance * p.tanHalf.x);
+        positions[id.y * (p.columns + 1) + id.x] = packed_float3(scale * tanX * nearest, scale * tanY * nearest,
+                                                                 scale * p.depthScale * (p.planeDistance - nearest));
+    }
+
     // The HUD is whatever the game drew over its scene: pixels the 2D pass changed, opaque in their
-    // final colour (a translucent panel keeps the scene it was blended with). Dusklight's menus
-    // (premultiplied) go over it.
+    // final colour (a translucent panel keeps the scene it was blended with), with Dusklight's
+    // menus (premultiplied) over it. With the mirror, the screen effects go to their own layer.
     kernel void WindowHud(texture2d<float, access::read> final [[texture(0)]],
                           texture2d<float, access::read> scene [[texture(1)]],
                           texture2d<float, access::read> ui [[texture(2)]],
                           texture2d<float, access::write> hud [[texture(3)]],
-                          constant uint& hasUi [[buffer(0)]],
+                          texture2d<float, access::read> base [[texture(4)]],
+                          texture2d<float, access::write> effects [[texture(5)]],
+                          constant HudFlags& flags [[buffer(0)]],
                           uint2 id [[thread_position_in_grid]])
     {
         if (id.x >= hud.get_width() || id.y >= hud.get_height()) return;
         const float4 drawn = final.read(id), under = scene.read(id);
         const bool changed = any(abs(drawn.rgb - under.rgb) > 0.004);
         float4 colour = changed ? float4(drawn.rgb, 1) : float4(0);
-        if (hasUi != 0)
+        if (flags.hasBase != 0)
+        {
+            const uint2 at = uint2(float2(id) * float2(base.get_width(), base.get_height()) /
+                                   float2(hud.get_width(), hud.get_height()));
+            float4 effect = flags.ghost != 0 ? float4(under.rgb * 0.5, 0.5) : Effects(under.rgb, base.read(at).rgb);
+            // What only darkens (a fade, letterbox bars) dims the window itself, on the glass.
+            if (flags.ghost == 0 && effect.a > 0.0 && all(effect.rgb < 0.002))
+            {
+                if (!changed) colour = float4(0, 0, 0, effect.a);
+                effect = float4(0);
+            }
+            effects.write(effect, id);
+        }
+        if (flags.hasUi != 0)
         {
             const uint2 at = uint2(float2(id) * float2(ui.get_width(), ui.get_height()) /
                                    float2(hud.get_width(), hud.get_height()));

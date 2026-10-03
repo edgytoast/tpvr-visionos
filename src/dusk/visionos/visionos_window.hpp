@@ -9,7 +9,9 @@
 // (visionos/App/Sources/GameWindowView.swift; the approach is the SHAR port's relief window).
 //
 // With the app's scene mirror on (aurora/mirror.h), the frame's 3D draws between begin_frame()
-// and before_hud() are also recorded for the window to draw itself.
+// and scene_drawn() are also recorded for the window to draw itself, and the window gets the
+// picture as it was there too: what the screen effects after it did to the picture (bloom, mist,
+// fades) becomes a layer on the window's glass.
 //
 // Every function is a no-op unless window mode was set before the game started.
 
@@ -28,6 +30,14 @@ void begin_frame();
 
 // The 3D camera rendered this frame (mDoGph_Painter's camera block): its projection and focus.
 void note_scene(const view_class* view);
+
+// The 3D world is drawn and the screen effects come next (mDoGph_Painter): the mirror's frame
+// ends, and the picture so far is kept.
+void scene_drawn();
+
+// Whether this frame's 3D world is being mirrored (from begin_frame() to scene_drawn()): the
+// painter then draws its depth of field after scene_drawn(), as a screen effect, not before.
+bool mirroring();
 
 // mDoGph_drawHud2D's two stages: the scene and its depth before the HUD, then the finished frame.
 void before_hud();

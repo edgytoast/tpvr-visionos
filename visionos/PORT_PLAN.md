@@ -130,13 +130,35 @@ owns the swapchain images and Dawn imports them.
       ones before (SHAR's rules); near geometry keeps its order in a 3% band behind the glass.
 - [x] Character shadows: the shadow masks (framebuffer copies sampled through their alpha) read
       back from the GPU each frame (256x256, swizzled as the TEV reads them), a frame late.
-- [x] Refracting surfaces (an opaque draw sampling a framebuffer copy, water) are see-through:
-      the copy is a second unknown in the TEV, its weight the transparency. (None in the areas
-      tested so far: TP's water there is plain textured geometry.)
+- [x] Refracting surfaces (an opaque draw sampling a framebuffer copy) are see-through: the copy
+      is a second unknown in the TEV, its weight the transparency. TP has none in the areas tested:
+      its water is textured geometry, and where a spring has a layer drawn from a screen copy
+      (Ordon Spring, the Lost Woods: the invisible list, blended), that copy is read back like the
+      shadow masks (in-scene colour copies too, now) and drawn as the game draws it.
 - [x] Sense controllers in the window, as one SDL virtual gamepad (visionos_sense_pad.mm).
       Untested: the Simulator has no Sense controllers.
-- [ ] Screen effects (bloom, heat haze, light shafts, DOF) stay out: they're pictures of the
-      screen, not geometry. Faron's mist (a half-size screen copy projected on geometry) too.
+- [x] Screen effects as a layer. The painter calls window::scene_drawn() once the 3D world is
+      drawn (after its particles): the mirror's frame ends there and the picture so far is kept
+      (the "base"). Everything after it (bloom, the heat/scent distortion pass, lens flare, cloud
+      shadows, the depth of field, moved after it in window mode, the targeting arrow, letterbox
+      bars, fades) is what turned base into the scene snapshot taken before the HUD; per pixel,
+      scene = base x (1 - a) + e with the least cover a that keeps e non-negative (WindowHud,
+      linear): a glow only adds light, a fade only covers, and straight on the window matches the
+      game. Pure darkening (fades, letterbox bars) dims the glass with the HUD; the rest is a grid
+      mesh with each vertex at the depth of what it lies on (the game's depth buffer, the nearest
+      within 8 px), drawn after the level (a ModelSortGroup), so a glow stays on what glows from
+      any angle. The mirror and the window frames carry the game's frame number and the window
+      shows the mirror frame of its own game frame.
+- [x] Telephoto shots (cutscenes reach a 0.27 tangent) have their depths compressed so the
+      camera sits as close as for a normal view (same picture straight on); a black backdrop
+      behind the level instead of the room where the game drew nothing.
+- [x] Simulator: Ordon, Ordon Spring (a cutscene), the Lost Woods, Faron and Lakebed straight on
+      and at 25 degrees; offline (mirror dump + effects) the Lost Woods matches the game to 3.9/255
+      on average. Headset: untried.
+- [ ] Link (and others) come out darker and flatter than the game draws them where a second
+      texture shapes their lighting: the mirror keeps one texture a draw, the others as averages.
+      Strong bloom (the Lost Woods) makes him look washed out.
+- [ ] Eyes: Ilia's and Link's irises don't show in the mirror (blank whites in close-ups).
 
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.

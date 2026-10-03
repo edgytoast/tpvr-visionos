@@ -92,8 +92,10 @@ typedef struct dusk_visionos_window_frame {
     void* distance;  // RGBA16F: each pixel's distance from the camera (game units) in .r; with scene
     void* final;     // BGRA8: the finished frame, HUD and all
     void* ui;        // BGRA8, premultiplied: Dusklight's own menus, or NULL when none is open
+    void* base;      // BGRA8: with the scene mirror, the scene before the screen effects, or NULL
     void* event;     // MTLSharedEvent, borrowed
     uint64_t value;
+    uint32_t game_frame;  // the game's frame number (24 bits), as the scene mirror's
     float tan_half_x, tan_half_y;  // the camera's half field of view as tangents
     float focus;                   // the camera's distance to what it looks at (game units)
 } dusk_visionos_window_frame;
@@ -150,6 +152,7 @@ typedef struct dusk_visionos_mirror_texture {
 
 typedef struct dusk_visionos_mirror_frame {
     uint64_t serial;
+    uint32_t game_frame;  // the game's frame number (24 bits), as the window frame's
     bool scene;  // false: no 3D scene this frame
     const dusk_visionos_mirror_vertex* vertices;
     uint32_t vertex_count;
@@ -170,8 +173,9 @@ typedef struct dusk_visionos_mirror_frame {
 // Whether the window wants the mirror (set before or while it shows). Turning it on sends every
 // texture again.
 void dusk_visionos_set_mirror_enabled(bool enabled);
-// The newest frame; its pointers last until the next call (main thread). False before the first.
-bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame);
+// The newest frame no later than game frame `up_to` (the window frame shown with it: the two then
+// match); its pointers last until the next call (main thread). False before the first.
+bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame, uint32_t up_to);
 
 #ifdef __cplusplus
 }
