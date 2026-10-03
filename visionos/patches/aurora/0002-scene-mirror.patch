@@ -269,10 +269,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..3bff0cb
+index 0000000..eacc15b
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2760 @@
+@@ -0,0 +1,2782 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -356,8 +356,22 @@ index 0000000..3bff0cb
 +          m.m2[0] * x + m.m2[1] * y + m.m2[2] * z + m.m2[3] * w};
 +}
 +
-+// IEEE half floats, without a compiler's half type (MSVC has none): round to nearest, clamped
-+// to the finite range, small values flushed to zero.
++// IEEE half floats: the CPU's own conversion on ARM64 (a few hundred thousand a frame), otherwise
++// without a compiler's half type (MSVC has none): round to nearest, clamped to the finite range,
++// small values flushed to zero.
++#if defined(__aarch64__) && defined(__clang__)
++uint16_t half(float value) {
++  const __fp16 h = static_cast<__fp16>(std::clamp(std::isfinite(value) ? value : 0.f, -65504.f, 65504.f));
++  uint16_t bits;
++  std::memcpy(&bits, &h, sizeof bits);
++  return bits;
++}
++float from_half(uint16_t bits) {
++  __fp16 h;
++  std::memcpy(&h, &bits, sizeof h);
++  return static_cast<float>(h);
++}
++#else
 +uint16_t half(float value) {
 +  value = std::clamp(std::isfinite(value) ? value : 0.f, -65504.f, 65504.f);
 +  uint32_t bits;
@@ -398,6 +412,7 @@ index 0000000..3bff0cb
 +  std::memcpy(&value, &bits, sizeof value);
 +  return value;
 +}
++#endif
 +
 +// --- Symbolic TEV values: k * T[sel] + c, T the primary texture's sample (sel -1: a constant).
 +
@@ -2260,12 +2275,13 @@ index 0000000..3bff0cb
 +// AURORA_MIRROR_LOG=2 (a test switch): kept draws whose TEV samples more than one texture, each
 +// distinct one once: what the mirror averages away.
 +void log_textures(const ShaderConfig& config, const DrawPlan& plan, const MirrorPart& part, u16 vtxCount) {
-+  static const bool enabled = [] {
++  // (=3: every kept draw's, one texture or more.)
++  static const int level = [] {
 +    const char* value = std::getenv("AURORA_MIRROR_LOG");
-+    return value != nullptr && std::strcmp(value, "2") == 0;
++    return value != nullptr ? std::atoi(value) : 0;
 +  }();
 +  static std::unordered_map<uint64_t, bool> seen;
-+  if (!enabled || seen.size() > 300) {
++  if (level < 2 || seen.size() > 300) {
 +    return;
 +  }
 +  int maps = 0;
@@ -2277,7 +2293,7 @@ index 0000000..3bff0cb
 +      ++maps;
 +    }
 +  }
-+  if (maps < 2) {
++  if (maps < (level >= 3 ? 1 : 2)) {
 +    return;
 +  }
 +  const auto& st = g_gxState;
@@ -2286,11 +2302,17 @@ index 0000000..3bff0cb
 +    group += '/';
 +    group += name;
 +  }
-+  std::string text = fmt::format("{} kind {} depth {}{} func {} blend {} {}->{} | {} stages, {} ind:", group, part.kind,
++  std::string channels;
++  for (int c = 0; c < 4; ++c) {
++    const auto& cc = st.colorChannelConfig[c];
++    channels += fmt::format(" ch{}:{}{}{}/{}", c, cc.lightingEnabled ? "lit" : "-", static_cast<int>(cc.matSrc),
++                            static_cast<int>(cc.ambSrc), st.colorChannelState[c].lightMask.to_ulong());
++  }
++  std::string text = fmt::format("{} kind {} depth {}{} func {} blend {} {}->{}{} | {} stages, {} ind:", group, part.kind,
 +                                 st.depthCompare ? "test" : "-", st.depthUpdate ? "+write" : "",
 +                                 static_cast<int>(st.depthFunc), static_cast<int>(st.blendMode),
-+                                 static_cast<int>(st.blendFacSrc), static_cast<int>(st.blendFacDst), config.tevStageCount,
-+                                 config.numIndStages);
++                                 static_cast<int>(st.blendFacSrc), static_cast<int>(st.blendFacDst), channels,
++                                 config.tevStageCount, config.numIndStages);
 +  for (u32 i = 0; i < config.tevStageCount; ++i) {
 +    const auto& stage = config.tevStages[i];
 +    const bool sampled = samples_texture(stage) && stage.texMapId < MaxTextures;

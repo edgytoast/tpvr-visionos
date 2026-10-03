@@ -155,10 +155,17 @@ owns the swapchain images and Dawn imports them.
 - [x] Simulator: Ordon, Ordon Spring (a cutscene), the Lost Woods, Faron and Lakebed straight on
       and at 25 degrees; offline (mirror dump + effects) the Lost Woods matches the game to 3.9/255
       on average. Headset: untried.
-- [ ] Link (and others) come out darker and flatter than the game draws them in Faron and the
-      Lost Woods: their material multiplies in a second texture, the canopy's dappled light
-      projected from position (256x256, GX_TG_MTX3x4 from POS, texmtx 33), which the mirror
-      averages. Needs a second texture slot (AURORA_MIRROR_LOG=2 lists such materials).
+- [x] Tried and dropped (2026-10-03): a second texture slot (U, with T*U terms in the TEV) for
+      the level's projected canopy light (256x256, GX_TG_MTX3x4 from POS, texmtx 33). It worked,
+      but Faron and the Lost Woods looked no closer to the game, and it cost: RealityKit's time to
+      take a mesh's parts grows with every vertex attribute on every vertex (eight on the whole
+      level: 8 -> 17 ms an update, the window down to 31 fps; it took a second mesh for the
+      parts that use U), and the wider symbolic values doubled decoding. Kept from it: the
+      hardware half-float conversion, AURORA_MIRROR_LOG=3 (every material, lighting included).
+      The attempt is in the session's notes, not the tree.
+- [ ] Link comes out flatter and a little darker than the game draws him (his one-texture
+      material is 4 (C1 + K0 (1 - ras) + T ras), ras lit by eight lights): the mirror lights per
+      vertex, aurora can light per pixel. Strong bloom (the Lost Woods) then washes him out.
 - [x] Eyes: TP's eye material samples a grey mask first and the eye's own picture (iris and all)
       second; the mirror kept the first. It now keeps the most telling texture a draw samples: a
       colour picture over an intensity mask, mapped by the model's coordinates over a projection.

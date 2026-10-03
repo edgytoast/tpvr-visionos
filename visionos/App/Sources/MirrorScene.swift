@@ -52,6 +52,9 @@ final class MirrorScene {
 
     private var timing = (updates: 0, frames: 0, seconds: 0.0, since: CACurrentMediaTime(), vertices: 0, parts: 0, total: 0)
     private var counts = (texturesMade: 0, texturesFailed: 0, materialSets: 0)
+    // Of an update's time: filling the mesh, and setting its parts (where RealityKit waits for its
+    // renderer: a mesh with more vertex attributes doubled it).
+    private var stages = (fill: 0.0, parts: 0.0)
 
     private struct MaterialKey: Hashable {
         var texture: UInt64
@@ -126,9 +129,11 @@ final class MirrorScene {
             hasScene = false
             return false
         }
-        guard fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
-                   indexCount: Int(frame.index_count)),
-              let (mesh, _) = mesh else { return hasScene }
+        let fillStart = CACurrentMediaTime()
+        let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
+                          indexCount: Int(frame.index_count))
+        stages.fill += CACurrentMediaTime() - fillStart
+        guard filled, let (mesh, _) = mesh else { return hasScene }
 
         let keys = (0..<Int(frame.part_count)).map { MaterialKey(parts[$0]) }
         updateMaterials(keys)
@@ -137,6 +142,8 @@ final class MirrorScene {
         let pad = (high - low) * 0.05 + 1
         let bounds = BoundingBox(min: low - pad, max: high + pad)
         // A part whose texture is still on its way waits: drawn white, it flashed.
+        let partsStart = CACurrentMediaTime()
+        defer { stages.parts += CACurrentMediaTime() - partsStart }
         mesh.parts.replaceAll((0..<Int(frame.part_count)).compactMap { index in
             let part = parts[index]
             guard let materialIndex = materialIndex[keys[index]], materialReady[materialIndex] else {
@@ -552,12 +559,15 @@ final class MirrorScene {
         timing.seconds += CACurrentMediaTime() - start
         guard start - timing.since > 5 else { return }
         let updates = Double(timing.updates), frames = Double(max(timing.frames, 1))
-        print(String(format: "[TPVR] mirror: %.0f updates/s, %.0f frames/s, %.2f ms an update, %.0f vertices and %.0f parts "
+        print(String(format: "[TPVR] mirror: %.0f updates/s, %.0f frames/s, %.2f ms an update (fill %.2f, parts %.2f), "
+                     + "%.0f vertices and %.0f parts "
                      + "a frame; %d materials, list set %d times; textures %d made, %d failed, %d waiting",
                      updates / (start - timing.since), Double(timing.frames) / (start - timing.since),
-                     timing.seconds / updates * 1000, Double(timing.vertices) / frames, Double(timing.parts) / frames,
+                     timing.seconds / updates * 1000, stages.fill / updates * 1000, stages.parts / updates * 1000,
+                     Double(timing.vertices) / frames, Double(timing.parts) / frames,
                      materials.count, counts.materialSets, counts.texturesMade, counts.texturesFailed, pendingTextures.count))
         timing = (0, 0, 0, start, 0, 0, timing.total)
+        stages = (0, 0)
         counts.materialSets = 0
     }
 }
