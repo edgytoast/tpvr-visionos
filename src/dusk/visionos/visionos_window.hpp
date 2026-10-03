@@ -36,7 +36,7 @@ void note_scene(const view_class* view);
 void scene_drawn();
 
 // Whether this frame's 3D world is being mirrored (from begin_frame() to scene_drawn()): the
-// painter then draws its depth of field after scene_drawn(), as a screen effect, not before.
+// painter then makes its depth of field's copies but doesn't draw it.
 bool mirroring();
 
 // mDoGph_drawHud2D's two stages: the scene and its depth before the HUD, then the finished frame.

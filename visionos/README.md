@@ -70,7 +70,7 @@ flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
 menus sit on the glass. Characters cast their shadows. The game's screen effects
-(bloom, mist, light shafts, depth of field, fades and cutscene bars) are laid
+(bloom, mist, light shafts, fades and cutscene bars) are laid
 over the scene, each glow on what it lights. Close the window to quit (the game
 saves); the game pauses while the window is in the background.
 

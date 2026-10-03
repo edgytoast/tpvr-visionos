@@ -459,12 +459,13 @@ final class MirrorScene {
             return nil
         }
         let sizes = (0..<(levelsIncluded ? levels : 1)).map { (max(1, width >> $0), max(1, height >> $0)) }
-        guard let staging = queue.device.makeBuffer(bytes: pixels, length: sizes.reduce(0) { $0 + $1.0 * $1.1 * 4 }),
-              Self.blit(staging, into: texture, sizes: sizes, generate: levels > 1 && !levelsIncluded, queue: queue, label: label)
-        else {
+        guard let staging = queue.device.makeBuffer(bytes: pixels, length: sizes.reduce(0) { $0 + $1.0 * $1.1 * 4 }) else {
             report("\(label): no staging buffer")
             return nil
         }
+        // (It reports its own failures.)
+        guard Self.blit(staging, into: texture, sizes: sizes, generate: levels > 1 && !levelsIncluded, queue: queue,
+                        label: label) else { return nil }
         do { return (texture, try TextureResource(from: texture)) } catch {
             report("\(label): TextureResource failed: \(error)")
             return nil

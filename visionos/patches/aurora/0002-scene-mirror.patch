@@ -269,10 +269,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..eacc15b
+index 0000000..79b2092
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2782 @@
+@@ -0,0 +1,2788 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -1464,6 +1464,11 @@ index 0000000..eacc15b
 +      continue;
 +    }
 +    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
++    // A blend sampling a screen copy first keeps the copy, read back (a heat shimmer's warped
++    // picture; kept as a mask's, it drew a flat grey smudge in the mask's shape).
++    if (blended && best < 0 && obj.has_data() && g_gxState.copyTextures.contains(obj.data)) {
++      break;
++    }
 +    const TexEntry* entry = texture_entry(obj);
 +    if (entry == nullptr || !entry->ok) {
 +      continue;
@@ -2204,6 +2209,7 @@ index 0000000..eacc15b
 +    g_building.vertices.insert(g_building.vertices.end(), job.vertices.begin(), job.vertices.end());
 +    auto& indices = g_groups[job.group].indices;
 +    indices.reserve(indices.size() + job.triangles.size());
++    const size_t before = indices.size();
 +    for (size_t t = 0; t + 2 < job.triangles.size(); t += 3) {
 +      const uint32_t a = job.triangles[t], b = job.triangles[t + 1], c = job.triangles[t + 2];
 +      if (sane[a] && sane[b] && sane[c]) {
@@ -2212,7 +2218,7 @@ index 0000000..eacc15b
 +        indices.push_back(base + c);
 +      }
 +    }
-+    g_stats.triangles += job.triangles.size() / 3;
++    g_stats.triangles += (indices.size() - before) / 3;
 +    if (job.background) {
 +      g_backgroundRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
 +      ++g_stats.background;

@@ -2728,16 +2728,18 @@ int mDoGph_Painter() {
                 // giving offscreen passes protected identity in common.cpp
                 // (option (b), not done here).
 #if DUSK_VISIONOS_WINDOW
-                // Window mode's scene mirror: the depth of field is a screen effect, drawn after
-                // the 3D world (below) so that the window lays it on its glass. Its frame and depth
-                // copies stay here: the invisible lists next (water's refraction) sample them.
-                const bool deferDepth = dusk::visionos::window::mirroring();
+                // Window mode's scene mirror: no depth of field. In a window with real depth the
+                // viewer's eyes do the focusing, and as a picture laid over the scene it blurs near
+                // and far together, which ghosted around faces in cutscenes as the viewer moved.
+                // Its frame and depth copies stay: the invisible lists next (water's refraction)
+                // sample them.
+                const bool copiesOnly = dusk::visionos::window::mirroring();
 #else
-                const bool deferDepth = false;
+                const bool copiesOnly = false;
 #endif
                 if (!dusk::vr::isRenderingToHeadset()) {
                     GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id),
-                                   deferDepth);
+                                   copiesOnly);
                 }
                 GXInvalidateTexAll();
                 GXSetClipMode(GX_CLIP_ENABLE);
@@ -2852,11 +2854,6 @@ int mDoGph_Painter() {
                 // the picture, bloom, lens flare, letterbox bars, fades), which the window lays on
                 // its glass over the scene mirror.
                 dusk::visionos::window::scene_drawn();
-                if (deferDepth) {
-                    GX_DEBUG_GROUP(drawDepth2, &camera_p->view, view_port, dComIfGp_getCameraZoomForcus(camera_id));
-                    GXInvalidateTexAll();
-                    GXSetClipMode(GX_CLIP_ENABLE);
-                }
 #endif
 
                 // RE-ENABLED this session (VR water-black investigation):

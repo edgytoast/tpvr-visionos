@@ -45,7 +45,7 @@ struct GameWindowView: View {
         // visionOS turns a game controller's buttons into pinches on whatever the player looks at,
         // unless the view says it reads the controller itself: with another window open the game
         // got nothing (SHAR). Looking at the game window gives it the controller.
-        .modifier(ReadsGameControllers())
+        .handlesGameControllerEvents(matching: .gamepad)
         // Next to no depth, so the face is where the window's bar and corner handles are: given the
         // depth a plain window offers (as deep as it is tall), the face sat at the back of it and
         // didn't line up with them on the headset (SHAR). The game is behind the portal anyway.
@@ -67,17 +67,6 @@ struct GameWindowView: View {
             // Hidden or in the background: hold the game clock, as taking the headset off does
             // in the immersive spaces.
             dusk_visionos_set_paused(phase != .active)
-        }
-    }
-}
-
-/// `handlesGameControllerEvents`, where visionOS has it.
-private struct ReadsGameControllers: ViewModifier {
-    func body(content: Content) -> some View {
-        if #available(visionOS 26.0, *) {
-            content.handlesGameControllerEvents(matching: .gamepad)
-        } else {
-            content
         }
     }
 }

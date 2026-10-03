@@ -140,7 +140,7 @@ owns the swapchain images and Dawn imports them.
 - [x] Screen effects as a layer. The painter calls window::scene_drawn() once the 3D world is
       drawn (after its particles): the mirror's frame ends there and the picture so far is kept
       (the "base"). Everything after it (bloom, the heat/scent distortion pass, lens flare, cloud
-      shadows, the depth of field, moved after it in window mode, the targeting arrow, letterbox
+      shadows, the targeting arrow, letterbox
       bars, fades) is what turned base into the scene snapshot taken before the HUD; per pixel,
       scene = base x (1 - a) + e with the least cover a that keeps e non-negative (WindowHud,
       linear): a glow only adds light, a fade only covers, and straight on the window matches the
@@ -149,6 +149,10 @@ owns the swapchain images and Dawn imports them.
       within 8 px), drawn after the level (a ModelSortGroup), so a glow stays on what glows from
       any angle. The mirror and the window frames carry the game's frame number and the window
       shows the mirror frame of its own game frame.
+- [x] No depth of field in the window (its copies still made: water samples them). As a picture
+      laid over the scene it blurs near and far together, and from the side it ghosted around
+      Ilia's face in a close-up whatever depth its pixels were given; with real depth, the viewer's
+      eyes focus.
 - [x] Telephoto shots (cutscenes reach a 0.27 tangent) have their depths compressed so the
       camera sits as close as for a normal view (same picture straight on); a black backdrop
       behind the level instead of the room where the game drew nothing.
