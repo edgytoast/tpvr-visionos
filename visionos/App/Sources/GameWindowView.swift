@@ -1,3 +1,4 @@
+import GameController
 import Metal
 import RealityKit
 import SwiftUI
@@ -36,7 +37,19 @@ struct GameWindowView: View {
                     GameScreen.fit(root, to: content.convert(geometry.frame(in: .local), from: .local, to: .scene))
                 }
             }
+            // The window's face takes pinches and taps (the portal's collision box): without a
+            // target they went through it to whatever was behind, another app's window or a
+            // widget (the SHAR port found this on the headset). Nothing is done with them.
+            .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { _ in })
         }
+        // visionOS turns a game controller's buttons into pinches on whatever the player looks at,
+        // unless the view says it reads the controller itself: with another window open the game
+        // got nothing (SHAR). Looking at the game window gives it the controller.
+        .modifier(ReadsGameControllers())
+        // Next to no depth, so the face is where the window's bar and corner handles are: given the
+        // depth a plain window offers (as deep as it is tall), the face sat at the back of it and
+        // didn't line up with them on the headset (SHAR). The game is behind the portal anyway.
+        .frame(depth: 4)
         .aspectRatio(aspect, contentMode: .fit)
         .frame(minWidth: 640, idealWidth: 1280, maxWidth: 4096, minHeight: 300, idealHeight: 720, maxHeight: 2304)
         .onAppear {
@@ -54,6 +67,17 @@ struct GameWindowView: View {
             // Hidden or in the background: hold the game clock, as taking the headset off does
             // in the immersive spaces.
             dusk_visionos_set_paused(phase != .active)
+        }
+    }
+}
+
+/// `handlesGameControllerEvents`, where visionOS has it.
+private struct ReadsGameControllers: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(visionOS 26.0, *) {
+            content.handlesGameControllerEvents(matching: .gamepad)
+        } else {
+            content
         }
     }
 }
@@ -152,7 +176,13 @@ final class GameScreen {
         if let tilt = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_TILT"].flatMap(Float.init) {
             root.orientation = simd_quatf(angle: tilt * .pi / 180, axis: [0, 1, 0])
         }
+        if bounds.extents != loggedExtents {
+            loggedExtents = bounds.extents
+            print(String(format: "[TPVR] window: %.3f x %.3f x %.3f m, from z %.3f to %.3f in the view's scene",
+                         bounds.extents.x, bounds.extents.y, bounds.extents.z, bounds.min.z, bounds.max.z))
+        }
     }
+    private static var loggedExtents = SIMD3<Float>.zero
 
     func update() {
         dusk_visionos_window_tick()
@@ -326,6 +356,9 @@ final class GameScreen {
         portal.components.set(PortalComponent(target: world,
                                               clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),
                                               crossingMode: .disabled))
+        // The whole face is a target for pinches and taps (GameWindowView's gesture), so they stop here.
+        portal.components.set(InputTargetComponent())
+        portal.components.set(CollisionComponent(shapes: [.generateBox(width: 1, height: height, depth: 0.004)]))
         hud = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [hudMaterial])
         hud.position.z = 0.002
         root.addChild(portal)
@@ -856,8 +889,10 @@ private struct Pipelines {
             const uint2 at = uint2(float2(id) * float2(base.get_width(), base.get_height()) /
                                    float2(hud.get_width(), hud.get_height()));
             float4 effect = flags.ghost != 0 ? float4(under.rgb * 0.5, 0.5) : Effects(under.rgb, base.read(at).rgb);
-            // What only darkens (a fade, letterbox bars) dims the window itself, on the glass.
-            if (flags.ghost == 0 && effect.a > 0.0 && all(effect.rgb < 0.002))
+            // What turns black (letterbox bars, a fade's end) covers the window itself, on the glass.
+            // Only that: a depth of field darkening the dark rocks behind Ilia, laid on the glass,
+            // covered half her face from the side; a partial fade is the same at any depth.
+            if (flags.ghost == 0 && effect.a > 0.999 && all(effect.rgb < 0.0005))
             {
                 if (!changed) colour = float4(0, 0, 0, effect.a);
                 effect = float4(0);

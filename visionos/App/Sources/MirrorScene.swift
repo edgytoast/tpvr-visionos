@@ -239,7 +239,11 @@ final class MirrorScene {
 
     private func updateMaterials(_ keys: [MaterialKey]) {
         var changed = false
-        if materialList.count + keys.count > 1024 {
+        // Counting new materials, not parts: blended parts in the game's order repeat theirs, and
+        // counting parts cleared and set the list every frame of a busy scene (SHAR's review), which
+        // may cost the renderer a frame of the whole level.
+        let fresh = Set(keys).filter { materialIndex[$0] == nil }.count
+        if materialList.count + fresh > 1024 {
             materialList = []
             materialIndex = [:]
             materialReady = []
@@ -382,26 +386,25 @@ final class MirrorScene {
     /// New level-zero pixels into a texture already made.
     private static func upload(queue: MTLCommandQueue, pixels: UnsafePointer<UInt8>, width: Int, height: Int,
                                into texture: LowLevelTexture) {
-        guard let staging = queue.device.makeBuffer(bytes: pixels, length: width * height * 4),
-              let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else { return }
-        blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: width * 4, sourceBytesPerImage: width * height * 4,
-                  sourceSize: MTLSize(width: width, height: height, depth: 1), to: texture.replace(using: commands),
-                  destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
-        blit.endEncoding()
-        commands.commit()
+        guard let staging = queue.device.makeBuffer(bytes: pixels, length: width * height * 4) else {
+            report("a \(width)x\(height) texture update: no staging buffer")
+            return
+        }
+        blit(staging, into: texture, sizes: [(width, height)], generate: false, queue: queue,
+             label: "a \(width)x\(height) texture update")
     }
 
-    /// RGBA8 (sRGB) into a texture, its mipmaps made by the GPU or, with `levelsIncluded`, given
-    /// one after another in `pixels`.
-    private static func makeTexture(queue: MTLCommandQueue, pixels: UnsafeRawPointer, width: Int, height: Int,
-                                    mipmapped: Bool = false, levelsIncluded: Bool = false) -> (LowLevelTexture, TextureResource)? {
-        let levels = mipmapped ? Int(log2(Double(max(width, height)))) + 1 : 1
-        let descriptor = LowLevelTexture.Descriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height,
-                                                    mipmapLevelCount: levels, textureUsage: [.shaderRead, .renderTarget])
-        guard let texture = try? LowLevelTexture(descriptor: descriptor) else { return nil }
-        let sizes = (0..<(levelsIncluded ? levels : 1)).map { (max(1, width >> $0), max(1, height >> $0)) }
-        guard let staging = queue.device.makeBuffer(bytes: pixels, length: sizes.reduce(0) { $0 + $1.0 * $1.1 * 4 }),
-              let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else { return nil }
+    /// The staging buffer's levels into the texture (the GPU making the rest with `generate`). One the
+    /// GPU reports failing is tried again, once, into the same texture, so what draws it needn't
+    /// change. (The SHAR port's headset-only "black void", ground and sky gone, was failed uploads
+    /// the Simulator never showed: they'd have gone unnoticed here.)
+    @discardableResult
+    private static func blit(_ staging: MTLBuffer, into texture: LowLevelTexture, sizes: [(Int, Int)], generate: Bool,
+                             queue: MTLCommandQueue, label: String, retries: Int = 1) -> Bool {
+        guard let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() else {
+            report("\(label): no command buffer")
+            return false
+        }
         let destination = texture.replace(using: commands)
         var offset = 0
         for (level, (levelWidth, levelHeight)) in sizes.enumerated() {
@@ -411,11 +414,54 @@ final class MirrorScene {
                       destinationSlice: 0, destinationLevel: level, destinationOrigin: MTLOrigin())
             offset += levelWidth * levelHeight * 4
         }
-        if levels > 1 && !levelsIncluded { blit.generateMipmaps(for: destination) }
+        if generate { blit.generateMipmaps(for: destination) }
         blit.endEncoding()
+        commands.addCompletedHandler { done in
+            guard let error = done.error else { return }
+            let message = "\(label): upload failed\(retries > 0 ? ", trying again" : ""): \(error)"
+            DispatchQueue.main.async {
+                report(message)
+                if retries > 0 {
+                    Self.blit(staging, into: texture, sizes: sizes, generate: generate, queue: queue, label: label,
+                              retries: retries - 1)
+                }
+            }
+        }
         commands.commit()
-        guard let resource = try? TextureResource(from: texture) else { return nil }
-        return (texture, resource)
+        return true
+    }
+
+    // The first few failures, word for word.
+    private static var reports = 0
+    private static func report(_ message: String) {
+        reports += 1
+        if reports <= 20 { print("[TPVR] mirror: \(message)") }
+    }
+
+    /// RGBA8 (sRGB) into a texture, its mipmaps made by the GPU or, with `levelsIncluded`, given
+    /// one after another in `pixels`.
+    private static func makeTexture(queue: MTLCommandQueue, pixels: UnsafeRawPointer, width: Int, height: Int,
+                                    mipmapped: Bool = false, levelsIncluded: Bool = false) -> (LowLevelTexture, TextureResource)? {
+        let levels = mipmapped ? Int(log2(Double(max(width, height)))) + 1 : 1
+        let descriptor = LowLevelTexture.Descriptor(pixelFormat: .rgba8Unorm_srgb, width: width, height: height,
+                                                    mipmapLevelCount: levels, textureUsage: [.shaderRead, .renderTarget])
+        let label = "a \(width)x\(height) texture"
+        let texture: LowLevelTexture
+        do { texture = try LowLevelTexture(descriptor: descriptor) } catch {
+            report("\(label): LowLevelTexture failed: \(error)")
+            return nil
+        }
+        let sizes = (0..<(levelsIncluded ? levels : 1)).map { (max(1, width >> $0), max(1, height >> $0)) }
+        guard let staging = queue.device.makeBuffer(bytes: pixels, length: sizes.reduce(0) { $0 + $1.0 * $1.1 * 4 }),
+              Self.blit(staging, into: texture, sizes: sizes, generate: levels > 1 && !levelsIncluded, queue: queue, label: label)
+        else {
+            report("\(label): no staging buffer")
+            return nil
+        }
+        do { return (texture, try TextureResource(from: texture)) } catch {
+            report("\(label): TextureResource failed: \(error)")
+            return nil
+        }
     }
 
     /// A cut-out texture's mipmaps (SHAR's): each texel the alpha-weighted mean of the four below

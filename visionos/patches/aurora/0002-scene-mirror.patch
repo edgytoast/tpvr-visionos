@@ -269,10 +269,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..431afb3
+index 0000000..3bff0cb
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2593 @@
+@@ -0,0 +1,2760 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -310,6 +310,7 @@ index 0000000..431afb3
 +#include <chrono>
 +#include <condition_variable>
 +#include <cmath>
++#include <cstdio>
 +#include <cstdlib>
 +#include <cstring>
 +#include <deque>
@@ -1422,9 +1423,41 @@ index 0000000..431afb3
 +};
 +
 +// Which texture the mirror keeps, the others' averages, and a framebuffer copy it samples.
++// How much a texture shows of what a draw looks like, to pick the one the mirror keeps: a colour
++// picture over an intensity mask, mapped by the model's own coordinates over a projection.
++int texture_rank(const ShaderConfig& config, const TevStage& stage, const GXTexObj_& obj) {
++  const u32 format = obj.format();
++  const bool colour = !(format == GX_TF_I4 || format == GX_TF_I8 || format == GX_TF_IA4 || format == GX_TF_IA8);
++  bool mapped = false;
++  if (stage.texCoordId < MaxTexCoord) {
++    const TcgConfig& tcg = config.tcgs[stage.texCoordId];
++    mapped = tcg.src >= GX_TG_TEX0 && tcg.src <= GX_TG_TEX7 && (tcg.type == GX_TG_MTX2x4 || tcg.type == GX_TG_MTX3x4);
++  }
++  return (colour ? 2 : 0) + (mapped ? 1 : 0);
++}
++
 +bool plan_draw(const ShaderConfig& config, DrawPlan& plan, bool blended) {
 +  for (auto& average : plan.average) {
 +    average = {0.5f, 0.5f, 0.5f, 1.f};
++  }
++  // The texture to keep: the best ranked, the earliest of those. (TP's eyes sample a grey mask
++  // first and the eye's own picture, iris and all, second: kept first, the irises vanished.)
++  int keep = -1, best = -1;
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const TevStage& stage = config.tevStages[i];
++    if (!samples_texture(stage) || stage.texMapId >= MaxTextures) {
++      continue;
++    }
++    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
++    const TexEntry* entry = texture_entry(obj);
++    if (entry == nullptr || !entry->ok) {
++      continue;
++    }
++    const int rank = texture_rank(config, stage, obj);
++    if (rank > best) {
++      best = rank;
++      keep = stage.texMapId;
++    }
 +  }
 +  for (u32 i = 0; i < config.tevStageCount; ++i) {
 +    const TevStage& stage = config.tevStages[i];
@@ -1436,7 +1469,7 @@ index 0000000..431afb3
 +    }
 +    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
 +    TexEntry* entry = texture_entry(obj);
-+    if (entry == nullptr && blended && plan.primary == nullptr) {
++    if (entry == nullptr && blended && plan.primary == nullptr && keep < 0) {
 +      entry = capture_entry(config, stage.texMapId, &plan.captureHandle, &plan.captureSlot, &plan.captureOccurrence,
 +                            &plan.captureRevision);
 +    }
@@ -1447,7 +1480,7 @@ index 0000000..431afb3
 +      continue;
 +    }
 +    plan.average[stage.texMapId] = entry->average;
-+    if (plan.primary == nullptr) {
++    if (plan.primary == nullptr && (keep < 0 || stage.texMapId == keep)) {
 +      plan.primary = entry;
 +      plan.primaryMap = stage.texMapId;
 +      plan.primaryCoord = stage.texCoordId != GX_TEXCOORD_NULL ? stage.texCoordId : -1;
@@ -1763,6 +1796,8 @@ index 0000000..431afb3
 +  // How much nearer the camera to draw it (scaling about the camera keeps the picture): RealityKit
 +  // can't settle coplanar surfaces as GX's LEQUAL test does, in favour of the later draw.
 +  float nearer = 1.f;
++  // A decal: lifted towards the camera too, by 0.4% of its distance but at most kDecalLift.
++  bool decal = false;
 +  // Out: its vertices (clipping adds some) and triangles into them, wound for RealityKit.
 +  std::vector<MirrorVertex> vertices;
 +  std::vector<uint32_t> triangles;
@@ -2093,6 +2128,18 @@ index 0000000..431afb3
 +  }
 +}
 +
++// How far a decal is lifted at most (view units; TP's are about a centimetre). A slide of 0.4% of the
++// distance, uncapped, floated a far shadow tens of units off the ground, which a viewer off to the
++// side saw move against it (the SHAR port's rule: min(0.4%, 2 cm)).
++constexpr float kDecalLift = 3.f;
++// Farther than this from the camera, a vertex is a runaway (a particle flung to 1e20): its
++// triangles go, or the frame's bounds take everything with them (SHAR).
++constexpr float kRunaway = 1e6f;
++
++bool runaway(const float position[3]) {
++  return !(std::fabs(position[0]) < kRunaway && std::fabs(position[1]) < kRunaway && std::fabs(position[2]) < kRunaway);
++}
++
 +void process(DrawJob& job) {
 +  const auto started = std::chrono::steady_clock::now();
 +  const Decoder decoder{job.state, job.config, job.bytes.data(), job.bytes.size()};
@@ -2102,6 +2149,9 @@ index 0000000..431afb3
 +  job.farthest = 0;
 +  for (uint32_t v = 0; v < job.vtxCount; ++v) {
 +    const float distance = decode_vertex(job, decoder, v);
++    if (runaway(job.vertices[v].position)) {
++      continue;
++    }
 +    job.nearest = std::min(job.nearest, distance);
 +    job.farthest = std::max(job.farthest, distance);
 +  }
@@ -2115,21 +2165,37 @@ index 0000000..431afb3
 +#if defined(__APPLE__)
 +  dispatch_group_wait(g_jobGroup, DISPATCH_TIME_FOREVER);
 +#endif
++  std::vector<uint8_t> sane;
 +  for (size_t i = 0; i < g_jobCount; ++i) {
 +    DrawJob& job = *g_jobs[i];
 +    const auto base = static_cast<uint32_t>(g_building.vertices.size());
-+    if (job.nearer != 1.f && !job.background) {
++    if ((job.nearer != 1.f || job.decal) && !job.background) {
 +      for (MirrorVertex& vertex : job.vertices) {
++        float scale = job.nearer;
++        if (job.decal) {
++          const float* p = vertex.position;
++          const float distance = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
++          scale *= 1.f - std::min(4e-3f, kDecalLift / std::max(distance, 1.f));
++        }
 +        for (float& c : vertex.position) {
-+          c *= job.nearer;
++          c *= scale;
 +        }
 +      }
++    }
++    sane.resize(job.vertices.size());
++    for (size_t v = 0; v < job.vertices.size(); ++v) {
++      sane[v] = !runaway(job.vertices[v].position);
 +    }
 +    g_building.vertices.insert(g_building.vertices.end(), job.vertices.begin(), job.vertices.end());
 +    auto& indices = g_groups[job.group].indices;
 +    indices.reserve(indices.size() + job.triangles.size());
-+    for (uint32_t t : job.triangles) {
-+      indices.push_back(base + t);
++    for (size_t t = 0; t + 2 < job.triangles.size(); t += 3) {
++      const uint32_t a = job.triangles[t], b = job.triangles[t + 1], c = job.triangles[t + 2];
++      if (sane[a] && sane[b] && sane[c]) {
++        indices.push_back(base + a);
++        indices.push_back(base + b);
++        indices.push_back(base + c);
++      }
 +    }
 +    g_stats.triangles += job.triangles.size() / 3;
 +    if (job.background) {
@@ -2191,6 +2257,103 @@ index 0000000..431afb3
 +}
 +
 +// AURORA_MIRROR_LOG=1 (a test switch): what the skipped framebuffer-copy draws are, each kind once.
++// AURORA_MIRROR_LOG=2 (a test switch): kept draws whose TEV samples more than one texture, each
++// distinct one once: what the mirror averages away.
++void log_textures(const ShaderConfig& config, const DrawPlan& plan, const MirrorPart& part, u16 vtxCount) {
++  static const bool enabled = [] {
++    const char* value = std::getenv("AURORA_MIRROR_LOG");
++    return value != nullptr && std::strcmp(value, "2") == 0;
++  }();
++  static std::unordered_map<uint64_t, bool> seen;
++  if (!enabled || seen.size() > 300) {
++    return;
++  }
++  int maps = 0;
++  u32 seenMaps = 0;
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const auto& stage = config.tevStages[i];
++    if (samples_texture(stage) && stage.texMapId < MaxTextures && (seenMaps & (1u << stage.texMapId)) == 0) {
++      seenMaps |= 1u << stage.texMapId;
++      ++maps;
++    }
++  }
++  if (maps < 2) {
++    return;
++  }
++  const auto& st = g_gxState;
++  std::string group;
++  for (const auto& name : g_debugGroups) {
++    group += '/';
++    group += name;
++  }
++  std::string text = fmt::format("{} kind {} depth {}{} func {} blend {} {}->{} | {} stages, {} ind:", group, part.kind,
++                                 st.depthCompare ? "test" : "-", st.depthUpdate ? "+write" : "",
++                                 static_cast<int>(st.depthFunc), static_cast<int>(st.blendMode),
++                                 static_cast<int>(st.blendFacSrc), static_cast<int>(st.blendFacDst), config.tevStageCount,
++                                 config.numIndStages);
++  for (u32 i = 0; i < config.tevStageCount; ++i) {
++    const auto& stage = config.tevStages[i];
++    const bool sampled = samples_texture(stage) && stage.texMapId < MaxTextures;
++    const auto& obj = st.loadedTextures[sampled ? stage.texMapId : 0];
++    text += fmt::format(" [c {} {} {} {} op{}b{}s{}>{} a {} {} {} {} op{}b{}s{}>{} k{}/{} ras{} swap{}/{}",
++                        static_cast<int>(stage.colorPass.a), static_cast<int>(stage.colorPass.b),
++                        static_cast<int>(stage.colorPass.c), static_cast<int>(stage.colorPass.d),
++                        static_cast<int>(stage.colorOp.op), static_cast<int>(stage.colorOp.bias),
++                        static_cast<int>(stage.colorOp.scale), static_cast<int>(stage.colorOp.outReg),
++                        static_cast<int>(stage.alphaPass.a), static_cast<int>(stage.alphaPass.b),
++                        static_cast<int>(stage.alphaPass.c), static_cast<int>(stage.alphaPass.d),
++                        static_cast<int>(stage.alphaOp.op), static_cast<int>(stage.alphaOp.bias),
++                        static_cast<int>(stage.alphaOp.scale), static_cast<int>(stage.alphaOp.outReg),
++                        static_cast<int>(stage.kcSel), static_cast<int>(stage.kaSel), static_cast<int>(stage.channelId),
++                        static_cast<int>(stage.tevSwapRas), static_cast<int>(stage.tevSwapTex));
++    if (sampled) {
++      const auto& avg = plan.average[stage.texMapId];
++      text += fmt::format(" map{} {} {}x{} coord{}{} avg {:.2f} {:.2f} {:.2f} {:.2f}", static_cast<int>(stage.texMapId),
++                          obj.format(), obj.width(), obj.height(), static_cast<int>(stage.texCoordId),
++                          plan.primaryMap == static_cast<int>(stage.texMapId) ? " PRIMARY" : "", avg[0], avg[1], avg[2],
++                          avg[3]);
++      // Its pixels, once, as a PPM (RGB) and PGM (alpha) in TMPDIR.
++      static std::unordered_map<const void*, bool> written;
++      if (const char* tmp = std::getenv("TMPDIR"); tmp != nullptr && written.emplace(obj.data, true).second) {
++        auto rgba = decode(obj, palette_of(obj));
++        if (!rgba.empty()) {
++          const std::string base = fmt::format("{}/mirror-tex-{}x{}-f{}-{:p}", tmp, obj.width(), obj.height(), obj.format(), obj.data);
++          if (FILE* f = std::fopen((base + ".ppm").c_str(), "wb")) {
++            std::fprintf(f, "P6 %u %u 255\n", obj.width(), obj.height());
++            for (size_t i = 0; i < rgba.size(); i += 4) {
++              std::fwrite(&rgba[i], 1, 3, f);
++            }
++            std::fclose(f);
++          }
++          if (FILE* f = std::fopen((base + ".pgm").c_str(), "wb")) {
++            std::fprintf(f, "P5 %u %u 255\n", obj.width(), obj.height());
++            for (size_t i = 3; i < rgba.size(); i += 4) {
++              std::fwrite(&rgba[i], 1, 1, f);
++            }
++            std::fclose(f);
++          }
++          text += " -> " + base;
++        }
++      }
++    }
++    if (stage.indTexMtxId != GX_ITM_OFF) {
++      text += fmt::format(" ind{} mtx{}", static_cast<int>(stage.indTexStage), static_cast<int>(stage.indTexMtxId));
++    }
++    text += "]";
++  }
++  for (u32 i = 0; i < MaxTexCoord; ++i) {
++    if (config.tcgs[i].src != GX_MAX_TEXGENSRC) {
++      text += fmt::format(" tcg{} t{} s{} m{} p{}{}", i, static_cast<int>(config.tcgs[i].type),
++                          static_cast<int>(config.tcgs[i].src), static_cast<int>(config.tcgs[i].mtx),
++                          static_cast<int>(config.tcgs[i].postMtx), config.tcgs[i].normalize ? " n" : "");
++    }
++  }
++  const uint64_t key = xxh3_hash_s(text.data(), text.size());
++  if (seen.emplace(key, true).second) {
++    Log.info("mirror textures ({} vertices): {}", vtxCount, text);
++  }
++}
++
 +void log_skipped(const ShaderConfig& config, const MirrorPart& part, u16 vtxCount) {
 +  static const bool enabled = std::getenv("AURORA_MIRROR_LOG") != nullptr;
 +  static std::unordered_map<uint64_t, bool> seen;
@@ -2375,7 +2538,7 @@ index 0000000..431afb3
 +  } else {
 +    // The background behind everything else.
 +    if (!job.backgroundRanges.empty() && job.nearestBackground < INFINITY && job.farthest > 0) {
-+      const float push = std::max(1.f, 1.25f * job.farthest / std::max(job.nearestBackground, 1e-3f));
++      const float push = std::clamp(1.25f * job.farthest / std::max(job.nearestBackground, 1e-3f), 1.f, 100.f);
 +      for (const auto& [first, end] : job.backgroundRanges) {
 +        for (uint32_t i = first; i < end && i < out.vertices.size(); ++i) {
 +          for (float& c : out.vertices[i].position) {
@@ -2405,6 +2568,11 @@ index 0000000..431afb3
 +    }
 +    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
 +    for (const MirrorVertex& vertex : out.vertices) {
++      // (Runaways' triangles are gone; the sky, pushed at most 100 times, stays inside this.)
++      if (!(std::fabs(vertex.position[0]) < kRunaway * 100.f && std::fabs(vertex.position[1]) < kRunaway * 100.f &&
++            std::fabs(vertex.position[2]) < kRunaway * 100.f)) {
++        continue;
++      }
 +      for (int c = 0; c < 3; ++c) {
 +        low[c] = std::min(low[c], vertex.position[c]);
 +        high[c] = std::max(high[c], vertex.position[c]);
@@ -2687,6 +2855,7 @@ index 0000000..431afb3
 +  }
 +  DrawJob& job = *g_jobs[g_jobCount++];
 +  tally(TallyKept);
++  log_textures(config, plan, part, vtxCount);
 +  job.state.capture();
 +  job.config = config;
 +  job.plan = plan;
@@ -2765,9 +2934,7 @@ index 0000000..431afb3
 +  // what's under it; a mesh drawn again where it was just drawn (a second pass) is over the first;
 +  // and every draw a hair nearer than the ones before, in the game's order. (SHAR's rules.)
 +  job.nearer = 1.f - 1e-6f * static_cast<float>(g_jobCount);
-+  if (part.kind == aurora::mirror::PartBlend && !behind && depthTest && !st.depthUpdate && !background) {
-+    job.nearer *= 1.f - 4e-3f;
-+  }
++  job.decal = part.kind == aurora::mirror::PartBlend && !behind && depthTest && !st.depthUpdate && !background;
 +  {
 +    struct PassKey {
 +      uint64_t bytes;

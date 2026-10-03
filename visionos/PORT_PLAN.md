@@ -155,10 +155,19 @@ owns the swapchain images and Dawn imports them.
 - [x] Simulator: Ordon, Ordon Spring (a cutscene), the Lost Woods, Faron and Lakebed straight on
       and at 25 degrees; offline (mirror dump + effects) the Lost Woods matches the game to 3.9/255
       on average. Headset: untried.
-- [ ] Link (and others) come out darker and flatter than the game draws them where a second
-      texture shapes their lighting: the mirror keeps one texture a draw, the others as averages.
-      Strong bloom (the Lost Woods) makes him look washed out.
-- [ ] Eyes: Ilia's and Link's irises don't show in the mirror (blank whites in close-ups).
+- [ ] Link (and others) come out darker and flatter than the game draws them in Faron and the
+      Lost Woods: their material multiplies in a second texture, the canopy's dappled light
+      projected from position (256x256, GX_TG_MTX3x4 from POS, texmtx 33), which the mirror
+      averages. Needs a second texture slot (AURORA_MIRROR_LOG=2 lists such materials).
+- [x] Eyes: TP's eye material samples a grey mask first and the eye's own picture (iris and all)
+      second; the mirror kept the first. It now keeps the most telling texture a draw samples: a
+      colour picture over an intensity mask, mapped by the model's coordinates over a projection.
+- [x] From the SHAR port's window (read 2026-10-02): the face at the front of a 4 pt deep view (it
+      sat behind the window's bar and handles on the headset), a tap target on the portal (pinches
+      went through to windows behind), handlesGameControllerEvents (controller buttons became
+      pinches on whatever was looked at), the material list reset counting new materials (not
+      parts), texture uploads checked and retried once, decals lifted min(0.4%, 3 units), runaway
+      vertices (beyond 1e6) dropped, the sky's push capped at 100x.
 
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
