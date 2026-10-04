@@ -1,6 +1,6 @@
 # Twilight Princess VR on Apple Vision Pro: install guide
 
-Ported to Apple Vision Pro by [trevorbilt](https://trevorbilt.com).
+Ported to Apple Vision Pro by [Trevorbilt](https://trevorbilt.com).
 
 Twilight Princess, natively on Apple Vision Pro. It's Dusklight (the Twilight Princess PC port,
 built on the zeldaret decompilation) with JoeyAW's TPVR mod, built for visionOS. You can play:
@@ -134,7 +134,7 @@ More detail on the design, the test hooks and what has been verified is in
 - [Aurora](https://github.com/encounter/aurora), the GameCube/Wii graphics layer, by encounter (MIT).
 - The visionOS OpenXR provider from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR)
   (GPL-3.0-or-later), so the built app is GPL-3.0.
-- The Apple Vision Pro port by [trevorbilt](https://trevorbilt.com) (@edgytoast).
+- The Apple Vision Pro port by [Trevorbilt](https://trevorbilt.com) (@edgytoast).
 
 Twilight Princess is Nintendo's. This project isn't affiliated with or endorsed by Nintendo, and it
 includes nothing from the game.
