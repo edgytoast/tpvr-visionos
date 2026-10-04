@@ -6,6 +6,12 @@
 
 <p align="center"><b>Hyrule, all around you.</b></p>
 
+<div align="center">
+
+[![Listed in the AVP Ports Index](https://img.shields.io/badge/AVP_Ports_Index-listed-0A84FF)](https://github.com/edgytoast/avp-ports-index/blob/main/ports/twilight-princess-vr.md)
+
+</div>
+
 <p align="center">
   <img src="docs/images/window-view.jpg" alt="Link at Ordon Ranch, in a window floating in a living room" width="820">
   <br><sub>The Window view at Ordon Ranch, in the visionOS Simulator's living room.</sub>
