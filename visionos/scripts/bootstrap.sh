@@ -18,7 +18,9 @@ git submodule update --recursive extern/aurora extern/borealis
 apply_series() {
     local dir="$1" target="$2"
     shopt -s nullglob
-    local patches=("${dir}"/*.patch)
+    # Absolute paths: `git -C <submodule> apply` opens a relative patch path from inside the
+    # submodule, where it doesn't exist (a fresh clone stopped here).
+    local patches=("${root}/${dir}"/*.patch)
     shopt -u nullglob
     for patch in "${patches[@]}"; do
         local name
