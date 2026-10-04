@@ -1,6 +1,0 @@
-#ifndef JUTFONTDATA_ASCFONT_FIX12_H
-#define JUTFONTDATA_ASCFONT_FIX12_H
-
-#include <types.h>
-
-#endif /* JUTFONTDATA_ASCFONT_FIX12_H */

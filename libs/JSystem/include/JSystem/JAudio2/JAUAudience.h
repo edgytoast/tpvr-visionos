@@ -1,6 +1,0 @@
-#ifndef JAUAUDIENCE_H
-#define JAUAUDIENCE_H
-
-// NONMATCHING
-
-#endif /* JAUAUDIENCE_H */

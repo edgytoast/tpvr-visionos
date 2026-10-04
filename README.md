@@ -50,6 +50,22 @@ Requirements, game files, pairing, controls and troubleshooting: [AVP-INSTALL.md
 Design notes, decisions and measurements: [visionos/README.md](visionos/README.md) and
 [visionos/PORT_PLAN.md](visionos/PORT_PLAN.md).
 
+## What's in this repository
+
+Only what the Apple Vision Pro build uses, so it's quick to review:
+
+| Path | What |
+| --- | --- |
+| `visionos/` | The visionOS app (SwiftUI, RealityKit window, launcher), its build scripts, patches to the two graphics submodules, the vendored OpenXR provider, design notes |
+| `src/`, `include/`, `libs/` | The game: Dusklight's decompiled Twilight Princess code and its PC layer, with TPVR's VR layer in `src/dusk/vr/` and the visionOS bridge in `src/dusk/visionos/` |
+| `extern/` | Submodules: Aurora (graphics) and Borealis (platform layer) |
+| `res/` | Fonts and UI files bundled into the app |
+| `cmake/`, `CMakeLists.txt`, `files.cmake`, `sdk/include/`, `assets/GZ2E01/` | Build configuration and the generated headers the build includes |
+
+Other platforms (Windows PC VR, Android, iOS, macOS), code mods and the decompilation's matching
+tools aren't here; they live upstream in [Dusklight](https://github.com/TwilitRealm/dusklight) and
+[TPVR](https://github.com/JoeyAW/TPVR).
+
 ## How it was built
 
 Built by trevorbilt with Claude Code as an AI pair programmer; every commit is co-authored. Each

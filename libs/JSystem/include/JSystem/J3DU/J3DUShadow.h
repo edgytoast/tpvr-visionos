@@ -1,6 +1,0 @@
-#ifndef J3DUSHADOW_H
-#define J3DUSHADOW_H
-
-// NONMATCHING
-
-#endif /* J3DUSHADOW_H */

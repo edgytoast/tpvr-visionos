@@ -1,6 +1,0 @@
-#ifndef J3DUMOTION_H
-#define J3DUMOTION_H
-
-// NONMATCHING
-
-#endif /* J3DUMOTION_H */

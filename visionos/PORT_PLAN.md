@@ -180,6 +180,17 @@ owns the swapchain images and Dawn imports them.
       parts), texture uploads checked and retried once, decals lifted min(0.4%, 3 units), runaway
       vertices (beyond 1e6) dropped, the sky's push capped at 100x.
 
+### 8. Public, for the AVP Ports Index (2026-10-03/04)
+- [x] Public repo by trevorbilt: README in trevorbilt's name with the lineage credited by link,
+      AVP-INSTALL.md at the root, the index entry in `visionos/avp-ports-index/` (passes the
+      index's own preflight), private agent settings kept out of the repo.
+- [x] Only what the Vision Pro build uses is kept (19,463 files to 3,251), measured from the
+      device, Simulator and Debug builds' Ninja inputs, dependency logs and CMake configure inputs.
+      Other platforms, code mods, the decompilation's matching tools and upstream's AI notes are
+      upstream's (Dusklight, TPVR).
+- [x] A fresh clone builds as a player would (submodules, `bootstrap.sh`, Simulator and device
+      builds); that test found `bootstrap.sh` couldn't find its patches from a fresh clone.
+
 ### Next
 - Foveation (launcher option, off): try on the headset; make it the default if it holds frame rate.
 - Per-pixel depth for the compositor's reprojection (today the eyes are placed on a plane 3 m out).
