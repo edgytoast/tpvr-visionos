@@ -57,3 +57,6 @@ extract
 # visionOS port build products
 .scratch/
 visionos/App/TPVRVision.xcodeproj/
+
+# Local agent settings (a private plugin marketplace); never committed
+.claude/settings.local.json

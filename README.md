@@ -1,83 +1,90 @@
-<div align="center">
-  <img src="res/logo.png?v=2" alt="Logo" width="640">
+# Twilight Princess VR for Apple Vision Pro
 
-  <p align="center">
-    <a href="https://discord.gg/CxQJ9PjnjA">Join the Discord</a> • <a href="https://www.patreon.com/cw/JoeyAW">Sub to my Patreon</a>
-  </p>
-</div>
+**By [trevorbilt](https://trevorbilt.com)** · [Install guide](AVP-INSTALL.md) · [Support trevorbilt](https://trevorbilt.com)
+<!-- Buy Me a Coffee: add the link here, next to trevorbilt.com, once it exists. -->
 
-# Overview
+Twilight Princess, natively on Apple Vision Pro. Stand in Hyrule with your PlayStation VR2 Sense
+controllers or your bare hands as Link's hands, step in through a portal you widen with the
+Digital Crown, or play the GameCube game in a window beside your other apps, with real 3D depth.
 
-TPVR is a **vibecoded** VR mod for Dusklight, the PC of Twilight Princess. It is not affiliated with the Dusklight team in any way.
+> This repository contains no game data. Bring your own copy of Twilight Princess (GameCube or
+> Wii) and build the app yourself: [AVP-INSTALL.md](AVP-INSTALL.md) walks through it.
 
-It aims to be as accurate as possible to the original game while allowing you to experience the gameplay from a VR perspective.
+## Ways to play
 
-More on why it uses AI generated code below.
+- **Full immersion.** First person at life scale. Swing the sword, raise the shield and aim the bow
+  with your hands or Sense controllers; walk and turn with a gamepad-style stick or hand gestures.
+  Menus, loading and black screens can float in your room instead of the void, and the game fades
+  into your room if you walk too far from where you started.
+- **Progressive.** The same game through a portal in your room; turn the Digital Crown to widen it.
+- **Window.** The GameCube game in third person, in a window you move and resize beside other
+  apps, played with a gamepad or both Sense controllers held as one. Behind the window's glass the
+  game's own 3D scene is rebuilt every frame, so Hyrule holds up from any angle as you lean and
+  look; the HUD sits on the glass, and the game's bloom, mist and fades are laid over the scene.
 
-# Features
+## Get it running
 
-- Full stereoscopic 3D with controller tracking
-- Physical sword swinging, shield bashing and aiming (aim with the right hand)
-- Quest 2/3 controller bindings; other headsets are untested
-- The ability to play the game in flatscreen for parts you want to skip in VR
-# Quest 2/3 Controller binds
-<div align="center">
-<img src="Controller binding.png" alt="Logo" width="400">
-  
-(I'm going to replace this with a graphic soon)
-</div>
+You need an Apple Silicon Mac with Xcode, your own disc image (`.iso`, `.rvz` or `.wbfs`), and an
+Apple Vision Pro in Developer Mode. One script builds everything and installs it on the headset:
 
-> [!IMPORTANT]
-> Dusklight's official website is https://twilitrealm.dev/, any other website is not affiliated and may be promoting AI-generated misinformation.
+```bash
+visionos/scripts/bootstrap.sh
+visionos/scripts/build-visionos.sh --team YOURTEAMID --install
+```
 
-# Setup
+Requirements, game files, pairing, controls and troubleshooting: [AVP-INSTALL.md](AVP-INSTALL.md).
 
-> [!IMPORTANT]
-> TPVR does *not* provide any copyrighted assets. You must provide your own copy of the original game.
+## How it works
 
-> [!IMPORTANT]
-> At a minimum, TPVR requires a GPU with support for D3D12. It is only supported on Windows so far. Your experience with specific hardware, operating systems, VR software and drivers may vary. Virtual Desktop with VDXR is your best bet at the moment.
+- **The game** is Dusklight (Twilight Princess on PC, built on the zeldaret decompilation) with
+  JoeyAW's TPVR VR mod, compiled for visionOS as a framework the SwiftUI app runs behind a small C
+  bridge.
+- **The headset path:** TPVR's OpenXR layer talks to a visionOS OpenXR provider (from WiiCompiled
+  Vision) built on CompositorServices and ARKit. The game renders with Metal straight into the
+  compositor's images, in a full, mixed or progressive immersive space.
+- **The window:** the GameCube graphics stream is decoded on the CPU as the game draws, each draw's
+  material reduced to what RealityKit can render, and the scene rebuilt as one RealityKit mesh per
+  frame behind a portal. Screen effects come across as a separate layer, each glow at the depth of
+  what it lights.
 
-### 1. Dump your game
+Design notes, decisions and measurements: [visionos/README.md](visionos/README.md) and
+[visionos/PORT_PLAN.md](visionos/PORT_PLAN.md).
 
-You must dump your own copy of the game. Please see [this article](https://wiki.dolphin-emu.org/index.php?title=Ripping_Games) for instructions. After dumping, you can use a program like [Dolphin](https://dolphin-emu.org/) or [nodtool](https://github.com/encounter/nod/releases) to convert the `.iso` to `.rvz` to save space.
+## How it was built
 
-Dusklight currently supports all commercial discs except for Wii's Korean release.
+Built by trevorbilt with Claude Code as an AI pair programmer; every commit is co-authored. Each
+change was measured (frame times, GPU cost), checked in the visionOS Simulator, where window
+frames were rendered offline and compared with the game's own picture, and tested on Apple Vision
+Pro at each milestone, with an independent review agent checking the larger builds before they
+reached the headset.
 
-> [!NOTE]
-> Dusklight is based on the [Twilight Princess decompilation](https://github.com/zeldaret/tp), which is currently only matching for GameCube. As a result, even when playing Dusklight with a Wii disc, you will be presented with the GameCube version's HUD and certain other specificities.
+## Lineage and credits
 
-### 2. Install TPVR
+This port stands on years of work by others:
 
-Download the latest release, extract the zip file, and run Dusklight.exe with your choice of VR streamer open.
+- **[TPVR](https://github.com/JoeyAW/TPVR)** by JoeyAW, the VR mod this port is built on (PC VR on
+  Windows). Support JoeyAW: [Patreon](https://www.patreon.com/cw/JoeyAW) ·
+  [Discord](https://discord.gg/CxQJ9PjnjA).
+- **[Dusklight](https://twilitrealm.dev/)** by the Twilit Realm team and its
+  [contributors](https://github.com/TwilitRealm/dusklight/graphs/contributors): Twilight Princess
+  on PC. Dusklight's official website is twilitrealm.dev.
+- **[The Twilight Princess decompilation](https://github.com/zeldaret/tp)** by zeldaret, and the
+  GameCube and Wii decompilation community.
+- **[Aurora](https://github.com/encounter/aurora)** by encounter, the GameCube and Wii graphics layer.
+- **[WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR)** by iChris4, the source of the
+  visionOS OpenXR provider.
+- TPVR also thanks [Automata](https://github.com/automata-rtx/dusklight-mods) and the
+  [TP speedrunning community](https://zsrtp.link).
 
-# Building
+For PC VR on Windows, use JoeyAW's [TPVR](https://github.com/JoeyAW/TPVR) itself.
 
-If you'd like to build TPVR from source, please read the [build instructions](docs/building.md).
+## Licence
 
-# Statement on AI-generated code
-<details>
-<summary>Expand</summary>
-I do not know how to code. The furthest my knowledge goes is a little bit of HTML and CSS. I simply wanted a way to play Twilight Princess in VR and scoured the internet for anyone who mentioned a Dusklight mod/port in the works, but came up with nothing, so I decided to take matters into my own hands with Claude Code. This has taken hours of almost daily work in the last 3 weeks.
+Dusklight, the decompilation and TPVR are CC0-1.0 ([LICENSE.md](LICENSE.md)). The vendored OpenXR
+provider is GPL-3.0-or-later ([visionos/openxr-provider/LICENSE](visionos/openxr-provider/LICENSE)),
+so the built app is GPL-3.0. Twilight Princess is Nintendo's; this project isn't affiliated with
+or endorsed by Nintendo and includes nothing from the game.
 
-I do not condone the usage of AI for writing, "art", deepfakes, and music (especially music, screw Suno and its garbage that is polluting streaming services). It should not be people's go-to for asking questions or replacing a search engine; it has repeatedly been shown to hallucinate and take certain statements out of context, spreading misinformation. It should be used as a tool and you must guide that tool. 
+---
 
-With that being said, for a task like this, I believe it is acceptable to create a project that does not currently exist by writing the code using AI as long as you actually take the time to refine the experience and do not harm other people's repos or code in the process. In this case, I simply forked Dusklight and modified it in a separate instance over the course of multiple weeks, without pestering the devs with possible spaghetti-code pull requests. I wrote this statement and edited the README in my own words, and I made the logo using Paint.NET despite having very little graphic design experience. I have not and do not plan to ever use or create AI-generated assets, only code.
-
-I have seen many recent projects spring up in the same vein: vibecoded VR ports of existing games. Everybody is entitled to their own opinion, and different backgrounds will lead people to take different stances. However, I believe that you can either take this VR port of the original game and enjoy it for what it is, regardless of AI or not, or you can simply ignore it and play the game in flatscreen—it's still a fantastic experience.
-
-And yes—I used an em-dash there. You can type it with on your keyboard with Alt+0151. Thanks ChatGPT for ruining informal basic writing.
-</details>
-
-# Credits
-
-Special thanks to the [Dusklight](https://twilitrealm.dev/) team, [TP decompilation](https://github.com/zeldaret/tp) team, the GC/Wii decompilation community, the [Aurora](https://github.com/encounter/aurora) developers, [Automata](https://github.com/automata-rtx/dusklight-mods), the [TP speedrunning community](https://zsrtp.link), and all [contributors](https://github.com/TwilitRealm/dusklight/graphs/contributors).
-
-
-
-<br/>
-<div align="center">
-    <a href="https://github.com/encounter/aurora">
-        <img src="assets/aurora-powered.png" alt="Powered by Aurora" width="800">
-    </a>
-</div>
+Made by [trevorbilt](https://trevorbilt.com) · [admin@trevorbilt.com](mailto:admin@trevorbilt.com)

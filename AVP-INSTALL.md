@@ -1,0 +1,140 @@
+# Twilight Princess VR on Apple Vision Pro: install guide
+
+Ported to Apple Vision Pro by [trevorbilt](https://trevorbilt.com).
+
+Twilight Princess, natively on Apple Vision Pro. It's Dusklight (the Twilight Princess PC port,
+built on the zeldaret decompilation) with JoeyAW's TPVR mod, built for visionOS. You can play:
+
+- **Full immersion:** first person, standing in Hyrule. Your PS VR2 Sense controllers or your bare
+  hands are Link's hands: swing the sword, raise the shield, aim the bow.
+- **Progressive:** the same, through a portal you widen with the Digital Crown.
+- **Window:** the GameCube game in third person, in a window beside your other apps, played with a
+  gamepad. The game's 3D scene is rebuilt inside the window, so it has real depth from any angle.
+
+This repository contains no game data. You need your own copy of the game, and you build the app
+yourself with Xcode and install it on your own headset.
+
+## Requirements
+
+- **Your own copy of Twilight Princess** on GameCube or Wii (see Game files).
+- **An Apple Silicon Mac** with about 15 GB free (the first build compiles Google's Dawn graphics
+  library, which takes up to an hour; later builds take minutes).
+- **Xcode with the visionOS SDK**, installed at `/Applications/Xcode.app` (the path must not contain
+  a space). Built and tested with Xcode 27 on macOS 27.
+- **Homebrew**, from https://brew.sh.
+- **Apple Vision Pro** with Developer Mode on, paired with your Mac (below). Tested on visionOS 27;
+  Sense controllers and Progressive need visionOS 26 or later.
+- **An Apple ID signed in to Xcode** (Xcode > Settings > Accounts). The app asks for the
+  increased-memory-limit entitlement. It has been built with a paid Apple Developer Program team;
+  whether a free personal team can sign it is untested.
+- Optional: PlayStation VR2 Sense controllers, or a Bluetooth gamepad for Window mode.
+
+## Game files
+
+You supply your own game; this repository contains none.
+
+1. Dump your own disc as `.iso`, `.rvz` or `.wbfs`. Dolphin's guide explains how:
+   https://wiki.dolphin-emu.org/index.php?title=Ripping_Games
+2. Use a supported release: GameCube GZ2E01 (USA) or GZ2P01 (Europe), or any Wii release except
+   the Korean one. Dolphin shows a disc's game ID in its game list. A Wii disc plays as the GameCube
+   version, which the decompilation matches.
+3. After installing the app (below), put the disc image on the headset: AirDrop it and open it with
+   Twilight Princess VR, copy it to Files > On My Apple Vision Pro > Twilight Princess VR, or use
+   Import Disc in the app. The app uses the newest disc image in that folder.
+
+## Build
+
+Start in a checkout of this repository, with its submodules (the index's clone command does this;
+otherwise `git submodule update --init --recursive`).
+
+1. Install the build tools, once:
+
+   ```bash
+   brew install cmake ninja xcodegen rustup
+   rustup toolchain install nightly --profile minimal
+   rustup target add --toolchain nightly aarch64-apple-visionos
+   ```
+
+   Homebrew's `rustup` isn't put on your `PATH`; the build script finds it at
+   `/opt/homebrew/opt/rustup/bin`.
+
+2. Prepare the checkout. This fetches the two graphics submodules at their pinned commits and
+   applies this port's patches to them:
+
+   ```bash
+   visionos/scripts/bootstrap.sh
+   ```
+
+3. Find your team ID: the 10-character ID shown for your team in Xcode > Settings > Accounts, or the
+   "OU" in your Apple Development certificate (Keychain Access).
+
+## Install on Apple Vision Pro
+
+1. On the headset, turn on Developer Mode: Settings > Privacy & Security > Developer Mode (it
+   restarts).
+2. Pair it with your Mac: open Xcode > Window > Devices and Simulators, then on the headset open
+   Settings > General > Remote Devices and pick your Mac. Keep the headset on and unlocked while
+   installing.
+3. Build and install:
+
+   ```bash
+   visionos/scripts/build-visionos.sh --team YOURTEAMID --install
+   ```
+
+   The bundle ID is `dev.tpvr.vision.YOURTEAMID`. Keep the team suffix: a bare ID can belong to
+   someone else's team, and signing then fails on the memory entitlement. With several headsets,
+   add `--device <UDID>`.
+
+4. If visionOS says the developer isn't trusted, allow it in Settings > General > VPN & Device
+   Management. Apps signed with a free personal team stop opening after 7 days until you build and
+   install again.
+
+## Play
+
+1. Open Twilight Princess VR, choose how to play (Full, Progressive or Window) and press Play.
+2. Press the Digital Crown to leave. The game saves on the way out.
+
+Saves live next to the disc image in Files > On My Apple Vision Pro > Twilight Princess VR. Copy
+them out to back them up; deleting the app deletes them.
+
+### Controls
+
+- **Sense controllers:** TPVR's controller layout (the sword follows your right hand, the shield
+  your left).
+- **Bare hands:** index pinch is the trigger, middle pinch A/X, ring pinch B/Y, left little-finger
+  pinch the menu, a fist the grip. Hold the left thumb-middle pinch and move your hand to walk; hold
+  the right thumb-little pinch and move it sideways to turn.
+- **Window mode:** a gamepad, or both Sense controllers held as one pad: right half Cross A,
+  Circle B, R2 R, R1 Z, Options Start; left half Square X, Triangle Y, L2 L (targeting); D-pad on
+  L1 (up), Create (left), L3 (down) and R3 (right). Close the window to quit.
+- Vision Pro options are in the game's VR menu: VR > Vision Pro (anti-aliasing) and VR >
+  Performance (render resolution up to 150%).
+
+### Known issues
+
+- Window mode is newer than the immersive modes: characters look a little flatter and darker
+  than in the game, and strong bloom can wash them out.
+- The first build takes up to an hour (it compiles Dawn); later builds take minutes.
+
+## Troubleshooting
+
+- **CMake can't find Xcode:** Xcode must be at `/Applications/Xcode.app`, not a path with a space.
+- **The install hangs:** wake and unlock the headset, then run the build command again.
+- **Signing fails on the memory entitlement:** keep the team suffix on the bundle ID (the
+  default); a bare ID may already belong to another team.
+
+More detail on the design, the test hooks and what has been verified is in
+[visionos/README.md](visionos/README.md) and [visionos/PORT_PLAN.md](visionos/PORT_PLAN.md).
+
+## Credits and licences
+
+- [Dusklight](https://twilitrealm.dev/) by the Twilit Realm team, built on the
+  [Twilight Princess decompilation](https://github.com/zeldaret/tp) by zeldaret (both CC0-1.0).
+- [TPVR](https://github.com/JoeyAW/TPVR), the VR mod, by JoeyAW.
+- [Aurora](https://github.com/encounter/aurora), the GameCube/Wii graphics layer, by encounter (MIT).
+- The visionOS OpenXR provider from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR)
+  (GPL-3.0-or-later), so the built app is GPL-3.0.
+- The Apple Vision Pro port by [trevorbilt](https://trevorbilt.com) (@edgytoast).
+
+Twilight Princess is Nintendo's. This project isn't affiliated with or endorsed by Nintendo, and it
+includes nothing from the game.

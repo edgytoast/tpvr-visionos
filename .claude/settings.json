@@ -1,16 +1,5 @@
 {
   "worktree": {
     "bgIsolation": "none"
-  },
-  "extraKnownMarketplaces": {
-    "agent-harness": {
-      "source": {
-        "source": "github",
-        "repo": "edgytoast/agent-harness"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "avp-game-porting@agent-harness": true
   }
 }

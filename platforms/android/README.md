@@ -94,3 +94,17 @@ Supported extras:
 
 The legacy `dusk_args` and `dusk_argv` names remain accepted during the shell
 transition.
+
+## Gradle wrapper (this fork)
+
+This fork, the Apple Vision Pro port, doesn't commit `gradle/wrapper/gradle-wrapper.jar`: it's
+compiled code a security review can't read, and the Vision Pro build never uses it. To build for
+Android, restore it with a local Gradle, at the version `gradle-wrapper.properties` pins:
+
+```bash
+cd platforms/android && gradle wrapper --gradle-version 9.3.1
+```
+
+Upstream [TwilitRealm/dusklight](https://github.com/TwilitRealm/dusklight) and
+[JoeyAW/TPVR](https://github.com/JoeyAW/TPVR) keep the JAR. The inherited `Build` workflow, which
+runs `./gradlew`, is disabled in this repo.

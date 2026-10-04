@@ -1,0 +1,44 @@
+schema_version: 1
+id: twilight-princess-vr
+name: Twilight Princess VR
+game:
+  title: "The Legend of Zelda: Twilight Princess"
+  original_platform: gamecube
+  original_release_year: 2006
+repo: https://github.com/edgytoast/tpvr-visionos
+developer:
+  github: edgytoast
+  name: trevorbilt
+  url: https://trevorbilt.com
+credits:
+  - name: JoeyAW
+    role: TPVR, the VR mod this port is built on
+    url: https://github.com/JoeyAW/TPVR
+  - name: Twilit Realm
+    role: Dusklight, the Twilight Princess PC port
+    url: https://twilitrealm.dev/
+  - name: zeldaret
+    role: Twilight Princess decompilation
+    url: https://github.com/zeldaret/tp
+  - name: encounter
+    role: Aurora, the GameCube and Wii graphics layer
+    url: https://github.com/encounter/aurora
+  - name: iChris4
+    role: WiiCompiled Vision, source of the visionOS OpenXR provider
+    url: https://github.com/iChris4/Wiicompiled_VR
+upstream:
+  - https://github.com/JoeyAW/TPVR
+  - https://github.com/TwilitRealm/dusklight
+  - https://github.com/zeldaret/tp
+status: working
+status_notes: >-
+  Plays on Apple Vision Pro (visionOS 27) in full and progressive immersion, with PS VR2 Sense
+  controllers or bare hands. Window mode (third person, gamepad) is newer: characters look a little
+  flatter than in the game.
+visionos_min: "26.0"
+input: [game-controller, hand-tracking]
+description: >-
+  Twilight Princess in first person on Apple Vision Pro: JoeyAW's TPVR mod on Dusklight, built
+  natively for visionOS. Full or progressive immersion with PS VR2 Sense controllers or bare hands,
+  or the GameCube game in a window beside your apps, with real depth. Bring your own disc.
+tags: [zelda, twilight-princess, vr, first-person, gamecube, wii, decompilation, hand-tracking]
