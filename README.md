@@ -241,14 +241,21 @@ build, tested on a real Vision Pro. For PC VR on Windows, use JoeyAW's
 
 ## License
 
-Dusklight, the decompilation and TPVR are CC0-1.0 ([LICENSE.md](LICENSE.md)).
-The vendored OpenXR provider is GPL-3.0-or-later
-([visionos/openxr-provider/LICENSE](visionos/openxr-provider/LICENSE)), so the built app is
-GPL-3.0. That doesn't cover:
+This repository is CC0-1.0 ([LICENSE.md](LICENSE.md)): Dusklight, the decompilation, TPVR and
+Trevorbilt's own code for the Vision Pro port (the app in `visionos/`, `src/dusk/visionos/` and
+the port's other changes) are dedicated to the public domain. The exception is the vendored OpenXR
+provider, which is GPL-3.0-or-later, Trevorbilt's changes to it included
+([visionos/openxr-provider/](visionos/openxr-provider/README.md)). The app links it, so the built
+app is GPL-3.0. None of that covers:
 
 - the game, its characters and its art, including what shows in the screenshots in `docs/images/`,
   which belong to Nintendo (and the game files, which are yours to bring);
 - the Trevorbilt name and logo;
+- the fonts in `res/`: Alegreya SC, Fira Sans, Inter and Noto Mono are under the SIL Open Font
+  License 1.1 and Material Symbols under Apache-2.0, with their licences in
+  [res/licenses/](res/licenses), which the app carries too;
+- SMAA in the provider, which is MIT
+  ([its licence](visionos/openxr-provider/src/smaa/LICENSE.txt));
 - the submodules and the libraries the build downloads, which keep their own licenses.
 
 <p align="center">
