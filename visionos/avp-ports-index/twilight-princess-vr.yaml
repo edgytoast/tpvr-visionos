@@ -8,7 +8,7 @@ game:
 repo: https://github.com/edgytoast/tpvr-visionos
 developer:
   github: edgytoast
-  name: trevorbilt
+  name: Trevorbilt
   url: https://trevorbilt.com
 credits:
   - name: JoeyAW
@@ -37,6 +37,7 @@ status_notes: >-
   flatter than in the game.
 visionos_min: "26.0"
 input: [game-controller, hand-tracking]
+experiences: [3d-shared-space, 6dof-immersive, 6dof-progressive]
 description: >-
   Twilight Princess in first person on Apple Vision Pro: JoeyAW's TPVR mod on Dusklight, built
   natively for visionOS. Full or progressive immersion with PS VR2 Sense controllers or bare hands,
