@@ -1,4 +1,5 @@
 import CompositorServices
+import os
 import SwiftUI
 
 /// The app: a launcher window (the disc, Play) and the immersive space the game
@@ -8,6 +9,10 @@ import SwiftUI
 struct TPVRVisionApp: App {
     @StateObject private var model = GameModel()
     @State private var space = ImmersionSpaceStyle.shared
+
+    init() {
+        MemoryWatch.start()
+    }
 
     var body: some Scene {
         WindowGroup(id: GameModel.launcherWindowID) {
@@ -48,5 +53,29 @@ struct TPVRVisionApp: App {
         }
         .immersionStyle(selection: $space.progressiveStyle, in: GameModel.progressiveStyle, .full)
         .upperLimbVisibility(.automatic)
+    }
+}
+
+/// Logs visionOS's memory warnings with what's left before the app's limit, so a
+/// session that ends early (jetsam) can be told apart from a crash in the device log.
+/// As in the SHAR port. Nothing is trimmed in response yet: aurora's GPU caches are
+/// read by its render worker, so they can only be cleared once it has drained.
+@MainActor
+enum MemoryWatch {
+    private static var source: DispatchSourceMemoryPressure?
+    // The unified log, which a headset's device log keeps (print goes to stdout only).
+    nonisolated private static let log = Logger(subsystem: "dev.tpvr.vision", category: "memory")
+
+    static func start() {
+        guard source == nil else { return }
+        let source = DispatchSource.makeMemoryPressureSource(eventMask: [.warning, .critical], queue: .main)
+        source.setEventHandler { [weak source] in
+            guard let event = source?.data else { return }
+            let level = event.contains(.critical) ? "critical" : "warning"
+            log.warning("[TPVR] memory pressure (\(level, privacy: .public)): \(os_proc_available_memory() / 1_048_576, privacy: .public) MB left")
+        }
+        source.resume()
+        Self.source = source
+        log.notice("[TPVR] memory: \(os_proc_available_memory() / 1_048_576, privacy: .public) MB available at launch")
     }
 }
