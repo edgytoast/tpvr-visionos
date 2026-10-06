@@ -80,11 +80,11 @@ ignore_prefixes="/opt/homebrew;/usr/local;/opt/homebrew/Caskroom/miniconda/base;
 [[ -n "${CONDA_PREFIX:-}" ]] && ignore_prefixes="${ignore_prefixes};${CONDA_PREFIX}"
 # nod's Rust build compiles C dependencies through the cc crate, which targets
 # the SDK's own visionOS version unless told otherwise.
-export XROS_DEPLOYMENT_TARGET=2.0
+export XROS_DEPLOYMENT_TARGET=26.0
 cmake -S "${root}" -B "${build}" -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="${root}/ios.toolchain.cmake" \
     -DPLATFORM="${platform}" \
-    -DDEPLOYMENT_TARGET=2.0 \
+    -DDEPLOYMENT_TARGET=26.0 \
     -DENABLE_BITCODE=OFF \
     -DENABLE_ARC=OFF \
     -DENABLE_VISIBILITY=ON \

@@ -7,8 +7,10 @@
 #   TPVR_GAME_BUILD_DIR the CMake build directory holding DusklightGame.framework
 name: TPVRVision
 options:
+  # visionOS 26, as the guides and the index entry say: Sense controllers, Progressive
+  # and the drawable arrays need it, and it's what the port is tested on.
   deploymentTarget:
-    visionOS: "2.0"
+    visionOS: "26.0"
   createIntermediateGroups: true
 settings:
   base:

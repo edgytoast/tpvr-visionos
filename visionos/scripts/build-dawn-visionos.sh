@@ -51,6 +51,9 @@ flags=(
     -DCMAKE_SYSTEM_NAME=visionOS
     "-DCMAKE_OSX_SYSROOT=${sysroot}"
     -DCMAKE_OSX_ARCHITECTURES=arm64
+    # Lower than the app's visionOS 26 on purpose: a static library built for an
+    # older minimum links into the app as is, and this value is part of the
+    # package's cache key, so raising it would only rebuild Dawn.
     -DCMAKE_OSX_DEPLOYMENT_TARGET=2.0
     -DCMAKE_SYSTEM_PROCESSOR=arm64
     -DDAWN_FETCH_DEPENDENCIES=ON
