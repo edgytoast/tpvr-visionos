@@ -764,8 +764,9 @@ bool Compositor::BeginFrame() {
     std::lock_guard lock(m_mutex);
     m_drawable = drawable;
     if (drawable == nullptr) {
-        // The layer paused between the two calls. The frame is ended without content.
-        cp_frame_end_submission(frame);
+        // The layer paused or went away between the two calls (the Digital Crown, the
+        // headset taken off). A frame without a drawable is invalid and must not be
+        // ended, or the compositor can abort: it is dropped (the SHAR port learned this).
         m_frame = nullptr;
         m_timing = nullptr;
         return false;
@@ -970,7 +971,7 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
         cp_frame_start_submission(frame);
         drawable = FirstDrawable(frame);
         if (drawable == nullptr) {
-            cp_frame_end_submission(frame);
+            // No drawable: the frame is invalid and is dropped, not ended (see BeginFrame).
             return;
         }
         timing = cp_drawable_get_frame_timing(drawable);
