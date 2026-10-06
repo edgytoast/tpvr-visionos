@@ -289,14 +289,13 @@ XrFovf FovFromProjection(const simd_float4x4& p) noexcept {
     return fov;
 }
 
-cp_drawable_t FirstDrawable(cp_frame_t frame) {
-    if (@available(visionOS 26.0, *)) {
-        cp_drawable_array_t drawables = cp_frame_query_drawables(frame);
-        if (drawables == nullptr || cp_drawable_array_get_count(drawables) == 0) {
-            return nullptr;
-        }
-        return cp_drawable_array_get_drawable(drawables, 0);
-    }
+// The frame's drawable, from the single-drawable query, as in the SHAR port. Its
+// replacement, cp_frame_query_drawables, hands the app every drawable of the frame:
+// while the wearer records their view or uses AirPlay, a capture drawable can come
+// alongside the headset's, and the app must then draw both, or the recording or the
+// headset view can go blank. The single query is deprecated in visionOS 26 but still
+// in the visionOS 27 SDK, and with it visionOS chooses the drawable.
+cp_drawable_t QueryDrawable(cp_frame_t frame) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     return cp_frame_query_drawable(frame);
@@ -760,7 +759,7 @@ bool Compositor::BeginFrame() {
     // The compositor's own advice for when to sample the pose and start submitting.
     cp_time_wait_until(cp_frame_timing_get_optimal_input_time(timing));
     cp_frame_start_submission(frame);
-    cp_drawable_t drawable = FirstDrawable(frame);
+    cp_drawable_t drawable = QueryDrawable(frame);
     std::lock_guard lock(m_mutex);
     m_drawable = drawable;
     if (drawable == nullptr) {
@@ -969,7 +968,7 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
         // submission so the frame is consumed.
         cp_frame_end_update(frame);
         cp_frame_start_submission(frame);
-        drawable = FirstDrawable(frame);
+        drawable = QueryDrawable(frame);
         if (drawable == nullptr) {
             // No drawable: the frame is invalid and is dropped, not ended (see BeginFrame).
             return;
