@@ -1742,6 +1742,13 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
         // next READY) -- nothing to render this frame, but keep coming back
         // so the event pump above keeps running and can see READY.
         logTickReasonOnChange("session-not-running");
+#if DUSK_VR_XR_GRAPHICS_METAL
+        // Apple Vision Pro: stopped means nobody sees a frame (the headset
+        // taken off, the space paused; the game clock is held above). Idle
+        // instead of drawing unseen frames as fast as the loop goes; 50 ms
+        // still answers READY promptly.
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+#endif
         return;
     }
 
