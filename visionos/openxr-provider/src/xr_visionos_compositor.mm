@@ -471,7 +471,7 @@ bool Compositor::StartTracking() {
         m_leftHandAt = ar_hand_anchor_create();
         m_rightHandAt = ar_hand_anchor_create();
     }
-    m_deviceAnchor = ar_device_anchor_create();
+    m_queryAnchor = ar_device_anchor_create();
     // Hand tracking asks the wearer once; the answer only decides whether the
     // hands reach the game. Running the session before the answer is fine: the
     // provider stays paused until it is allowed.
@@ -507,7 +507,8 @@ void Compositor::StopTracking() {
     m_arSession = nullptr;
     m_worldTracking = nullptr;
     m_handTracking = nullptr;
-    m_deviceAnchor = nullptr;
+    m_queryAnchor = nullptr;
+    m_lastTrackedAnchor = nullptr;
     m_leftHand = nullptr;
     m_rightHand = nullptr;
     m_leftHandAt = nullptr;
@@ -515,18 +516,22 @@ void Compositor::StopTracking() {
     m_trackingStarted.store(false);
 }
 
-bool Compositor::DevicePose(int64_t timeNanos, simd_float4x4& worldFromDevice) noexcept {
-    std::lock_guard lock(m_mutex);
-    if (m_worldTracking == nullptr || m_deviceAnchor == nullptr ||
+bool Compositor::QueryDeviceAnchorLocked(ar_device_anchor_t anchor, int64_t timeNanos) noexcept {
+    if (m_worldTracking == nullptr || anchor == nullptr ||
         ar_data_provider_get_state(m_worldTracking) != ar_data_provider_state_running) {
         return false;
     }
     const ar_device_anchor_query_status_t status = ar_world_tracking_provider_query_device_anchor_at_timestamp(
-        m_worldTracking, NanosToSeconds(timeNanos), m_deviceAnchor);
-    if (status != ar_device_anchor_query_status_success || !ar_trackable_anchor_is_tracked(m_deviceAnchor)) {
+        m_worldTracking, NanosToSeconds(timeNanos), anchor);
+    return status == ar_device_anchor_query_status_success && ar_trackable_anchor_is_tracked(anchor);
+}
+
+bool Compositor::DevicePose(int64_t timeNanos, simd_float4x4& worldFromDevice) noexcept {
+    std::lock_guard lock(m_mutex);
+    if (!QueryDeviceAnchorLocked(m_queryAnchor, timeNanos)) {
         return false;
     }
-    worldFromDevice = ar_anchor_get_origin_from_anchor_transform(m_deviceAnchor);
+    worldFromDevice = ar_anchor_get_origin_from_anchor_transform(m_queryAnchor);
     return true;
 }
 
@@ -981,19 +986,25 @@ void Compositor::EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBl
     simd_float4x4 worldFromDevice = matrix_identity_float4x4;
     const int64_t presentation = timing != nullptr ? CpTimeToNanos(cp_frame_timing_get_presentation_time(timing))
                                                    : NowNanos();
-    bool posed = DevicePose(presentation, worldFromDevice);
+    bool posed = false;
     {
         std::lock_guard lock(m_mutex);
-        if (posed && m_deviceAnchor != nullptr) {
-            cp_drawable_set_device_anchor(drawable, m_deviceAnchor);
-        } else {
-            posed = false;
+        // A fresh anchor for this drawable alone (see m_queryAnchor).
+        ar_device_anchor_t anchor = m_worldTracking != nullptr ? ar_device_anchor_create() : nullptr;
+        if (QueryDeviceAnchorLocked(anchor, presentation)) {
+            worldFromDevice = ar_anchor_get_origin_from_anchor_transform(anchor);
+            cp_drawable_set_device_anchor(drawable, anchor);
+            m_lastTrackedAnchor = anchor;
+            posed = true;
+        } else if (IsLayered(drawable)) {
             // A layered (progressive) drawable ends through the render context,
-            // which reads the device anchor: give it the last one even when this
-            // frame's query failed (the first frames, before tracking settles),
-            // as the SHAR port does on every frame.
-            if (m_deviceAnchor != nullptr && IsLayered(drawable)) {
-                cp_drawable_set_device_anchor(drawable, m_deviceAnchor);
+            // which reads the device anchor: give it the last tracked one when this
+            // frame's query failed, or this frame's own before any was tracked (the
+            // first frames, before tracking settles), as the SHAR port does on
+            // every frame.
+            ar_device_anchor_t fallback = m_lastTrackedAnchor != nullptr ? m_lastTrackedAnchor : anchor;
+            if (fallback != nullptr) {
+                cp_drawable_set_device_anchor(drawable, fallback);
             }
         }
     }

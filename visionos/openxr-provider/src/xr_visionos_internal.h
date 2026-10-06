@@ -239,6 +239,9 @@ private:
     // `posed`: the drawable carries a device anchor, which the system's render
     // context (the progressive portal) needs.
     void PresentEmpty(cp_frame_t frame, cp_drawable_t drawable, bool alphaBlend, bool posed);
+    // Queries ARKit's device anchor at `timeNanos` into `anchor`; true when it's tracked.
+    // Call with m_mutex held.
+    bool QueryDeviceAnchorLocked(ar_device_anchor_t anchor, int64_t timeNanos) noexcept;
 
     mutable std::mutex m_mutex;
     cp_layer_renderer_t m_renderer = nullptr;
@@ -264,7 +267,13 @@ private:
     ar_session_t m_arSession = nullptr;
     ar_world_tracking_provider_t m_worldTracking = nullptr;
     ar_hand_tracking_provider_t m_handTracking = nullptr;
-    ar_device_anchor_t m_deviceAnchor = nullptr;
+    // The scratch anchor pose queries write into (views, spaces, the clutch). Each
+    // frame's drawable gets a fresh anchor of its own (EndFrame): the compositor reads
+    // it when it presents, by which time queries for the next frame may have run. The
+    // last tracked one is kept for the progressive portal, which needs an anchor on
+    // every present.
+    ar_device_anchor_t m_queryAnchor = nullptr;
+    ar_device_anchor_t m_lastTrackedAnchor = nullptr;
     ar_hand_anchor_t m_leftHand = nullptr;
     ar_hand_anchor_t m_rightHand = nullptr;
     // Separate anchors for the timestamp queries, so they never disturb the
