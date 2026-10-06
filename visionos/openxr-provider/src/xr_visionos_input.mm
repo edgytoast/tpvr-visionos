@@ -583,7 +583,7 @@ bool IsAimAction(Instance& instance, const Action& action) noexcept {
 
 bool LocateActionSpaceInWorld(Session& session, const Space& space, int64_t timeNanos, simd_float4x4& worldFromSpace,
                               XrSpaceLocationFlags& flags, simd_float3* linearVelocity) noexcept {
-    (void)timeNanos; // the hands are sampled at xrSyncActions; no prediction is attempted
+    (void)timeNanos; // the hands are sampled at xrSyncActions, predicted to that frame's display time
     flags = 0;
     Instance& instance = *session.instance;
     const Action* action = GetAction(space.action);
@@ -940,11 +940,20 @@ XrResult XRAPI_CALL SyncActions(XrSession session, const XrActionsSyncInfo* sync
     if (target->state != XR_SESSION_STATE_FOCUSED) {
         return XR_SESSION_NOT_FOCUSED;
     }
+    // Bare hands, predicted to when this frame shows so they don't trail a swing;
+    // ARKit's latest anchors when the prediction isn't available.
     std::array<HandSample, 2> hands{};
-    Compositor::Get().Hands(hands);
+    const bool predicted = target->predictedDisplayNanos != 0 &&
+                           Compositor::Get().HandsAt(target->predictedDisplayNanos, hands);
+    if (!predicted) {
+        Compositor::Get().Hands(hands);
+    }
     for (uint32_t hand = 0; hand < 2; ++hand) {
         if (hands[hand].tracked) {
-            target->previousHands[hand] = target->hands[hand];
+            // A second sync in the same frame keeps the pair the velocity reads.
+            if (hands[hand].timeNanos != target->hands[hand].timeNanos) {
+                target->previousHands[hand] = target->hands[hand];
+            }
             target->hands[hand] = hands[hand];
         } else if (target->hands[hand].tracked && NowNanos() - target->hands[hand].timeNanos > 250'000'000) {
             // A hand ARKit has not seen for a quarter second is gone, not paused.
