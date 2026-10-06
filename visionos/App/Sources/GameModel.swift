@@ -1,6 +1,8 @@
+import ARKit
 import AVFAudio
 import CompositorServices
 import Foundation
+import GameController
 import SwiftUI
 
 /// The game as the launcher sees it: the disc in the app's Documents folder and,
@@ -63,6 +65,12 @@ final class GameModel: ObservableObject {
     }
     /// The immersive space's style, observed by the scene (TPVRVisionApp).
     let space = ImmersionSpaceStyle.shared
+    /// Hand tracking is turned off for this app in Settings (read without asking).
+    @Published private(set) var handTrackingDenied = false
+    /// A gamepad or a Sense controller is connected.
+    @Published private(set) var controllerConnected = false
+    /// Full and Progressive would get no input at all: no hands and no controller.
+    var noInputForImmersive: Bool { !playsWindow && handTrackingDenied && !controllerConnected }
 
     private static let immersionKey = "immersion"
     private static let roomBehindMenusKey = "roomBehindMenus"
@@ -130,6 +138,14 @@ final class GameModel: ObservableObject {
             print("[TPVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
         }
         refreshDisc()
+    }
+
+    /// Reads whether hand tracking is allowed and a controller is connected, for the
+    /// launcher's note. Asks nothing: the immersive space asks for hand tracking itself.
+    func refreshInputs() async {
+        let status = await ARKitSession().queryAuthorization(for: [.handTracking])
+        handTrackingDenied = status[.handTracking] == .denied
+        controllerConnected = !GCController.controllers().isEmpty
     }
 
     var canPlay: Bool {

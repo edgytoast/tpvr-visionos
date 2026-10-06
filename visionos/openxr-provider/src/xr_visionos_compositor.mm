@@ -441,6 +441,28 @@ bool Compositor::EnsurePipelines(MTLPixelFormat color, MTLPixelFormat depth) {
 // ---------------------------------------------------------------------------
 // ARKit
 
+namespace {
+const char* ProviderStateName(ar_data_provider_state_t state) {
+    switch (state) {
+    case ar_data_provider_state_initialized: return "initialized";
+    case ar_data_provider_state_running: return "running";
+    case ar_data_provider_state_paused: return "paused";
+    case ar_data_provider_state_stopped: return "stopped";
+    }
+    return "unknown";
+}
+
+// Logs every state change of a session's providers, so a black immersive view can
+// be told apart from tracking that stopped.
+void WatchProviders(ar_session_t session, const char* name) {
+    ar_session_set_data_provider_state_change_handler(
+        session, nullptr,
+        ^(ar_data_providers_t, ar_data_provider_state_t state, ar_error_t error, ar_data_provider_t) {
+            Log("%s %s%s", name, ProviderStateName(state), error != nullptr ? " (with an error)" : "");
+        });
+}
+} // namespace
+
 bool Compositor::StartTracking() {
     if (m_trackingStarted.load()) {
         return true;
@@ -453,48 +475,55 @@ bool Compositor::StartTracking() {
         SetLastError("no layer renderer: the immersive space is not open");
         return false;
     }
-    m_arSession = ar_session_create();
-    ar_data_providers_t providers = ar_data_providers_create();
+    // World and hand tracking run in separate ARKit sessions (as the SHAR port
+    // does): if the wearer denies hand tracking, or it stops, the head pose that
+    // every immersive frame needs keeps running.
     if (ar_world_tracking_provider_is_supported()) {
         ar_world_tracking_configuration_t config = ar_world_tracking_configuration_create();
         m_worldTracking = ar_world_tracking_provider_create(config);
-        ar_data_providers_add_data_provider(providers, m_worldTracking);
+        m_arSession = ar_session_create();
+        WatchProviders(m_arSession, "world tracking");
+        ar_session_run(m_arSession, ar_data_providers_create_with_data_providers(m_worldTracking, nil));
     } else {
         SetLastError("world tracking is not supported here");
     }
     if (ar_hand_tracking_provider_is_supported()) {
         ar_hand_tracking_configuration_t config = ar_hand_tracking_configuration_create();
         m_handTracking = ar_hand_tracking_provider_create(config);
-        ar_data_providers_add_data_provider(providers, m_handTracking);
         m_leftHand = ar_hand_anchor_create();
         m_rightHand = ar_hand_anchor_create();
         m_leftHandAt = ar_hand_anchor_create();
         m_rightHandAt = ar_hand_anchor_create();
+        m_handSession = ar_session_create();
+        WatchProviders(m_handSession, "hand tracking");
+        // Hand tracking asks the wearer once; the answer only decides whether the
+        // hands reach the game. Running the session before the answer is fine: the
+        // provider stays paused until it is allowed.
+        std::atomic_bool* authorized = &m_handTrackingAuthorized;
+        ar_session_request_authorization(m_handSession, ar_authorization_type_hand_tracking,
+                                         ^(ar_authorization_results_t results, ar_error_t error) {
+                                             if (error != nullptr || results == nullptr) {
+                                                 Log("hand tracking authorization failed");
+                                                 return;
+                                             }
+                                             ar_authorization_results_enumerate_results(
+                                                 results, ^bool(ar_authorization_result_t result) {
+                                                     if (ar_authorization_result_get_authorization_type(result) ==
+                                                         ar_authorization_type_hand_tracking) {
+                                                         const bool allowed =
+                                                             ar_authorization_result_get_status(result) ==
+                                                             ar_authorization_status_allowed;
+                                                         authorized->store(allowed);
+                                                         Log("hand tracking %s", allowed ? "allowed" : "not allowed");
+                                                     }
+                                                     return true;
+                                                 });
+                                         });
+        ar_session_run(m_handSession, ar_data_providers_create_with_data_providers(m_handTracking, nil));
     }
     m_queryAnchor = ar_device_anchor_create();
-    // Hand tracking asks the wearer once; the answer only decides whether the
-    // hands reach the game. Running the session before the answer is fine: the
-    // provider stays paused until it is allowed.
-    std::atomic_bool* authorized = &m_handTrackingAuthorized;
-    ar_session_request_authorization(m_arSession, ar_authorization_type_hand_tracking,
-                                     ^(ar_authorization_results_t results, ar_error_t error) {
-                                         if (error != nullptr || results == nullptr) {
-                                             return;
-                                         }
-                                         ar_authorization_results_enumerate_results(
-                                             results, ^bool(ar_authorization_result_t result) {
-                                                 if (ar_authorization_result_get_authorization_type(result) ==
-                                                         ar_authorization_type_hand_tracking &&
-                                                     ar_authorization_result_get_status(result) ==
-                                                         ar_authorization_status_allowed) {
-                                                     authorized->store(true);
-                                                 }
-                                                 return true;
-                                             });
-                                     });
-    ar_session_run(m_arSession, providers);
     m_trackingStarted.store(true);
-    Log("ARKit session running (world tracking %s, hand tracking %s)", m_worldTracking ? "on" : "off",
+    Log("ARKit sessions running (world tracking %s, hand tracking %s)", m_worldTracking ? "on" : "off",
         m_handTracking ? "requested" : "unsupported");
     return true;
 }
@@ -504,7 +533,11 @@ void Compositor::StopTracking() {
     if (m_arSession != nullptr) {
         ar_session_stop(m_arSession);
     }
+    if (m_handSession != nullptr) {
+        ar_session_stop(m_handSession);
+    }
     m_arSession = nullptr;
+    m_handSession = nullptr;
     m_worldTracking = nullptr;
     m_handTracking = nullptr;
     m_queryAnchor = nullptr;

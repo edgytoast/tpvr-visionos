@@ -264,7 +264,9 @@ private:
     MTLPixelFormat m_pipelineColor = MTLPixelFormatInvalid;
     MTLPixelFormat m_pipelineDepth = MTLPixelFormatInvalid;
 
+    // World tracking's session; hand tracking has its own (StartTracking).
     ar_session_t m_arSession = nullptr;
+    ar_session_t m_handSession = nullptr;
     ar_world_tracking_provider_t m_worldTracking = nullptr;
     ar_hand_tracking_provider_t m_handTracking = nullptr;
     // The scratch anchor pose queries write into (views, spaces, the clutch). Each

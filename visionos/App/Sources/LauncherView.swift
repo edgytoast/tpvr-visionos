@@ -8,6 +8,7 @@ struct LauncherView: View {
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissWindow) private var dismissWindow
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.scenePhase) private var scenePhase
     @State private var pickingDisc = false
 
     var body: some View {
@@ -83,6 +84,14 @@ struct LauncherView: View {
             .disabled(model.phase != .idle)
             }
 
+            if model.noInputForImmersive {
+                Label("Hand tracking is off for Twilight Princess VR and no controller is connected, so nothing would reach the game. Turn it on in Settings › Privacy & Security › Hand Tracking, or connect a controller.",
+                      systemImage: "hand.raised.slash")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if !model.message.isEmpty {
                 Text(model.message)
                     .font(.callout)
@@ -117,6 +126,17 @@ struct LauncherView: View {
         .onAppear {
             let openWindow = openWindow
             model.showLauncher = { openWindow(id: GameModel.launcherWindowID) }
+        }
+        .task { await model.refreshInputs() }
+        // Back from Settings, where hand tracking may have been turned on.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshInputs() } }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in
+            Task { await model.refreshInputs() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in
+            Task { await model.refreshInputs() }
         }
         .task {
             // Headless runs: `SIMCTL_CHILD_TPVR_AUTO_PLAY=1 xcrun simctl launch ...` (or the
