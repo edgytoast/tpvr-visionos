@@ -4,6 +4,7 @@ import CompositorServices
 import Foundation
 import GameController
 import SwiftUI
+import UIKit
 
 /// The game as the launcher sees it: the disc in the app's Documents folder and,
 /// once Play is pressed, the game framework's C bridge.
@@ -137,6 +138,7 @@ final class GameModel: ObservableObject {
         } catch {
             print("[TPVR] setIntendedSpatialExperience(.bypassed) failed: \(error)")
         }
+        removeStalePartials()
         refreshDisc()
     }
 
@@ -173,21 +175,47 @@ final class GameModel: ObservableObject {
         message = "Copying \(url.lastPathComponent)…"
         let documents = self.documents
         let destination = documents.appendingPathComponent(url.lastPathComponent)
+        // A 1.4 to 4.7 GB copy takes a while: keep going if the wearer looks away. If the
+        // background time runs out first, the task ends so visionOS suspends the app
+        // rather than ending it, and the copy carries on when the app is back.
+        importTask = UIApplication.shared.beginBackgroundTask(withName: "Import disc") { [weak self] in
+            MainActor.assumeIsolated { self?.endImportTask() }
+        }
         Task.detached(priority: .userInitiated) {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let failure: String?
             do {
                 if url.standardizedFileURL != destination.standardizedFileURL {
-                    try? FileManager.default.removeItem(at: destination)
+                    let fileManager = FileManager.default
                     // AirDrop and "Open with" hand the file over in the app's own
                     // Documents/Inbox: move it rather than keep two copies of a
-                    // 1.4 GB disc. Anything picked from elsewhere is copied.
+                    // 1.4 GB disc (a rename, so it can't be left half done).
+                    // Anything picked from elsewhere is copied to a .partial file
+                    // first, which the launcher never picks, and renamed once whole:
+                    // an interrupted copy can't leave a truncated disc behind, and
+                    // the disc it replaces stays until then.
+                    let staged: URL
                     if url.standardizedFileURL.path.hasPrefix(documents.standardizedFileURL.path) {
-                        try FileManager.default.moveItem(at: url, to: destination)
+                        staged = url
                     } else {
-                        try FileManager.default.copyItem(at: url, to: destination)
+                        staged = destination.appendingPathExtension(Self.partialExtension)
+                        try? fileManager.removeItem(at: staged)
+                        do {
+                            try fileManager.copyItem(at: url, to: staged)
+                        } catch {
+                            try? fileManager.removeItem(at: staged)
+                            throw error
+                        }
                     }
+                    try? fileManager.removeItem(at: destination)
+                    try fileManager.moveItem(at: staged, to: destination)
+                    // Copies keep the source's date, and the launcher plays the newest
+                    // disc: the one just brought in is the newest.
+                    var imported = destination
+                    var values = URLResourceValues()
+                    values.contentModificationDate = Date()
+                    try? imported.setResourceValues(values)
                 }
                 failure = nil
             } catch {
@@ -197,7 +225,28 @@ final class GameModel: ObservableObject {
                 self.importing = false
                 self.message = failure.map { "Could not copy the disc: \($0)" } ?? ""
                 self.refreshDisc()
+                self.endImportTask()
             }
+        }
+    }
+
+    private var importTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func endImportTask() {
+        guard importTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(importTask)
+        importTask = .invalid
+    }
+
+    /// An import in progress (or one the app was closed during).
+    nonisolated static let partialExtension = "partial"
+
+    /// Removes .partial copies left by an import the app was closed during.
+    private func removeStalePartials() {
+        let files = (try? FileManager.default.contentsOfDirectory(
+            at: documents, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+        for file in files where file.pathExtension == Self.partialExtension {
+            try? FileManager.default.removeItem(at: file)
         }
     }
 
