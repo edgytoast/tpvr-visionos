@@ -132,13 +132,13 @@ More detail on the design, the test hooks and what has been verified is in
 
 ## Credits and licences
 
+- The Apple Vision Pro port by [Trevorbilt](https://trevorbilt.com) (@edgytoast).
 - [Dusklight](https://twilitrealm.dev/) by the Twilit Realm team, built on the
   [Twilight Princess decompilation](https://github.com/zeldaret/tp) by zeldaret (both CC0-1.0).
 - [TPVR](https://github.com/JoeyAW/TPVR), the VR mod, by JoeyAW.
 - [Aurora](https://github.com/encounter/aurora), the GameCube/Wii graphics layer, by encounter (MIT).
 - The visionOS OpenXR provider from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR)
   (GPL-3.0-or-later), so the built app is GPL-3.0.
-- The Apple Vision Pro port by [Trevorbilt](https://trevorbilt.com) (@edgytoast).
 
 Twilight Princess is Nintendo's. This project isn't affiliated with or endorsed by Nintendo, and it
 includes nothing from the game.

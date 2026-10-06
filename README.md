@@ -217,7 +217,11 @@ your day, come see what else is on the workbench.
 
 ## Credits
 
-Twilight Princess VR stands on years of other people's work:
+The Vision Pro port is [Trevorbilt](https://trevorbilt.com)'s: the visionOS app and launcher, the
+immersive spaces and the room around the menus, the Window view's scene mirror, the input, and the
+build, tested on a real Vision Pro.
+
+It stands on years of other people's work:
 
 - **Nintendo** made *The Legend of Zelda: Twilight Princess*, released in 2006 for GameCube and Wii.
 - **[zeldaret](https://github.com/zeldaret/tp)** decompiled it, with the wider GameCube and Wii
@@ -234,10 +238,7 @@ Twilight Princess VR stands on years of other people's work:
 - TPVR also thanks [Automata](https://github.com/automata-rtx/dusklight-mods) and the
   [TP speedrunning community](https://zsrtp.link).
 
-The Vision Pro port is [Trevorbilt](https://trevorbilt.com)'s: the visionOS app and launcher, the
-immersive spaces and the room around the menus, the Window view's scene mirror, the input, and the
-build, tested on a real Vision Pro. For PC VR on Windows, use JoeyAW's
-[TPVR](https://github.com/JoeyAW/TPVR) itself.
+For PC VR on Windows, use JoeyAW's [TPVR](https://github.com/JoeyAW/TPVR) itself.
 
 ## License
 

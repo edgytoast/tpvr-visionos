@@ -11,6 +11,9 @@ struct LauncherView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var pickingDisc = false
 
+    /// Trevorbilt's orange, as in the logo (and the SHAR port's launcher).
+    private static let trevorbiltOrange = Color(red: 237 / 255, green: 112 / 255, blue: 20 / 255)
+
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             VStack(alignment: .leading, spacing: 6) {
@@ -18,6 +21,10 @@ struct LauncherView: View {
                     .font(.extraLargeTitle2)
                 Text("TPVR on Dusklight, in first person. Bring your own disc.")
                     .foregroundStyle(.secondary)
+                // Who made this port; the README credits the game and the ports it builds on.
+                Text("An unofficial port by Trevorbilt")
+                    .font(.footnote)
+                    .foregroundStyle(Self.trevorbiltOrange)
             }
 
             GroupBox {
