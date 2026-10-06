@@ -98,8 +98,9 @@ otherwise `git submodule update --init --recursive`).
    door (Settings > Gameplay > Autosave, on by default), so leaving loses only what you've done
    since then.
 
-Saves live next to the disc image in Files > On My Apple Vision Pro > Twilight Princess VR. Copy
-them out to back them up; deleting the app deletes them.
+Saves live next to the disc image in Files > On My Apple Vision Pro > Twilight Princess VR. iCloud
+Backup includes the saves but leaves out the disc image, which you can always copy in again. Copy
+the saves out to keep your own backup; deleting the app deletes them.
 
 ### Controls
 

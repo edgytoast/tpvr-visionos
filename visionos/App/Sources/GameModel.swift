@@ -160,8 +160,15 @@ final class GameModel: ObservableObject {
         let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey]
         let files = (try? FileManager.default.contentsOfDirectory(
             at: documents, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles])) ?? []
-        disc = files
-            .filter { Self.discExtensions.contains($0.pathExtension.lowercased()) }
+        let discs = files.filter { Self.discExtensions.contains($0.pathExtension.lowercased()) }
+        // A disc image is 1.4 to 4.7 GB the player can copy in again: keep it out of
+        // iCloud backups. Saves, next to it, are backed up as usual.
+        for var file in discs {
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? file.setResourceValues(values)
+        }
+        disc = discs
             .max { lhs, rhs in
                 let l = (try? lhs.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
                 let r = (try? rhs.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
