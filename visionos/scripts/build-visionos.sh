@@ -13,8 +13,9 @@
 # registered to another team, and then automatic signing falls back to a
 # wildcard profile that lacks the memory entitlement.
 #
-# Needs Xcode with the visionOS SDK, CMake, Ninja, xcodegen, and Rust nightly
-# with the aarch64-apple-visionos target (nod, the disc reader, is Rust).
+# Needs Xcode with the visionOS SDK, CMake, Ninja, xcodegen, and the pinned Rust
+# nightly with the aarch64-apple-visionos target (nod, the disc reader, is Rust).
+# TPVR_RUST_TOOLCHAIN overrides the pinned toolchain.
 set -euo pipefail
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
@@ -47,6 +48,8 @@ fi
 # Homebrew's rustup is keg-only (it conflicts with the rust formula), so it is
 # not on the default PATH.
 [[ -d /opt/homebrew/opt/rustup/bin ]] && export PATH="/opt/homebrew/opt/rustup/bin:${PATH}"
+# The Rust nightly this port is built and tested with (rustc 5c543b0b8, 2026-09-29).
+rust_toolchain="${TPVR_RUST_TOOLCHAIN:-nightly-2026-09-30}"
 for tool in cmake ninja xcodegen xcrun rustup; do
     command -v "${tool}" >/dev/null || { echo "ERROR: ${tool} not found" >&2; exit 1; }
 done
@@ -57,10 +60,11 @@ else
     platform="VISIONOS"; rust_target="aarch64-apple-visionos"; flavour="visionos"
     dawn_flags=()
 fi
-rustup target list --toolchain nightly --installed 2>/dev/null | grep -qx "${rust_target}" || {
-    echo "ERROR: Rust nightly with aarch64-apple-visionos is needed:" >&2
-    echo "  brew install rustup && rustup toolchain install nightly --profile minimal &&" >&2
-    echo "  rustup target add --toolchain nightly ${rust_target}" >&2
+rustup target list --toolchain "${rust_toolchain}" --installed 2>/dev/null | grep -qx "${rust_target}" || {
+    echo "ERROR: Rust ${rust_toolchain} with ${rust_target} is needed:" >&2
+    echo '  brew install rustup && export PATH="$(brew --prefix rustup)/bin:$PATH" &&' >&2
+    echo "  rustup toolchain install ${rust_toolchain} --profile minimal &&" >&2
+    echo "  rustup target add --toolchain ${rust_toolchain} ${rust_target}" >&2
     exit 1
 }
 
@@ -89,7 +93,7 @@ cmake -S "${root}" -B "${build}" -G Ninja \
     -DCMAKE_DISABLE_FIND_PACKAGE_PkgConfig=ON \
     "-DCMAKE_IGNORE_PREFIX_PATH=${ignore_prefixes}" \
     -DRust_CARGO_TARGET="${rust_target}" \
-    -DRust_TOOLCHAIN=nightly \
+    "-DRust_TOOLCHAIN=${rust_toolchain}" \
     -DAURORA_DAWN_PROVIDER=package \
     "-DAURORA_DAWN_PACKAGE_URL=file://${dawn_package}" \
     -DAURORA_SDL3_PROVIDER=vendor \

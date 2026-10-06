@@ -16,8 +16,9 @@ Prerequisites (Apple Silicon Mac):
 
 ```bash
 brew install cmake ninja xcodegen rustup
-rustup toolchain install nightly --profile minimal
-rustup target add --toolchain nightly aarch64-apple-visionos
+export PATH="$(brew --prefix rustup)/bin:$PATH"
+rustup toolchain install nightly-2026-09-30 --profile minimal
+rustup target add --toolchain nightly-2026-09-30 aarch64-apple-visionos aarch64-apple-visionos-sim
 ```
 
 Xcode with the visionOS SDK at `/Applications/Xcode.app` (CMake's Xcode lookup

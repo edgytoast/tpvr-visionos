@@ -69,8 +69,9 @@ bring the game, you build the app, Hyrule does the rest. It's listed in the
 
   ```bash
   brew install cmake ninja xcodegen rustup
-  rustup toolchain install nightly --profile minimal
-  rustup target add --toolchain nightly aarch64-apple-visionos
+  export PATH="$(brew --prefix rustup)/bin:$PATH"
+  rustup toolchain install nightly-2026-09-30 --profile minimal
+  rustup target add --toolchain nightly-2026-09-30 aarch64-apple-visionos
   ```
 
 - **An Apple Account**, signed in to Xcode (Xcode › Settings › Accounts). The app asks for the

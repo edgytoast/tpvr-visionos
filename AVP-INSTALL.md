@@ -51,12 +51,14 @@ otherwise `git submodule update --init --recursive`).
 
    ```bash
    brew install cmake ninja xcodegen rustup
-   rustup toolchain install nightly --profile minimal
-   rustup target add --toolchain nightly aarch64-apple-visionos
+   export PATH="$(brew --prefix rustup)/bin:$PATH"
+   rustup toolchain install nightly-2026-09-30 --profile minimal
+   rustup target add --toolchain nightly-2026-09-30 aarch64-apple-visionos
    ```
 
-   Homebrew's `rustup` isn't put on your `PATH`; the build script finds it at
-   `/opt/homebrew/opt/rustup/bin`.
+   Homebrew installs `rustup` keg-only, off your `PATH`, so the `export` line puts it there for
+   the next two commands (the build script finds it on its own). The Rust nightly is pinned to
+   the one this port is built and tested with.
 
 2. Prepare the checkout. This fetches the two graphics submodules at their pinned commits and
    applies this port's patches to them:
