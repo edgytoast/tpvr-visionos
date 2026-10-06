@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
+// Modified by Trevorbilt, 2026, for Twilight Princess VR; the changes and their
+// dates are listed in visionos/openxr-provider/README.md.
+//
 // The OpenXR object graph of the visionOS provider: instance, system, session
 // and its state machine, reference spaces, the frame protocol, swapchains and
 // the two clock extensions. The actions live in xr_visionos_input.mm and the

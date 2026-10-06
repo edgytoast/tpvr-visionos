@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Modified by Trevorbilt, 2026, for Twilight Princess VR; the changes and their
+// dates are listed in visionos/openxr-provider/README.md.
 
 #pragma once
 

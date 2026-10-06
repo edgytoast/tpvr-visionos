@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
+// Modified by Trevorbilt, 2026, for Twilight Princess VR; the changes and their
+// dates are listed in visionos/openxr-provider/README.md.
+//
 // The CompositorServices, ARKit and Metal half of the visionOS OpenXR
 // provider: frames and drawables, the device pose and hands, and the render
 // passes that put the runtime's layers onto the compositor's drawable.
