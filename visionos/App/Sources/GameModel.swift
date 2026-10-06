@@ -251,7 +251,8 @@ final class GameModel: ObservableObject {
         startGame()
     }
 
-    /// The game window closed: the game saves and returns, and the app ends with it. The request
+    /// The game window closed: the game returns (autosave has kept progress up to the last new
+    /// area or dungeon door), and the app ends with it. The request
     /// repeats from the watchdog until the game returns (one sent before the game's event loop
     /// is up would be dropped).
     func windowClosed() {
@@ -296,9 +297,11 @@ final class GameModel: ObservableObject {
             watchdog = nil
             let code = dusk_visionos_exit_code()
             if code == 0 {
-                // A clean quit (the Digital Crown, or Quit in the game's menu): the
-                // game saved on its way out, and it can't run twice in one process,
-                // so the app goes too. Opening it again starts afresh at the launcher.
+                // A clean quit (the Digital Crown, or Quit in the game's menu). The
+                // game doesn't save on the way out; autosave (on by default here)
+                // covers progress up to the last new area or door. It can't run twice
+                // in one process, so the app goes too. Opening it again starts afresh
+                // at the launcher.
                 exit(0)
             }
             phase = .ended(exitCode: code)

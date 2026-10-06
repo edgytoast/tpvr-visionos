@@ -48,8 +48,10 @@ Homebrew's `rustup` is keg-only; the build script puts
    Progressive (a portal you widen with the Digital Crown), or Window (the game
    beside your other apps; see below).
 3. Press Play. The game opens around you and the launcher goes away.
-4. Press the Digital Crown to leave. The game saves and the app closes; open it
-   again to play again.
+4. Press the Digital Crown to leave. The app closes; open it again to play
+   again. The game autosaves when you enter a new area or open a dungeon door
+   (Settings › Gameplay › Autosave, on by default), so leaving loses only what
+   you've done since then.
 
 With your room around the menus, every black screen shows your room instead:
 menus, file select, Game Over, loading, and TP's fades to black, which cross

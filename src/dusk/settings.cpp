@@ -8,6 +8,19 @@
 #include <aurora/aurora.h>
 #include <dolphin/vi.h>
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
+// Apple Vision Pro: pressing the Digital Crown ends the game, so autosave (on entering
+// a new area or opening a dungeon door) is on by default there. Elsewhere it stays
+// opt-in, as upstream has it.
+#if defined(__APPLE__) && TARGET_OS_VISION
+#define DUSK_AUTOSAVE_DEFAULT true
+#else
+#define DUSK_AUTOSAVE_DEFAULT false
+#endif
+
 namespace dusk {
 
 UserSettings g_userSettings = {
@@ -58,7 +71,7 @@ UserSettings g_userSettings = {
         .instantText {"game.instantText", false},
         .holdToMash {"game.holdToMash", false},
         .sunsSong {"game.sunsSong", false},
-        .autoSave {"game.autoSave", false},
+        .autoSave {"game.autoSave", DUSK_AUTOSAVE_DEFAULT},
         .enhancedMapMenus {"game.enhancedMapMenus", false},
         .aimingReticle {"game.aimingReticle", false},
 
