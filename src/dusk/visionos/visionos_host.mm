@@ -38,6 +38,7 @@ std::atomic_bool g_started{false};
 std::atomic_bool g_running{false};
 std::atomic_int g_exitCode{0};
 std::atomic_bool g_roomBehindMenus{false};
+std::atomic_bool g_worldRecentered{false};
 
 void SetError(std::string message) {
     NSLog(@"[dusk::visionos] %s", message.c_str());
@@ -104,6 +105,14 @@ void dusk_visionos_spatial_event(uint64_t event_id, int phase, int chirality, bo
 
 bool dusk_visionos_layer_invalidated(void) {
     return xr_visionos_layer_invalidated();
+}
+
+void dusk_visionos_world_recentered(void) {
+    g_worldRecentered.store(true);
+}
+
+bool dusk_visionos_consume_world_recenter(void) {
+    return g_worldRecentered.exchange(false);
 }
 
 bool dusk_visionos_start_game(void) {

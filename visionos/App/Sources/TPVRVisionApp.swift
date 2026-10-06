@@ -42,6 +42,9 @@ struct TPVRVisionApp: App {
         // Progressive: Hyrule through a portal the Digital Crown widens.
         ImmersiveSpace(id: GameModel.progressiveSpaceID) {
             ImmersiveGame.layer(for: model, progressive: true)
+                // A Digital Crown recenter moves the portal to where you face; the game
+                // turns Hyrule to keep the view in it (the SHAR port's fix).
+                .onWorldRecenter { dusk_visionos_world_recentered() }
         }
         .immersionStyle(selection: $space.progressiveStyle, in: GameModel.progressiveStyle, .full)
         .upperLimbVisibility(.automatic)

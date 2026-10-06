@@ -1852,6 +1852,36 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
 
     const XrPosef hmdPose = locateSpace(g_viewSpace, base, time);
     perfLap(6);  // HMD (VIEW space) locate alone
+#if DUSK_VR_XR_GRAPHICS_METAL
+    // Apple Vision Pro, Progressive: a Digital Crown recenter moves the space's
+    // forward, and the portal with it, to where the head faces, which would swing
+    // Hyrule round in the portal. Hyrule turns by the head's change in heading
+    // instead, through the same yaw offset the turn stick drives, so the portal
+    // keeps showing what the player was looking at (the SHAR port's fix). Only the
+    // progressive space reports recenters; in Full, visionOS's recenter still brings
+    // Hyrule's front to the player.
+    {
+        static float s_lastHeadYaw = 0.f;
+        static bool s_haveHeadYaw = false;
+        const XrQuaternionf& q = hmdPose.orientation;
+        // The heading of the head's forward (-Z), positive to the left: the sense in
+        // which a positive g_smoothTurnYawRad turns the view.
+        const float forwardX = -2.f * (q.x * q.z + q.w * q.y);
+        const float forwardZ = -(1.f - 2.f * (q.x * q.x + q.y * q.y));
+        const float headYaw = std::atan2(-forwardX, -forwardZ);
+        if (dusk_visionos_consume_world_recenter() && s_haveHeadYaw) {
+            constexpr float kPi = 3.14159265358979323846f;
+            float turn = s_lastHeadYaw - headYaw;
+            while (turn > kPi) turn -= 2.f * kPi;
+            while (turn < -kPi) turn += 2.f * kPi;
+            dusk::vr::g_smoothTurnYawRad += turn;
+            VrLog.info("Digital Crown recenter: Hyrule turns {:.0f} degrees to keep the view",
+                       turn * (180.f / kPi));
+        }
+        s_lastHeadYaw = headYaw;
+        s_haveHeadYaw = true;
+    }
+#endif
     const XrPosef rightPose = locateSpace(g_rightGripSpace, base, time);
     const XrPosef leftPose = locateSpace(g_leftGripSpace, base, time);
     const XrPosef rightAimPose = locateSpace(g_rightAimSpace, base, time);

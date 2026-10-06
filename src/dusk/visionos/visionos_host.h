@@ -43,6 +43,13 @@ void dusk_visionos_spatial_event(uint64_t event_id, int phase, int chirality, bo
 // True once the layer renderer was invalidated (the immersive space closed).
 bool dusk_visionos_layer_invalidated(void);
 
+// The progressive space's onWorldRecenter: a Digital Crown recenter moved the space's
+// forward (and the portal) to where the wearer faces. The game turns Hyrule to keep
+// the view (dusk_visionos_consume_world_recenter, from its VR tick).
+void dusk_visionos_world_recentered(void);
+// True once per recenter. For the game's VR tick; not exported to the app.
+bool dusk_visionos_consume_world_recenter(void);
+
 // Starts the game on its thread. False when it already ran or the thread could
 // not be created (see dusk_visionos_last_error).
 bool dusk_visionos_start_game(void);
