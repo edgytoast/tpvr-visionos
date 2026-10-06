@@ -20,6 +20,11 @@ final class GameModel: ObservableObject {
         /// The immersive space is opening; the game starts once its layer exists.
         case opening
         case running
+        /// The Digital Crown closed the immersive space: the game is held where it
+        /// was, its sound paused, and the launcher offers Resume or Quit.
+        case paused
+        /// Resume was pressed: the space is opening again for the same game.
+        case resuming
         /// The game returned. It cannot run twice in one process, so playing
         /// again needs a relaunch.
         case ended(exitCode: Int32)
@@ -291,6 +296,30 @@ final class GameModel: ObservableObject {
         }
     }
 
+    /// Resume, from the launcher: the same space opens again and the game carries on
+    /// once it has the new layer (attach).
+    func markResuming() {
+        if phase == .paused {
+            phase = .resuming
+        }
+    }
+
+    /// The space didn't open again: still paused, and the launcher says why.
+    func resumeFailed(_ reason: String) {
+        if phase == .resuming {
+            phase = .paused
+            message = reason
+        }
+    }
+
+    /// Quit, from the launcher while paused: the game shuts down and the app ends with
+    /// it (checkGame), keeping progress up to the last autosave or save.
+    func quitFromPause() {
+        guard phase == .paused else { return }
+        quitRequested = true
+        dusk_visionos_request_quit()
+    }
+
     func openingFailed(_ reason: String) {
         phase = .failed(message: reason)
     }
@@ -307,7 +336,14 @@ final class GameModel: ObservableObject {
             renderer.onSpatialEvent = { events in
                 for event in events { Self.forward(event) }
             }
-            self.startGame()
+            if self.phase == .resuming {
+                // The provider took the new layer above; the game's session starts
+                // again on it and the game carries on where it was.
+                self.message = ""
+                self.phase = .running
+            } else {
+                self.startGame()
+            }
         }
     }
 
@@ -381,8 +417,8 @@ final class GameModel: ObservableObject {
         }
     }
 
-    /// Notices the game returning, and asks it to quit when the immersive space
-    /// was closed (the Digital Crown), since it cannot be shown again.
+    /// Notices the game returning, the immersive space closing (the Digital Crown),
+    /// which pauses the game, and a quit request still to deliver.
     private func startWatchdog() {
         watchdog?.invalidate()
         watchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -396,18 +432,32 @@ final class GameModel: ObservableObject {
             watchdog = nil
             let code = dusk_visionos_exit_code()
             if code == 0 {
-                // A clean quit (the Digital Crown, or Quit in the game's menu). The
-                // game doesn't save on the way out; autosave (on by default here)
-                // covers progress up to the last new area or door. It can't run twice
-                // in one process, so the app goes too. Opening it again starts afresh
-                // at the launcher.
+                // A clean quit (Quit in the launcher or the game's menu, or the game
+                // window closed). The game doesn't save on the way out; autosave (on
+                // by default here) covers progress up to the last new area or door.
+                // It can't run twice in one process, so the app goes too. Opening it
+                // again starts afresh at the launcher.
                 exit(0)
             }
             phase = .ended(exitCode: code)
             // Something went wrong: bring the launcher back to say so.
             showLauncher?()
-        } else if quitRequested || (!playsWindow && dusk_visionos_layer_invalidated()) {
+        } else if quitRequested {
             dusk_visionos_request_quit()
+        } else if phase == .running && !playsWindow && dusk_visionos_layer_invalidated() {
+            if dusk_visionos_session_focused_once() {
+                // The Digital Crown closed the space. The game holds where it is (its
+                // session waits for a new layer, its clock and sound paused); the
+                // launcher offers Resume or Quit. If visionOS doesn't show it now,
+                // opening the app from Home does.
+                phase = .paused
+                showLauncher?()
+            } else {
+                // Closed before the game was ever seen in it: its VR startup gives up
+                // waiting for the space, so there's nothing to resume. Quit, as before.
+                quitRequested = true
+                dusk_visionos_request_quit()
+            }
         }
     }
 }

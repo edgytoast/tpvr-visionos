@@ -39,6 +39,7 @@ std::atomic_bool g_running{false};
 std::atomic_int g_exitCode{0};
 std::atomic_bool g_roomBehindMenus{false};
 std::atomic_bool g_worldRecentered{false};
+std::atomic_bool g_sessionFocusedOnce{false};
 
 void SetError(std::string message) {
     NSLog(@"[dusk::visionos] %s", message.c_str());
@@ -115,6 +116,14 @@ bool dusk_visionos_consume_world_recenter(void) {
     return g_worldRecentered.exchange(false);
 }
 
+bool dusk_visionos_session_focused_once(void) {
+    return g_sessionFocusedOnce.load();
+}
+
+void dusk_visionos_mark_session_focused(void) {
+    g_sessionFocusedOnce.store(true);
+}
+
 bool dusk_visionos_start_game(void) {
     bool expected = false;
     if (!g_started.compare_exchange_strong(expected, true)) {
@@ -152,7 +161,8 @@ int dusk_visionos_exit_code(void) {
 
 void dusk_visionos_request_quit(void) {
     // aurora turns SDL's quit into AURORA_EXIT, the path a closed desktop window
-    // takes; the game then saves and shuts down on its own thread.
+    // takes; the game then shuts down on its own thread (progress is kept up to the
+    // last autosave or save).
     if (SDL_WasInit(SDL_INIT_EVENTS) != 0) {
         SDL_Event event{};
         event.type = SDL_EVENT_QUIT;

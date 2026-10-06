@@ -48,6 +48,8 @@ bool g_accessoriesChanged = false;
 NSMutableSet<GCController*>* g_requested = [NSMutableSet new];
 ar_session_t g_session = nil;
 ar_accessory_tracking_provider_t g_provider = nil;
+// The space (LayerGeneration) g_provider was started in.
+uint64_t g_providerGeneration = 0;
 
 std::array<ControllerSample, 2> g_samples{};
 std::array<ControllerSample, 2> g_previous{};
@@ -118,6 +120,15 @@ void UpdateAccessories() {
 // An accessory tracking provider tracks a fixed set of accessories, so a new one
 // replaces it whenever that set changes, on its own session.
 void RestartTrackingIfNeeded() {
+    // The provider also stops if the space it ran in closed for good; start it again
+    // for the same controllers once the game is in a new space. Once per space only:
+    // a provider that stops for another reason (accessory tracking not allowed) would
+    // otherwise be started again every frame.
+    if (g_provider && ar_data_provider_get_state(g_provider) == ar_data_provider_state_stopped &&
+        LayerGeneration() != g_providerGeneration) {
+        std::lock_guard lock(g_accessoryMutex);
+        g_accessoriesChanged = true;
+    }
     NSArray* accessories = nil;
     {
         std::lock_guard lock(g_accessoryMutex);
@@ -138,6 +149,7 @@ void RestartTrackingIfNeeded() {
     ar_accessory_tracking_configuration_t configuration = ar_accessory_tracking_configuration_create();
     ar_accessory_tracking_configuration_set_accessories(configuration, tracked);
     g_provider = ar_accessory_tracking_provider_create(configuration);
+    g_providerGeneration = LayerGeneration();
     g_session = ar_session_create();
     ar_session_run(g_session, ar_data_providers_create_with_data_providers(g_provider, nil));
     NSLog(@"[visionos-provider] tracking %lu spatial controller(s)", (unsigned long)accessories.count);

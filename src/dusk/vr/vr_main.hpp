@@ -41,6 +41,11 @@ bool isActive();
 // just 3D gameplay.
 bool isRenderingToHeadset();
 
+// True while a session exists but is stopped (between STOPPING and the next
+// READY): on Apple Vision Pro, the headset taken off or the space closed and
+// waiting for Resume. Nobody sees a frame then, flat or stereo.
+bool isSessionStopped();
+
 // True ONLY while a VR eye's own protected offscreen pass is actually open
 // (between a given beginEye() and its matching endEye() inside tick()'s
 // per-eye loop) -- unlike isRenderingToHeadset() above, which is true for

@@ -49,10 +49,13 @@ Homebrew's `rustup` is keg-only; the build script puts
    Progressive (a portal you widen with the Digital Crown), or Window (the game
    beside your other apps; see below).
 3. Press Play. The game opens around you and the launcher goes away.
-4. Press the Digital Crown to leave. The app closes; open it again to play
-   again. The game autosaves when you enter a new area or open a dungeon door
-   (Settings › Gameplay › Autosave, on by default), so leaving loses only what
-   you've done since then.
+4. In Full or Progressive, press the Digital Crown to pause. The game holds where you are (its clock
+   and sound stop, and its XR session waits for a new layer), and the launcher
+   comes back with Resume, which opens the same space again, and Quit, which
+   ends the game and the app. If the launcher doesn't appear, open the app from
+   Home. The game autosaves when you enter a new area or open a dungeon door
+   (Settings › Gameplay › Autosave, on by default), so quitting loses only
+   what you've done since then.
 
 With your room around the menus, every black screen shows your room instead:
 menus, file select, Game Over, loading, and TP's fades to black, which cross
@@ -74,8 +77,9 @@ flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
 menus sit on the glass. Characters cast their shadows. The game's screen effects
 (bloom, mist, light shafts, fades and cutscene bars) are laid
-over the scene, each glow on what it lights. Close the window to quit (the game
-saves); the game pauses while the window is in the background.
+over the scene, each glow on what it lights. Close the window to quit (progress is
+kept up to the last autosave or save); the game pauses while the window is in
+the background.
 
 Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight
 Princess VR), next to the disc: copy them out to back them up. Deleting the app
@@ -99,6 +103,9 @@ The app takes a few environment variables for headless runs (pass each as
 
 - `TPVR_AUTO_PLAY=1` presses Play.
 - `TPVR_ARGS` adds Dusklight options, e.g. `--stage F_SP103` (Ordon Ranch).
+- `TPVR_TEST_PAUSED=resume@5` (or `quit@5`) presses Resume (or Quit) that many
+  seconds after the launcher comes back from a Digital Crown pause (the
+  Simulator's Home button presses the Crown).
 - `TPVR_TEST_ACTIONS` scripts Sense controller input:
   `NAME[=x,y]@seconds[~duration]`, measured from the first input sync, e.g.
   `"MENU@30~0.3 B@45~0.3 LSTICK=0,1@50~2"`.

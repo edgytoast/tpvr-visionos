@@ -476,7 +476,15 @@ void main01(void) {
             // second call; water reflections were also reported broken while
             // this was active). Back to skipping the flatscreen draw
             // whenever tick() actually rendered stereo eyes.
-            if (!dusk::vr::isActive() || !dusk::vr::isRenderingToHeadset()) {
+#if defined(__APPLE__) && TARGET_OS_VISION
+            // Apple Vision Pro: with the session stopped (the headset off, or the space
+            // closed and waiting for Resume, for as long as that lasts) there's no flat
+            // screen to fall back to either, so nothing is drawn.
+            const bool unseen = dusk::vr::isSessionStopped();
+#else
+            const bool unseen = false;
+#endif
+            if (!unseen && (!dusk::vr::isActive() || !dusk::vr::isRenderingToHeadset())) {
                 if (dusk::interp::material::is_model_replay_deferred()) {
                     // VR expected to draw but didn't: replay for the
                     // flatscreen view after all.

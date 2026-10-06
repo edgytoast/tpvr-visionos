@@ -60,7 +60,8 @@ struct GameWindowView: View {
             dismissWindow(id: GameModel.launcherWindowID)
         }
         .onDisappear {
-            // Closing the window ends the game (it saves first), and with it the app.
+            // Closing the window ends the game, and with it the app (progress is kept up to
+            // the last autosave or save).
             model.windowClosed()
         }
         .onChange(of: scenePhase) { _, phase in

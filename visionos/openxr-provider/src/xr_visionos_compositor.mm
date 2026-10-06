@@ -552,6 +552,22 @@ void Compositor::StopTracking() {
     m_trackingStarted.store(false);
 }
 
+void Compositor::RestartTrackingIfStopped() {
+    bool stopped = false;
+    {
+        std::lock_guard lock(m_mutex);
+        const auto isStopped = [](ar_data_provider_t provider) {
+            return provider != nullptr && ar_data_provider_get_state(provider) == ar_data_provider_state_stopped;
+        };
+        stopped = m_trackingStarted.load() && (isStopped(m_worldTracking) || isStopped(m_handTracking));
+    }
+    if (stopped) {
+        Log("ARKit tracking stopped with the last space; starting it again");
+        StopTracking();
+        StartTracking();
+    }
+}
+
 bool Compositor::QueryDeviceAnchorLocked(ar_device_anchor_t anchor, int64_t timeNanos) noexcept {
     if (m_worldTracking == nullptr || anchor == nullptr ||
         ar_data_provider_get_state(m_worldTracking) != ar_data_provider_state_running) {

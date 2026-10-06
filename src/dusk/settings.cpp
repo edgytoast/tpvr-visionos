@@ -12,8 +12,9 @@
 #include <TargetConditionals.h>
 #endif
 
-// Apple Vision Pro: pressing the Digital Crown ends the game, so autosave (on entering
-// a new area or opening a dungeon door) is on by default there. Elsewhere it stays
+// Apple Vision Pro: quitting (from the launcher, after the Digital Crown pauses the game)
+// doesn't save, so autosave (on entering a new area or opening a dungeon door) is on by
+// default there. Elsewhere it stays
 // opt-in, as upstream has it.
 #if defined(__APPLE__) && TARGET_OS_VISION
 #define DUSK_AUTOSAVE_DEFAULT true

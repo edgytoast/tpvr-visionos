@@ -212,6 +212,10 @@ public:
     // Ends the active frame with these layers. Empty layers present a cleared drawable.
     void EndFrame(const std::vector<ComposedLayer>& layers, bool alphaBlend);
 
+    // Starts tracking again if its providers stopped (a space closed and another
+    // opened); does nothing while they're running or paused, or before StartTracking.
+    void RestartTrackingIfStopped();
+
     // The device pose (world_from_device) at `timeNanos`, predicted by ARKit.
     bool DevicePose(int64_t timeNanos, simd_float4x4& worldFromDevice) noexcept;
     // The latest hand anchors.
@@ -448,6 +452,10 @@ bool BareHands(const Session& session) noexcept;
 // the pinch reads differently in each (GesturesOfHand).
 void SetLastFrameImmersive(bool immersive) noexcept;
 bool LastFrameImmersive() noexcept;
+// How many layers the app has handed over (xr_visionos_set_layer_renderer): a new
+// value means a new immersive space, where a stopped ARKit provider is worth one
+// more start.
+uint64_t LayerGeneration() noexcept;
 
 // XR_EXT_hand_tracking (xr_visionos_hand_tracking.mm).
 PFN_xrVoidFunction LookupHandTrackingFunction(const char* name) noexcept;

@@ -130,9 +130,11 @@ The app uses the newest disc image in its folder. Then tap **Play**.
 ## Play
 
 Before you press **Play**, the launcher asks how you'd like to play: **Full**, **Progressive** or
-**Window**, plus **Show my room around menus** (Full only) and **Foveated rendering**. Press the
-Digital Crown to leave. The game autosaves when you enter a new area or open a dungeon door (Settings ›
-Gameplay › Autosave, on by default), so leaving loses only what you've done since then.
+**Window**, plus **Show my room around menus** (Full only) and **Foveated rendering**. In Full or
+Progressive, press the Digital Crown to pause: the game holds where you are, and the launcher offers
+**Resume** or **Quit** (if it doesn't appear, open the app from Home). In Window, close the window to
+quit. The game autosaves when you enter a new area or open a dungeon door (Settings › Gameplay ›
+Autosave, on by default), so quitting loses only what you've done since then.
 
 **Sense controllers** play TPVR's layout: the sword follows your sword hand (right by default; VR ›
 Combat › Sword Hand) and the shield your other hand.

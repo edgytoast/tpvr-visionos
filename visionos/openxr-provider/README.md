@@ -46,6 +46,7 @@ are in its history. Files are under `src/` unless shown otherwise.
 | 2026-10-06 | Frames: a frame without a drawable is dropped, not ended; the drawable comes from the single-drawable query (as in the SHAR port), not the first of `cp_frame_query_drawables`; each drawable gets a device anchor of its own. | `xr_visionos_compositor.mm`, `xr_visionos_internal.h` |
 | 2026-10-06 | Bare hands predicted to the frame's display time in `xrSyncActions`. | `xr_visionos_input.mm` |
 | 2026-10-06 | Hand tracking in its own ARKit session, with provider state changes logged. | `xr_visionos_compositor.mm`, `xr_visionos_internal.h` |
+| 2026-10-06 | A layer that goes away (the Digital Crown closing the space) stops the session instead of ending it: it waits in IDLE for the next layer, and tracking (head, hands and Sense controllers) starts again if its providers stopped. | `xr_visionos_runtime.mm`, `xr_visionos_compositor.mm`, `xr_visionos_internal.h`, `xr_visionos_controllers.mm` |
 
 ## Local additions in detail
 

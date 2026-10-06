@@ -52,6 +52,7 @@
 #include "dusk/vr/vr_main.hpp"
 #if DUSK_VR_XR_GRAPHICS_METAL
 #include <aurora/aurora.h>                    // aurora_set_external_pause
+#include "dusk/audio/DuskAudioSystem.h"      // dusk::audio::SetPaused
 #include "dusk/visionos/visionos_host.h"     // dusk_visionos_room_behind_menus
 #include "d/d_menu_window.h"                 // dMw_c -- TP's full-screen menus over the room
 #include "d/d_meter2_info.h"                 // dMeter2Info_getMenuWindowClass
@@ -483,6 +484,10 @@ bool isActive() {
 
 bool isRenderingToHeadset() {
     return g_renderedToHeadsetThisFrame;
+}
+
+bool isSessionStopped() {
+    return g_session != nullptr && !g_sessionRunning;
 }
 
 bool isEyePassOpen() {
@@ -1682,17 +1687,23 @@ void tick(const dusk::game_clock::FrameTiming& pacing) {
             VrLog.info("session state -> {}", static_cast<int>(stateEvent.state));
 #if DUSK_VR_XR_GRAPHICS_METAL
             // Apple Vision Pro: hold the game still whenever it isn't being seen
-            // -- the headset taken off, visionOS's own UI over the game -- and
+            // -- the headset taken off, visionOS's own UI over the game, the
+            // Digital Crown closing the space (the game waits for Resume) -- and
             // let it run on exactly where it was once focus comes back. (The
-            // provider leaves FOCUSED whenever the layer pauses.) Only after
-            // the first focus, so startup isn't held.
+            // provider leaves FOCUSED whenever the layer pauses or goes away.)
+            // Its sound pauses with it. Only after the first focus, so startup
+            // isn't held.
             {
                 static bool s_everFocused = false;
                 const bool focused = stateEvent.state == XR_SESSION_STATE_FOCUSED;
                 s_everFocused = s_everFocused || focused;
+                if (focused) {
+                    dusk_visionos_mark_session_focused();  // a closed space can now be resumed
+                }
                 if (s_everFocused) {
                     aurora_set_external_pause(!focused);
-                    VrLog.info("game clock {}", focused ? "running" : "held: session not focused");
+                    dusk::audio::SetPaused(!focused);
+                    VrLog.info("game clock and sound {}", focused ? "running" : "held: session not focused");
                 }
             }
 #endif

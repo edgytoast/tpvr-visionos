@@ -97,7 +97,11 @@ void AdvanceSessionState(Instance& instance) {
         return;
     }
     const LayerState layer = Compositor::Get().State();
-    const bool leaving = layer == LayerState::Invalidated || session->exitRequested;
+    // Only the app's own exit request ends the session. A layer that goes away (the
+    // Digital Crown closed the immersive space) stops it like a paused one: it waits
+    // in IDLE, the game held where it was, until the app opens the space again and
+    // hands over a new layer (xr_visionos_set_layer_renderer), then carries on.
+    const bool leaving = session->exitRequested;
     switch (session->state) {
     case XR_SESSION_STATE_UNKNOWN:
         PushSessionState(instance, *session, XR_SESSION_STATE_IDLE);
@@ -244,10 +248,23 @@ using namespace mkw::vr::visionos;
 // ---------------------------------------------------------------------------
 // Private extension: the app bridge and the Metal backend.
 
+namespace mkw::vr::visionos {
+namespace {
+std::atomic<uint64_t> g_layerGeneration{0};
+}
+uint64_t LayerGeneration() noexcept { return g_layerGeneration.load(std::memory_order_acquire); }
+} // namespace mkw::vr::visionos
+
 void xr_visionos_set_layer_renderer(void* layer_renderer) {
     std::lock_guard lock(g_globalMutex);
     g_layerRenderer = (__bridge cp_layer_renderer_t)layer_renderer;
+    g_layerGeneration.fetch_add(1, std::memory_order_acq_rel);
     Compositor::Get().SetLayerRenderer(g_layerRenderer);
+    // A space opened again after the last one closed: ARKit's providers pause with a
+    // space and run again with the next, but start them afresh if they stopped.
+    if (g_layerRenderer != nullptr) {
+        Compositor::Get().RestartTrackingIfStopped();
+    }
 }
 
 void* xr_visionos_layer_renderer(void) {

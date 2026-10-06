@@ -50,6 +50,13 @@ void dusk_visionos_world_recentered(void);
 // True once per recenter. For the game's VR tick; not exported to the app.
 bool dusk_visionos_consume_world_recenter(void);
 
+// True once the game's XR session has been focused (the game was seen in the space).
+// Before then a closed space can't be resumed (the game's VR startup gives up waiting
+// for it), so the app quits as it used to.
+bool dusk_visionos_session_focused_once(void);
+// For the game's VR tick; not exported to the app.
+void dusk_visionos_mark_session_focused(void);
+
 // Starts the game on its thread. False when it already ran or the thread could
 // not be created (see dusk_visionos_last_error).
 bool dusk_visionos_start_game(void);

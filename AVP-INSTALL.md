@@ -94,9 +94,11 @@ otherwise `git submodule update --init --recursive`).
 ## Play
 
 1. Open Twilight Princess VR, choose how to play (Full, Progressive or Window) and press Play.
-2. Press the Digital Crown to leave. The game autosaves when you enter a new area or open a dungeon
-   door (Settings > Gameplay > Autosave, on by default), so leaving loses only what you've done
-   since then.
+2. In Full or Progressive, press the Digital Crown to pause. The game holds where you are, and the
+   launcher offers Resume or Quit (if it doesn't appear, open the app from Home). In Window, close
+   the window to quit. The game autosaves when you enter a new area or open a dungeon door
+   (Settings > Gameplay > Autosave, on by default), so quitting loses only what you've done since
+   then.
 
 Saves live next to the disc image in Files > On My Apple Vision Pro > Twilight Princess VR. iCloud
 Backup includes the saves but leaves out the disc image, which you can always copy in again. Copy

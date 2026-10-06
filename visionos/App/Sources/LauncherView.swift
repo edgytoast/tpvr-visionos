@@ -116,14 +116,34 @@ struct LauncherView: View {
 
             Spacer(minLength: 0)
 
-            Button {
-                Task { await play() }
-            } label: {
-                Label("Play", systemImage: "play.fill")
-                    .frame(maxWidth: .infinity)
+            if model.phase == .paused || model.phase == .resuming {
+                // The Digital Crown closed the space; the game is held where it was.
+                HStack(spacing: 16) {
+                    Button {
+                        Task { await resume() }
+                    } label: {
+                        Label("Resume", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    Button(role: .destructive) {
+                        model.quitFromPause()
+                    } label: {
+                        Label("Quit", systemImage: "xmark")
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                .controlSize(.extraLarge)
+                .disabled(model.phase != .paused)
+            } else {
+                Button {
+                    Task { await play() }
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.extraLarge)
+                .disabled(!model.canPlay)
             }
-            .controlSize(.extraLarge)
-            .disabled(!model.canPlay)
         }
         .padding(32)
         // Wide enough that the notes wrap to a couple of lines, not a column.
@@ -158,6 +178,19 @@ struct LauncherView: View {
             if ProcessInfo.processInfo.environment["TPVR_AUTO_PLAY"] == "1", model.phase == .idle {
                 await play()
             }
+            // Headless runs of the Digital Crown pause: TPVR_TEST_PAUSED=resume@5 (or quit@5)
+            // presses Resume (or Quit) that many seconds after the launcher comes back.
+            if model.phase == .paused, let test = ProcessInfo.processInfo.environment["TPVR_TEST_PAUSED"] {
+                let parts = test.split(separator: "@")
+                let delay = parts.count > 1 ? Double(parts[1]) ?? 5 : 5
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard model.phase == .paused else { return }
+                if parts.first == "quit" {
+                    model.quitFromPause()
+                } else {
+                    await resume()
+                }
+            }
         }
     }
 
@@ -168,7 +201,13 @@ struct LauncherView: View {
         case .opening:
             Label("Opening Hyrule…", systemImage: "hourglass")
         case .running:
-            Label("Playing. Press the Digital Crown to leave.", systemImage: "visionpro")
+            Label("Playing. Press the Digital Crown to pause.", systemImage: "visionpro")
+        case .paused:
+            Label("Paused where you left off. Resume to carry on, or Quit: progress is kept up to the last autosave or save.",
+                  systemImage: "pause.circle")
+                .fixedSize(horizontal: false, vertical: true)
+        case .resuming:
+            Label("Back to Hyrule…", systemImage: "hourglass")
         case let .ended(code):
             Label("The game stopped with an error (code \(code)). Quit and reopen the app to play again.",
                   systemImage: "exclamationmark.triangle")
@@ -176,6 +215,21 @@ struct LauncherView: View {
         case let .failed(reason):
             Label(reason, systemImage: "exclamationmark.triangle")
                 .foregroundStyle(.red)
+        }
+    }
+
+    /// Opens the same space again; the game carries on once it has the new layer
+    /// (GameModel.attach). The launcher goes, as at Play.
+    private func resume() async {
+        guard model.phase == .paused else { return }
+        model.markResuming()
+        switch await openImmersiveSpace(id: model.spaceIDForPlay) {
+        case .opened:
+            dismissWindow(id: GameModel.launcherWindowID)
+        case .userCancelled:
+            model.resumeFailed("The immersive space was not opened.")
+        default:
+            model.resumeFailed("The immersive space could not be opened.")
         }
     }
 
