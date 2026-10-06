@@ -61,13 +61,35 @@ targets:
           - CFBundleTypeName: GameCube disc image
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
-            LSItemContentTypes: [public.iso-image, dev.tpvr.rvz-image]
+            # Every compressed format the game's disc reader (nod) opens, so AirDrop and
+            # "Open with" offer the app for them.
+            LSItemContentTypes: [public.iso-image, dev.tpvr.rvz-image, dev.tpvr.wbfs-image, dev.tpvr.gcz-image, dev.tpvr.ciso-image, dev.tpvr.wia-image]
         UTImportedTypeDeclarations:
           - UTTypeIdentifier: dev.tpvr.rvz-image
             UTTypeDescription: Dolphin RVZ disc image
             UTTypeConformsTo: [public.data]
             UTTypeTagSpecification:
               public.filename-extension: [rvz]
+          - UTTypeIdentifier: dev.tpvr.wbfs-image
+            UTTypeDescription: Wii Backup File System disc image
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [wbfs]
+          - UTTypeIdentifier: dev.tpvr.gcz-image
+            UTTypeDescription: Dolphin GCZ disc image
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [gcz]
+          - UTTypeIdentifier: dev.tpvr.ciso-image
+            UTTypeDescription: Compact ISO disc image
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [ciso]
+          - UTTypeIdentifier: dev.tpvr.wia-image
+            UTTypeDescription: Wii ISO Archive disc image
+            UTTypeConformsTo: [public.data]
+            UTTypeTagSpecification:
+              public.filename-extension: [wia]
     entitlements:
       # xcodegen writes this file from `properties`, so the entitlements live here.
       path: TPVRVision.entitlements

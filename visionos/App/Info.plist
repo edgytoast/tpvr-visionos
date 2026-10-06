@@ -19,6 +19,10 @@
 			<array>
 				<string>public.iso-image</string>
 				<string>dev.tpvr.rvz-image</string>
+				<string>dev.tpvr.wbfs-image</string>
+				<string>dev.tpvr.gcz-image</string>
+				<string>dev.tpvr.ciso-image</string>
+				<string>dev.tpvr.wia-image</string>
 			</array>
 		</dict>
 	</array>
@@ -93,6 +97,74 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>rvz</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Wii Backup File System disc image</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.tpvr.wbfs-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wbfs</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Dolphin GCZ disc image</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.tpvr.gcz-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>gcz</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Compact ISO disc image</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.tpvr.ciso-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>ciso</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>Wii ISO Archive disc image</string>
+			<key>UTTypeIdentifier</key>
+			<string>dev.tpvr.wia-image</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wia</string>
 				</array>
 			</dict>
 		</dict>
