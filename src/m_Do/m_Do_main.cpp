@@ -42,6 +42,7 @@
 #include <cstring>
 
 #include "dusk/app_info.hpp"
+#include "dusk/autorelease_pool.hpp"
 #include "dusk/audio/DuskAudioSystem.h"
 #include "dusk/audio/DuskDsp.hpp"
 #include "dusk/commands.hpp"
@@ -192,6 +193,7 @@ AuroraInfo auroraInfo;
 
 bool launchUILoop() {
     while (dusk::IsRunning && !dusk::IsGameLaunched) {
+        [[maybe_unused]] dusk::FrameAutoreleasePool framePool;
         const AuroraEvent* event = aurora_update();
         while (event != nullptr && event->type != AURORA_NONE) {
             switch (event->type) {
@@ -275,6 +277,7 @@ void main01(void) {
     dusk::game_clock::initialize();
 
     do {
+        [[maybe_unused]] dusk::FrameAutoreleasePool framePool;
         // 1. Update Window Events
         const AuroraEvent* event = aurora_update();
         while (true) {

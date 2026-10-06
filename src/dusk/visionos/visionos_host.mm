@@ -70,7 +70,12 @@ void* GameThreadMain(void*) {
         argv.push_back(arg.data());
     }
     argv.push_back(nullptr);
-    const int code = aurora_main(static_cast<int>(args.size()), argv.data());
+    // The main loop drains a pool every frame (dusk/autorelease_pool.hpp); this one
+    // catches what startup and teardown autorelease outside it.
+    int code = 0;
+    @autoreleasepool {
+        code = aurora_main(static_cast<int>(args.size()), argv.data());
+    }
     g_exitCode.store(code);
     g_running.store(false);
     NSLog(@"[dusk::visionos] game returned %d", code);
