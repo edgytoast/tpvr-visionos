@@ -49,6 +49,12 @@ final class GameModel: ObservableObject {
 
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var disc: URL?
+    /// Why the disc can't play (another game, an unsupported release, a file that isn't
+    /// a disc image), from the game's own check of its header; nil when it can, or while
+    /// it's being checked. A copy cut short after the header passes; the import's
+    /// .partial file is what keeps those from appearing.
+    @Published private(set) var discProblem: String?
+    @Published private(set) var checkingDisc = false
     @Published private(set) var importing = false
     @Published var message = ""
     @Published var immersion: Immersion {
@@ -151,7 +157,7 @@ final class GameModel: ObservableObject {
     }
 
     var canPlay: Bool {
-        phase == .idle && disc != nil && !importing
+        phase == .idle && disc != nil && !importing && !checkingDisc && discProblem == nil
     }
 
     /// The newest disc image in Documents (the Files app shows the folder as
@@ -174,6 +180,27 @@ final class GameModel: ObservableObject {
                 let r = (try? rhs.resourceValues(forKeys: Set(keys)).contentModificationDate) ?? .distantPast
                 return l < r
             }
+        checkDisc()
+    }
+
+    /// Asks the game whether the disc is a Twilight Princess it plays, before Play: a
+    /// wrong one would otherwise open Dusklight's flat disc screen inside the space.
+    private func checkDisc() {
+        guard let path = disc?.path else {
+            discProblem = nil
+            checkingDisc = false
+            return
+        }
+        checkingDisc = true
+        Task.detached(priority: .userInitiated) {
+            let problem = dusk_visionos_check_disc(path).map { String(cString: $0) }
+            await MainActor.run {
+                // Only the answer for the disc still chosen counts.
+                guard self.disc?.path == path else { return }
+                self.discProblem = problem
+                self.checkingDisc = false
+            }
+        }
     }
 
     /// Copies a picked disc image into Documents, where the game reads it in place.

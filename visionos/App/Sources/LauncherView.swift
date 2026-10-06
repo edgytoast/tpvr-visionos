@@ -32,6 +32,12 @@ struct LauncherView: View {
                     if let disc = model.disc {
                         Label(disc.lastPathComponent, systemImage: "opticaldisc")
                             .font(.headline)
+                        if let problem = model.discProblem {
+                            Label(problem, systemImage: "exclamationmark.triangle")
+                                .font(.callout)
+                                .foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     } else {
                         Label("No disc yet", systemImage: "opticaldisc")
                             .font(.headline)

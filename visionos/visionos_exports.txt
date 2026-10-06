@@ -1,4 +1,5 @@
 _dusk_visionos_set_disc_path
+_dusk_visionos_check_disc
 _dusk_visionos_set_layer_renderer
 _dusk_visionos_spatial_event
 _dusk_visionos_layer_invalidated
