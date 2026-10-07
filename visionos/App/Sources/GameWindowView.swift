@@ -92,6 +92,8 @@ final class GameScreen {
     // The mirror's level, then the screen effects (when on), then the HUD: drawn in that order,
     // whatever their depths, so nothing of the level nearer than the glass covers the HUD.
     private let sortGroup = ModelSortGroup(depthPass: nil)
+    // After the level (0) and its blended parts (1 on, MirrorScene.maxBlendedParts of them at most).
+    private static let effectsOrder: Int32 = MirrorScene.maxBlendedParts + 1
     private var effectsMesh: LowLevelMesh?
     private var effectsGrid = SIMD2<Int>.zero
     private var reliefMaterial: ShaderGraphMaterial
@@ -114,7 +116,7 @@ final class GameScreen {
     private var mirrorShowing = false
     private let memoryGuard: WindowMemoryGuard
     /// Window frames committed to the GPU and not yet done, for the memory log.
-    private static let framesInFlight = Atomic<Int>(0)
+    nonisolated private static let framesInFlight = Atomic<Int>(0)
     private var shownGameFrame: UInt32 = 0
 
     private static let rows = 216
@@ -157,7 +159,7 @@ final class GameScreen {
                 // After every part of the level, translucent ones included: RealityKit's own
                 // back-to-front order put the level's translucent rocks over a letterbox bar.
                 mirror.sort(in: sortGroup, order: 0)
-                effects.components.set(ModelSortGroupComponent(group: sortGroup, order: 1))
+                effects.components.set(ModelSortGroupComponent(group: sortGroup, order: Self.effectsOrder))
                 self.mirror = mirror
                 dusk_visionos_set_mirror_enabled(true)
             } catch {
@@ -439,7 +441,7 @@ final class GameScreen {
         // In the portal's world, on the glass, last in the sort group: the level's sort group can
         // order only what's in the same world.
         hud.position.z = -0.0005  // behind the glass: AURORA_MIRROR_BAND's clip takes what's in front
-        hud.components.set(ModelSortGroupComponent(group: sortGroup, order: 2))
+        hud.components.set(ModelSortGroupComponent(group: sortGroup, order: Self.effectsOrder + 1))
         root.addChild(portal)
         world.addChild(hud)
     }

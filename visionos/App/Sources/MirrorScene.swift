@@ -24,6 +24,20 @@ final class MirrorScene {
                                        materials: [UnlitMaterial(color: .black)])
     private var mesh: (mesh: LowLevelMesh, resource: MeshResource)?
     private let queue: MTLCommandQueue
+    // Blended parts, each in an entity of its own in the window's sort group, in the game's order
+    // (as the SHAR port does). In the one mesh, all with the frame's bounds, RealityKit ordered
+    // them itself, by distance from the eye: layered ones (the sky's, the ground's second passes, a
+    // horse's dust) took turns as the head moved, and flickered.
+    @MainActor private final class BlendSlot {
+        let entity = ModelEntity()
+        var mesh: LowLevelMesh?
+        var material: MaterialKey?
+        var order: Int32 = .min
+    }
+    private var blendSlots: [BlendSlot] = []
+    private var sortGroup: ModelSortGroup?
+    private var sortOrder: Int32 = 0
+    private var remap: [Int32] = []  // a frame vertex's index in the slot being filled, -1 when none
 
     // MirrorMaterials(Wrap).usda: kind ("Opaque", "Cutout", "Blend") + wrap ("RR", "CC"...).
     private var templates: [String: ShaderGraphMaterial] = [:]
@@ -105,10 +119,17 @@ final class MirrorScene {
         root.addChild(backdrop)
     }
 
-    /// Draws the level as `order` in `group`, so that what the window lays over it comes after.
+    /// Draws the level as `order` in `group` and its blended parts after it, in the game's order, so
+    /// that what the window lays over it comes after (from `order` + 1 + `maxBlendedParts`).
     func sort(in group: ModelSortGroup, order: Int32) {
         entity.components.set(ModelSortGroupComponent(group: group, order: order))
+        sortGroup = group
+        sortOrder = order
+        for slot in blendSlots { slot.order = .min }
     }
+    static let maxBlendedParts: Int32 = 1 << 16
+    // Test runs: TPVR_TEST_MIRROR_ONE_MESH=1 keeps the blended parts in the one mesh, as before.
+    private static let oneMesh = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ONE_MESH"] == "1"
 
     /// Takes the game's newest mirror frame no later than game frame `upTo` (the window frame shown
     /// with it) into the mesh. False while there's no 3D scene to show (the window then shows the
@@ -127,10 +148,11 @@ final class MirrorScene {
               let vertices = frame.vertices, let indices = frame.indices, let parts = frame.parts else {
             entity.isEnabled = false
             backdrop.isEnabled = false
+            for slot in blendSlots { slot.entity.isEnabled = false }
             hasScene = false
             return false
         }
-        last = (Int(frame.vertex_count), Int(frame.index_count), Int(frame.part_count))
+        last = (Int(frame.vertex_count), Int(frame.index_count), Int(frame.part_count), last.blended)
         let fillStart = CACurrentMediaTime()
         let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
                           indexCount: Int(frame.index_count))
@@ -146,15 +168,63 @@ final class MirrorScene {
         // A part whose texture is still on its way waits: drawn white, it flashed.
         let partsStart = CACurrentMediaTime()
         defer { stages.parts += CACurrentMediaTime() - partsStart }
-        mesh.parts.replaceAll((0..<Int(frame.part_count)).compactMap { index in
+        // The solid parts in the one mesh; each blended one in a slot of its own (fillBlend).
+        var solid: [LowLevelMesh.Part] = []
+        var blendedParts: [(index: Int, material: ShaderGraphMaterial)] = []
+        for index in 0..<Int(frame.part_count) {
             let part = parts[index]
             guard let materialIndex = materialIndex[keys[index]], materialReady[materialIndex] else {
                 wantedTextures.insert(keys[index].texture)
-                return nil
+                continue
             }
-            return LowLevelMesh.Part(indexOffset: Int(part.first_index) * 4, indexCount: Int(part.index_count),
-                                     topology: .triangle, materialIndex: materialIndex, bounds: bounds)
-        })
+            if part.kind == DUSK_MIRROR_PART_BLEND, !Self.oneMesh, blendedParts.count < Int(Self.maxBlendedParts),
+               let material = material(for: keys[index]) {
+                blendedParts.append((index, material))
+                continue
+            }
+            solid.append(LowLevelMesh.Part(indexOffset: Int(part.first_index) * 4, indexCount: Int(part.index_count),
+                                           topology: .triangle, materialIndex: materialIndex, bounds: bounds))
+        }
+        mesh.parts.replaceAll(solid)
+        // Each blended part into the slot that had its material last frame, if one did: by position,
+        // a dust puff appearing mid-list moved every later part to another slot, its geometry and
+        // material changing at once (which RealityKit may not show in the same frame).
+        var taken = [Bool](repeating: false, count: blendSlots.count)
+        var byMaterial: [MaterialKey: [Int]] = [:]
+        for (s, slot) in blendSlots.enumerated().reversed() {
+            if let key = slot.material { byMaterial[key, default: []].append(s) }
+        }
+        var slotFor = [Int](repeating: -1, count: blendedParts.count)
+        for (k, part) in blendedParts.enumerated() {
+            if let s = byMaterial[keys[part.index]]?.popLast() {
+                slotFor[k] = s
+                taken[s] = true
+            }
+        }
+        var free = 0
+        var blended = 0
+        for (k, part) in blendedParts.enumerated() {
+            var s = slotFor[k]
+            if s < 0 {
+                while free < taken.count && taken[free] { free += 1 }
+                if free == taken.count {
+                    let slot = BlendSlot()
+                    root.addChild(slot.entity)
+                    blendSlots.append(slot)
+                    taken.append(false)
+                }
+                s = free
+                taken[s] = true
+            }
+            if fillBlend(blendSlots[s], order: k, part: parts[part.index], key: keys[part.index], material: part.material,
+                         vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices) {
+                blended += 1
+            } else {
+                blendSlots[s].entity.isEnabled = false
+            }
+        }
+        for (s, slot) in blendSlots.enumerated() where !taken[s] { slot.entity.isEnabled = false }
+        last.blended = blended
         place(frame)
         if Self.dumpFrame == timing.total {
             dump(frame)
@@ -234,16 +304,94 @@ final class MirrorScene {
             // Test runs: TPVR_TEST_MIRROR_ADD_RED=1 makes every vertex mul 0, add opaque red: the
             // window should be solid red where the mirror draws (it checks uv1/uv2 reach the materials).
             if Self.addRed {
-                let red: [UInt16] = [0, 0, 0, 0, 0x3C00, 0, 0, 0x3C00]  // half 1.0 = 0x3C00
-                for index in 0..<vertexCount {
-                    let at = raw.baseAddress! + index * 36 + 20
-                    red.withUnsafeBytes { at.copyMemory(from: $0.baseAddress!, byteCount: 16) }
-                }
+                for index in 0..<vertexCount { Self.paintRed(raw.baseAddress! + index * 36) }
             }
         }
         mesh.replaceUnsafeMutableIndices { raw in
             raw.copyMemory(from: UnsafeRawBufferPointer(start: indices, count: indexCount * 4))
         }
+        return true
+    }
+
+    /// TPVR_TEST_MIRROR_ADD_RED: the vertex at `vertex` gets mul 0, add opaque red.
+    private static func paintRed(_ vertex: UnsafeMutableRawPointer) {
+        let red: [UInt16] = [0, 0, 0, 0, 0x3C00, 0, 0, 0x3C00]  // half 1.0 = 0x3C00
+        red.withUnsafeBytes { (vertex + 20).copyMemory(from: $0.baseAddress!, byteCount: 16) }
+    }
+
+    /// The frame's blended part `order` (the game's order) into `slot`: only the vertices it uses
+    /// (most of the frame's are solid), its indices renumbered, one part. False: the slot shows nothing.
+    private func fillBlend(_ slot: BlendSlot, order k: Int, part: dusk_visionos_mirror_part, key: MaterialKey,
+                           material: ShaderGraphMaterial, vertices: UnsafePointer<dusk_visionos_mirror_vertex>,
+                           vertexCount: Int, indices: UnsafePointer<UInt32>) -> Bool {
+        let first = Int(part.first_index), count = Int(part.index_count)
+        guard count > 0 else { return false }
+        if remap.count < vertexCount { remap = [Int32](repeating: -1, count: vertexCount) }
+        var used: [UInt32] = []
+        used.reserveCapacity(count)
+        var local = [UInt32](repeating: 0, count: count)
+        for i in 0..<count {
+            let v = Int(indices[first + i])
+            guard v < vertexCount else { continue }
+            if remap[v] < 0 {
+                remap[v] = Int32(used.count)
+                used.append(UInt32(v))
+            }
+            local[i] = UInt32(remap[v])
+        }
+        for v in used { remap[Int(v)] = -1 }
+        guard !used.isEmpty else { return false }
+        var low = SIMD3<Float>(repeating: .infinity), high = SIMD3<Float>(repeating: -.infinity)
+        for v in used {
+            let p = vertices[Int(v)].position
+            let point = SIMD3(p.0, p.1, p.2)
+            low = simd_min(low, point)
+            high = simd_max(high, point)
+        }
+        let pad = (high - low) * 0.05 + 1
+        let bounds = BoundingBox(min: low - pad, max: high + pad)
+        // A bigger mesh replaces the slot's only once its resource is made: kept on failure, the
+        // slot would go on drawing the old resource while the next frames wrote into the new mesh.
+        var fresh = false
+        var target = slot.mesh
+        if target.map({ $0.vertexCapacity < used.count || $0.indexCapacity < count }) ?? true {
+            guard let made = try? LowLevelMesh(descriptor: Self.descriptor(
+                vertices: max(256, used.count.nextPowerOfTwo), indices: max(768, count.nextPowerOfTwo))) else {
+                return false
+            }
+            target = made
+            fresh = true
+        }
+        guard let mesh = target else { return false }
+        mesh.replaceUnsafeMutableBytes(bufferIndex: 0) { raw in
+            for (j, v) in used.enumerated() {
+                let at = raw.baseAddress! + j * 36
+                at.copyMemory(from: vertices + Int(v), byteCount: 36)
+                if Self.addRed { Self.paintRed(at) }
+            }
+        }
+        mesh.replaceUnsafeMutableIndices { raw in
+            local.withUnsafeBytes { raw.copyMemory(from: $0) }
+        }
+        mesh.parts.replaceAll([LowLevelMesh.Part(indexOffset: 0, indexCount: count, topology: .triangle,
+                                                 materialIndex: 0, bounds: bounds)])
+        // The resource only once the mesh has its part: made from a mesh without one, RealityKit
+        // never drew it (MirrorScene's own lesson, and the window's).
+        if fresh {
+            guard let resource = try? MeshResource(from: mesh) else { return false }
+            slot.mesh = mesh
+            slot.entity.model = ModelComponent(mesh: resource, materials: [material])
+            slot.material = key
+        } else if slot.material != key {
+            slot.entity.model?.materials = [material]
+            slot.material = key
+        }
+        let order = sortOrder + 1 + Int32(k)
+        if slot.order != order, let sortGroup {
+            slot.entity.components.set(ModelSortGroupComponent(group: sortGroup, order: order))
+            slot.order = order
+        }
+        slot.entity.isEnabled = true
         return true
     }
 
@@ -571,18 +719,19 @@ final class MirrorScene {
         }
         let waitingBytes = pendingTextures.reduce(0) { $0 + $1.pixels.count }
         let vertices = mesh?.mesh.vertexCapacity ?? 0, indices = mesh?.mesh.indexCapacity ?? 0
-        return "\(lastReport); last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts; "
+        return "\(lastReport); last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts "
+            + "(\(last.blended) blended, in \(blendSlots.count) slots); "
             + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB; \(counts.texturesMade) made, "
             + "\(counts.texturesFailed) failed), \(pendingTextures.count) waiting (\(waitingBytes >> 20) MB), "
             + "\(Self.uploadsInFlight.load(ordering: .relaxed)) uploads in flight, \(materials.count) materials "
             + "(\(materialList.count) listed), mesh room for \(vertices) vertices and \(indices) indices "
             + "(\(counts.meshesMade) meshes made, \(counts.fills) fills)"
     }
-    private var last = (vertices: 0, indices: 0, parts: 0)
+    private var last = (vertices: 0, indices: 0, parts: 0, blended: 0)
     /// The last 5-s report's rates, for the memory log (the headset doesn't keep stdout).
     private var lastReport = "no report yet"
     /// Texture uploads committed to the GPU and not yet done, for the memory log.
-    private static let uploadsInFlight = Atomic<Int>(0)
+    nonisolated private static let uploadsInFlight = Atomic<Int>(0)
 
     /// Every 5 s: how often RealityKit updates, how many game frames came, and what they cost here.
     private func report(_ start: CFTimeInterval) {
