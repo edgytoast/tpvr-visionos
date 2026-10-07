@@ -130,22 +130,27 @@ private final class Observations {
 }
 
 /// What a port says about the inputs, for the selected way of playing: one line, whether play
-/// can go ahead, and whether hand tracking is what's missing (then Open Settings shows).
+/// can go ahead, whether hand tracking is what's missing, and whether Settings is where to fix
+/// what is (then Open Settings shows).
 public struct InputVerdict: Equatable {
     public let text: String
     public let ready: Bool
     public let handsNeeded: Bool
+    /// What's missing is fixed in Settings (hand tracking, accessory tracking): the strip offers
+    /// Open Settings. Unless the port says, whenever hands are needed.
+    public let settingsNeeded: Bool
 
-    public init(_ text: String, ready: Bool, handsNeeded: Bool = false) {
+    public init(_ text: String, ready: Bool, handsNeeded: Bool = false, settingsNeeded: Bool? = nil) {
         self.text = text
         self.ready = ready
         self.handsNeeded = handsNeeded
+        self.settingsNeeded = settingsNeeded ?? handsNeeded
     }
 }
 
 /// What the player will play with, for an ornament centred under the launcher: a tile each for
 /// hands, the two Sense controllers (or one, where they act as a single gamepad) and a gamepad,
-/// with the port's verdict under them, and Open Settings when hand tracking is what's missing.
+/// with the port's verdict under them, and Open Settings when the verdict says that's where to fix it.
 public struct InputStatus: View {
     private let monitor: InputMonitor
     private let handsUsed: Bool
@@ -192,7 +197,7 @@ public struct InputStatus: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
-                if !monitor.checking && verdict.handsNeeded && monitor.hands == .denied && !monitor.anyController {
+                if !monitor.checking && verdict.settingsNeeded {
                     Button("Open Settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                     }

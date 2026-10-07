@@ -128,6 +128,7 @@ actor PortImages {
             data.reserveCapacity(Int(max(response.expectedContentLength, 0)))
             do {
                 for try await byte in bytes {
+                    try Task.checkCancellation()
                     guard data.count < limit else { return nil }
                     data.append(byte)
                 }
@@ -138,12 +139,21 @@ actor PortImages {
         }
         downloads[hash] = task
         let data = await task.value
-        downloads[hash] = nil
+        // (Only its own: letGo may have dropped it, and another may have started since.)
+        if downloads[hash] == task { downloads[hash] = nil }
         if let data {
             try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             try? data.write(to: file, options: .atomic)
         }
         return data
+    }
+
+    /// Lets go of every decoded picture and stops every download (the pictures are switched off
+    /// while a game is loaded). What's on disk stays, for later.
+    func letGo() {
+        decoded.removeAllObjects()
+        for download in downloads.values { download.cancel() }
+        downloads.removeAll()
     }
 
     /// Drops every cached picture the current list no longer has.

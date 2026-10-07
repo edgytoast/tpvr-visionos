@@ -43,9 +43,11 @@ struct LauncherView: View {
             ControlsView()
                 .tabItem { Label("Controls", systemImage: "gamecontroller.fill") }
                 .tag(Tab.controls)
+            // Text only once the game is open: it stays loaded (about 1.5 GB) until the app ends.
             PortsBrowser(index: ports, ownID: "twilight-princess-vr", buildCommit: BuildInfo.current.commit,
                          buildDirty: BuildInfo.current.dirty,
-                         opening: TestHooks.value("TPVR_TEST_SHEET").flatMap { $0.hasPrefix("port:") ? String($0.dropFirst(5)) : nil })
+                         opening: TestHooks.value("TPVR_TEST_SHEET").flatMap { $0.hasPrefix("port:") ? String($0.dropFirst(5)) : nil },
+                         showsMedia: model.phase == .idle)
                 .tabItem { Label("Ports", systemImage: "square.grid.2x2.fill") }
                 .tag(Tab.ports)
             AboutView(content: Self.about, diagnostics: diagnostics,
@@ -460,8 +462,8 @@ struct LauncherView: View {
         if inputs.senseLeft != nil && inputs.senseRight != nil {
             // Their buttons work regardless; where they are needs accessory tracking (or the hands).
             if inputs.accessories == .denied && !handsPlay {
-                return InputVerdict("Accessory tracking is off for Twilight Princess VR, so the sword and shield won't follow your controllers. Turn it on for this app in the Settings app.",
-                                    ready: false)
+                return InputVerdict("Accessory tracking is off for Twilight Princess VR, so the sword and shield won't follow your controllers. Turn it on in Settings.",
+                                    ready: false, settingsNeeded: true)
             }
             return InputVerdict("Ready to play with your Sense controllers. Have fun!", ready: true)
         }
@@ -469,8 +471,8 @@ struct LauncherView: View {
         if inputs.anySense {
             return handsPlay
                 ? InputVerdict("Ready with one Sense controller. Your other hand plays bare.", ready: true)
-                : InputVerdict("Only one Sense controller is connected and hand tracking is off. Turn on the other controller, or turn hand tracking on for this app in the Settings app.",
-                               ready: false)
+                : InputVerdict("Only one Sense controller is connected and hand tracking is off. Turn on the other controller, or turn hand tracking on in Settings.",
+                               ready: false, settingsNeeded: true)
         }
         switch inputs.hands {
         case .allowed:
@@ -524,6 +526,9 @@ struct LauncherView: View {
     }
 
     private func play() async {
+        // The Ports tab's pictures go now, rather than when it's next shown: none stays in memory
+        // beside the game.
+        PortsBrowser.letGoOfPictures()
         model.markOpening()
         if model.playsWindow {
             // The game window starts the game when it appears and closes this one.

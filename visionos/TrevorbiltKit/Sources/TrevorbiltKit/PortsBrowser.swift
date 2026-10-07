@@ -252,17 +252,22 @@ public struct PortsBrowser: View {
     @Namespace private var cards
 
     private let openingID: String?
+    private let showsMedia: Bool
 
     /// `buildCommit`: the commit this app was built from (nil if unknown); `buildDirty`: a
     /// development build, whose commit says nothing about the reviewed one (BuildInfo).
     /// `opening`: an entry's id, to open its details once the list is in (for a port's headless
-    /// screenshot runs).
-    public init(index: PortsIndex, ownID: String, buildCommit: String?, buildDirty: Bool, opening: String? = nil) {
+    /// screenshot runs). `showsMedia`: the ports' pictures; off while a game is loaded (one that
+    /// runs once per process, with its memory in use), when every card and page is its words,
+    /// nothing is downloaded or decoded, and what was decoded is let go.
+    public init(index: PortsIndex, ownID: String, buildCommit: String?, buildDirty: Bool, opening: String? = nil,
+                showsMedia: Bool = true) {
         self.index = index
         self.ownID = ownID
         self.buildCommit = buildCommit
         self.buildDirty = buildDirty
         openingID = opening
+        self.showsMedia = showsMedia
     }
 
     public var body: some View {
@@ -297,7 +302,17 @@ public struct PortsBrowser: View {
                 selected = feed.entries.first { $0.id == openingID }
             }
         }
-        .sheet(item: $selected) { PortDetail(entry: $0) }
+        .sheet(item: $selected) { PortDetail(entry: $0, showsMedia: showsMedia) }
+        .onChange(of: showsMedia, initial: true) { _, shows in
+            if !shows { Self.letGoOfPictures() }
+        }
+    }
+
+    /// Lets go of every picture the Ports tab has decoded and stops its downloads: call it as a
+    /// game starts, so none of them stays in memory beside it. (A browser shown with `showsMedia`
+    /// off does too.)
+    public static func letGoOfPictures() {
+        Task { await PortImages.shared.letGo() }
     }
 
     private var notice: some View {
@@ -312,6 +327,12 @@ public struct PortsBrowser: View {
                     .font(.tbBody(12, relativeTo: .subheadline))
                     .foregroundStyle(.white.opacity(0.8))
                     .fixedSize(horizontal: false, vertical: true)
+                if !showsMedia {
+                    Text("Screenshots and icons are off while a game is open, so the game has the memory.")
+                        .font(.tbBody(12, weight: .bold, relativeTo: .subheadline))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 4)
+                }
                 Link(destination: PortsIndex.readmeURL) {
                     Text("Read before installing \u{203A}")
                         .font(.tbBody(12, weight: .bold, relativeTo: .subheadline))
@@ -360,7 +381,8 @@ public struct PortsBrowser: View {
                 GridRow {
                     ForEach(shown[start..<min(start + 2, shown.count)]) { entry in
                         Button { selected = entry } label: {
-                            PortCard(entry: entry, group: HoverEffectGroup(id: entry.id, in: cards, behavior: .followsGroup))
+                            PortCard(entry: entry, group: HoverEffectGroup(id: entry.id, in: cards, behavior: .followsGroup),
+                                     showsMedia: showsMedia)
                         }
                         .buttonStyle(TrevorbiltTileButtonStyle())
                         .hoverEffectGroup(id: entry.id, in: cards)
@@ -404,6 +426,12 @@ public struct PortsBrowser: View {
     }
 }
 
+/// What a card or page loads its pictures for: anew when either changes.
+struct MediaRequest: Hashable {
+    let media: PortMedia?
+    let shown: Bool
+}
+
 /// A port, as a card in the grid: led by its README's first screenshot, with its icon half over
 /// that screenshot's edge (or, with no screenshot, beside the title). A picture that can't be had
 /// is simply not there; the card is its words.
@@ -411,6 +439,7 @@ struct PortCard: View {
     let entry: PortEntry
     /// The card's hover group, for the icon's drift.
     var group: HoverEffectGroup?
+    var showsMedia = true
     @State private var hero: CGImage?
     @State private var icon: [PortIconView.Layer]?
 
@@ -436,8 +465,12 @@ struct PortCard: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .combine)
-        .task(id: entry.media) {
-            guard let media = entry.media else { return }
+        .task(id: MediaRequest(media: entry.media, shown: showsMedia)) {
+            guard showsMedia, let media = entry.media else {
+                hero = nil
+                icon = nil
+                return
+            }
             async let shot = Self.first(media.screenshots)
             async let layers = Self.icon(media.icon)
             let (loadedHero, loadedIcon) = await (shot, layers)
@@ -507,6 +540,7 @@ struct Tag: View {
 /// A port's details, in a sheet: what it is, how it's doing, and where to read more.
 struct PortDetail: View {
     let entry: PortEntry
+    var showsMedia = true
     @Environment(\.dismiss) private var dismiss
     @State private var shots: [(picture: PortMedia.Picture, image: CGImage)] = []
     @State private var page: Int?
@@ -580,7 +614,11 @@ struct PortDetail: View {
                 }
             }
         }
-        .task(id: entry.media) {
+        .task(id: MediaRequest(media: entry.media, shown: showsMedia)) {
+            guard showsMedia else {
+                shots = []
+                return
+            }
             // All of them before any shows, in the README's order, so the strip appears once.
             let pictures = Array((entry.media?.screenshots ?? []).prefix(3))
             let images = await withTaskGroup(of: (Int, CGImage?).self) { group in
