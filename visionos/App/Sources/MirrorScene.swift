@@ -570,7 +570,7 @@ final class MirrorScene {
         }
         let waitingBytes = pendingTextures.reduce(0) { $0 + $1.pixels.count }
         let vertices = mesh?.mesh.vertexCapacity ?? 0, indices = mesh?.mesh.indexCapacity ?? 0
-        return "last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts; "
+        return "\(lastReport); last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts; "
             + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB; \(counts.texturesMade) made, "
             + "\(counts.texturesFailed) failed), \(pendingTextures.count) waiting (\(waitingBytes >> 20) MB), "
             + "\(Self.uploadsInFlight.load(ordering: .relaxed)) uploads in flight, \(materials.count) materials "
@@ -578,6 +578,8 @@ final class MirrorScene {
             + "(\(counts.meshesMade) meshes made, \(counts.fills) fills)"
     }
     private var last = (vertices: 0, indices: 0, parts: 0)
+    /// The last 5-s report's rates, for the memory log (the headset doesn't keep stdout).
+    private var lastReport = "no report yet"
     /// Texture uploads committed to the GPU and not yet done, for the memory log.
     private static let uploadsInFlight = Atomic<Int>(0)
 
@@ -594,6 +596,10 @@ final class MirrorScene {
                      timing.seconds / updates * 1000, stages.fill / updates * 1000, stages.parts / updates * 1000,
                      Double(timing.vertices) / frames, Double(timing.parts) / frames,
                      materials.count, counts.materialSets, counts.texturesMade, counts.texturesFailed, pendingTextures.count))
+        lastReport = String(format: "%.0f updates/s, %.0f frames/s, %.2f ms an update (fill %.2f, parts %.2f)",
+                            updates / (start - timing.since), Double(timing.frames) / (start - timing.since),
+                            timing.seconds / updates * 1000, stages.fill / updates * 1000,
+                            stages.parts / updates * 1000)
         timing = (0, 0, 0, start, 0, 0, timing.total)
         stages = (0, 0)
         counts.materialSets = 0

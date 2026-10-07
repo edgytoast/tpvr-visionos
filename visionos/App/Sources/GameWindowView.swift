@@ -182,7 +182,7 @@ final class GameScreen {
     func update() {
         switch memoryGuard.check(hasMirror: mirror != nil, mirror: { self.mirror?.diagnostics ?? "off" },
                                  extra: { "\(self.surfaces.count) frame surfaces (\(self.surfaceSizes)), "
-                                          + "\(self.frames) window frames, "
+                                          + "\(self.frames) window frames (\(self.frameRate())/s), "
                                           + "\(Self.framesInFlight.load(ordering: .relaxed)) in flight" }) {
         case .dropMirror: dropMirror()
         case .quit: dusk_visionos_request_quit()  // the game returns and the app ends with it (GameModel)
@@ -230,6 +230,15 @@ final class GameScreen {
                   + "tangents \(frame.tan_half_x) x \(frame.tan_half_y), focus \(frame.focus), effects \(effects.isEnabled)")
         }
     }
+
+    /// Window frames (the game's) a second since the last call, for the memory log.
+    private func frameRate() -> String {
+        let now = CACurrentMediaTime()
+        defer { rateMark = (now, frames) }
+        guard now > rateMark.time else { return "-" }
+        return String(format: "%.0f", Double(frames - rateMark.frames) / (now - rateMark.time))
+    }
+    private var rateMark = (time: CACurrentMediaTime(), frames: 0)
 
     /// The frame surfaces' sizes, for the memory log: they follow the game's internal resolution.
     private var surfaceSizes: String {
