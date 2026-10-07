@@ -122,6 +122,9 @@ The app takes a few environment variables for headless runs (pass each as
   distances, final image and (with the mirror) the scene before its screen effects
   raw into Documents. `TPVR_TEST_WINDOW_EFFECTS=1` brings back the screen effects'
   layer (off by default: it ghosted and streaked off-axis),
+  `TPVR_TEST_WINDOW_CLIP=1` with `AURORA_MIRROR_BAND=1` clips the portal at the
+  glass and squashes what's nearer into a band behind it, as before (the band
+  bent the ground near the camera),
   `=ghost` shows the game's own picture in that layer at half opacity (one Link
   if the layer lines up with the mirror, two if not); `AURORA_MIRROR_GROUPS=1`
   (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the

@@ -269,10 +269,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..79b2092
+index 0000000..73213f5
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2788 @@
+@@ -0,0 +1,2813 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -2550,6 +2550,9 @@ index 0000000..79b2092
 +bool g_jobPending = false;
 +std::atomic<uint64_t> g_finishNanos{0}, g_finished{0}, g_dropped{0};
 +std::atomic<uint32_t> g_lastParts{0};
++// The last frame's glass and focus (game units) and its share of vertices squashed into the near
++// band, for the periodic log.
++std::atomic<float> g_lastPlane{0}, g_lastFocus{0}, g_lastBandShare{0};
 +
 +void finish(Job& job) {
 +  Built& out = job.built;
@@ -2583,17 +2586,37 @@ index 0000000..79b2092
 +    // triangles sharing an edge split it alike, with one midpoint: no cracks).
 +    // The near geometry keeps its order front to back, in a band 3% deep behind the glass:
 +    // depths [0, P x 1.03] go to [P, P x 1.03] (laid flat on one plane, it z-fought).
++    //
++    // Not any more by default: the window's portal no longer cuts the scene at the glass (as in the
++    // SHAR port), so what's nearer comes out in front of it, inside the window's opening, as the
++    // shape it is. The band folded TP's pitched-down ground into a near-vertical sheet at the glass
++    // ("the ground bends near the camera") and squeezed coplanar layers there until they z-fought.
++    // Test runs: AURORA_MIRROR_BAND=1 brings the band back (with TPVR_TEST_WINDOW_CLIP=1 in the app).
++    static const bool s_band = [] {
++      const char* band = std::getenv("AURORA_MIRROR_BAND");
++      return band != nullptr && std::strcmp(band, "1") == 0;
++    }();
 +    const float onPlane = out.plane * 1.0005f, band = 0.03f, bandEnd = onPlane * (1.f + band);
-+    subdivide_near(out.vertices, job.groups, bandEnd);
++    size_t banded = 0;
++    if (s_band) {
++      subdivide_near(out.vertices, job.groups, bandEnd);
++    }
 +    for (MirrorVertex& vertex : out.vertices) {
 +      const float depth = -vertex.position[2];
 +      if (depth > 1e-3f && depth < bandEnd) {
++        ++banded;
++        if (!s_band) {
++          continue;
++        }
 +        const float scale = (onPlane + band * onPlane * depth / bandEnd) / depth;
 +        for (float& c : vertex.position) {
 +          c *= scale;
 +        }
 +      }
 +    }
++    g_lastPlane = out.plane;
++    g_lastFocus = out.focus;
++    g_lastBandShare = out.vertices.empty() ? 0.f : static_cast<float>(banded) / static_cast<float>(out.vertices.size());
 +    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
 +    for (const MirrorVertex& vertex : out.vertices) {
 +      // (Runaways' triangles are gone; the sky, pushed at most 100 times, stays inside this.)
@@ -2710,6 +2733,8 @@ index 0000000..79b2092
 +             g_lastParts.load(), g_stats.seconds / f * 1000.0, static_cast<double>(g_decodeNanos.exchange(0)) / f / 1e6,
 +             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
 +    log_tally(f);
++    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices nearer than the glass's band",
++             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f);
 +    g_stats = {};
 +  }
 +}

@@ -394,11 +394,18 @@ final class GameScreen {
         hud.removeFromParent()
         let height = 1 / aspect
         portal = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [PortalMaterial()])
-        // Clipped at the glass, as a real window is (the side towards the viewer, +z, goes): nothing
-        // of the mirror's level may come out between the window and the viewer.
-        portal.components.set(PortalComponent(target: world,
-                                              clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),
-                                              crossingMode: .disabled))
+        // Not clipped at the glass, as in the SHAR port: what the mirror has nearer than the glass
+        // (TP's pitched-down ground towards the camera) comes out in front of it, inside the
+        // window's opening, as the shape it is. Clipped there, it had to be squashed into a band
+        // behind the glass, which bent the ground. Test runs: TPVR_TEST_WINDOW_CLIP=1 clips again
+        // (with AURORA_MIRROR_BAND=1 for the mirror's band).
+        if ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_CLIP"] == "1" {
+            portal.components.set(PortalComponent(target: world,
+                                                  clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),
+                                                  crossingMode: .disabled))
+        } else {
+            portal.components.set(PortalComponent(target: world))
+        }
         // The whole face is a target for pinches and taps (GameWindowView's gesture), so they stop here.
         portal.components.set(InputTargetComponent())
         portal.components.set(CollisionComponent(shapes: [.generateBox(width: 1, height: height, depth: 0.004)]))
