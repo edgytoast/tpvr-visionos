@@ -230,13 +230,14 @@ struct ControlsView: View {
                         hand(3, "Item ring", "Pinch your left thumb and ring finger.", "leftRing", .pinchRingLeft),
                         hand(4, "Map", "Tap your left thumb and middle finger. (Hold them to walk.)", "leftMiddle",
                              .pinchMiddleLeft),
-                        hand(5, "Pause", "Pinch your left thumb and little finger.", "leftLittle", .pinchLittleLeft)]
+                        hand(5, "Collection", "Pinch your left thumb and little finger: gear and quest status. The game waits.",
+                             "leftLittle", .pinchLittleLeft)]
             }
         case (.sense, false):
             // The VR mod's Touch layout (vr_main.cpp), on the Sense controllers.
             return [button(1, "Move", "Left stick (click it for Midna)", "leftStick", also: ["leftStick": "Midna (click)"]),
-                    button(2, "Turn", "Right stick, or just turn around (click it to pause)", "rightStick",
-                           also: ["rightStick": "Pause (click)"]),
+                    button(2, "Turn", "Right stick, or just turn around (click it for the collection)", "rightStick",
+                           also: ["rightStick": "Collection (click)"]),
                     button(3, "Action", "Cross: talk, open, pick up, roll", "a"),
                     button(4, "Sword", "Circle", "b"),
                     button(5, "Shield", "Hold the left grip", "leftShoulder"),
@@ -245,7 +246,7 @@ struct ControlsView: View {
                     button(8, "Item (X)", "The right grip", "rightShoulder"),
                     button(9, "Item ring", "Triangle", "y"),
                     button(10, "Map", "Square", "x"),
-                    button(11, "Pause", "Create, or click the right stick", "view"),
+                    button(11, "Collection", "Create, or click the right stick: gear and quest status", "view"),
                     button(12, "Sword", "swing your sword hand, as Link would", "swing")]
         case (.gamepad, false):
             // Dusklight's own buttons (aurora's defaults), with the VR mod's turn on the right stick.
@@ -259,7 +260,7 @@ struct ControlsView: View {
                     button(8, "Item (Y)", "Y / Triangle", "y"),
                     button(9, "Midna", "RB / R1", "rightShoulder"),
                     button(10, "Item ring and map", "D-pad: up or down for the ring, left or right for the map", "dpad"),
-                    button(11, "Pause", "Menu / Options", "menu"),
+                    button(11, "Collection", "Menu / Options: gear and quest status", "menu"),
                     button(12, "Settings", "View / Create opens Dusklight's menu", "view")]
         case (.sense, true):
             // The two Sense controllers as one gamepad (visionos_sense_pad.mm).
@@ -275,7 +276,7 @@ struct ControlsView: View {
                     button(9, "Midna", "R1, the right grip", "rightShoulder"),
                     button(10, "Item ring", "L1, the left grip", "leftShoulder"),
                     button(11, "Map", "Create, on the left controller", "view"),
-                    button(12, "Pause", "Options, on the right controller", "menu")]
+                    button(12, "Collection", "Options, on the right controller: gear and quest status", "menu")]
         case (.gamepad, true):
             // Dusklight's own buttons (aurora's defaults): the original game's, on a modern pad.
             return [button(1, "Move", "Left stick", "leftStick"),
@@ -288,7 +289,7 @@ struct ControlsView: View {
                     button(8, "Item (Y)", "Y / Triangle", "y"),
                     button(9, "Midna", "RB / R1", "rightShoulder"),
                     button(10, "Item ring and map", "D-pad: up or down for the ring, left or right for the map", "dpad"),
-                    button(11, "Pause", "Menu / Options", "menu"),
+                    button(11, "Collection", "Menu / Options: gear and quest status", "menu"),
                     button(12, "Settings", "View / Create opens Dusklight's menu", "view")]
         }
     }
@@ -297,7 +298,7 @@ struct ControlsView: View {
         let window = guide.windowView && guide.input != .hands
         let text: String = switch (guide.input, window) {
         case (.hands, _) where guide.gestures == .moving:
-            "Hands play in Full and Progressive, when no controller is connected. The sword hand is the game's VR setting."
+            "Hands play in Full and Progressive. A Sense controller takes over the hand holding it. The sword hand is the game's VR setting."
         case (.hands, _):
             "Calling Midna needs a controller: no gesture stands in for a stick click."
         case (.sense, false):

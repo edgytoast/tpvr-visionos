@@ -49,6 +49,9 @@ struct TPVRVisionApp: App {
             GameWindowView()
                 .environmentObject(model)
         }
+        // Never restored at launch (after the app was ended with it open): only Play opens it,
+        // and it starts the game. As the SHAR port's.
+        .restorationBehavior(.disabled)
         .windowStyle(.plain)
         // Test runs: TPVR_TEST_WINDOW_SIZE=<factor> opens it that much larger (the Simulator can't resize it).
         .defaultSize(width: 1280 * Self.testWindowSize, height: 720 * Self.testWindowSize)

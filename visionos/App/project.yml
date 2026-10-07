@@ -67,10 +67,13 @@ targets:
           dirty=false
           if commit_found=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
             commit=$commit_found
-            # (Not the submodules' own changes: bootstrap.sh patches aurora in place.)
-            git -C "$SRCROOT/../.." diff --quiet --ignore-submodules=dirty HEAD -- 2>/dev/null || dirty=true
+            # Changes not committed, new files included (not the submodules' own changes:
+            # bootstrap.sh patches aurora in place).
+            [ -z "$(git -C "$SRCROOT/../.." status --porcelain --ignore-submodules=dirty 2>/dev/null)" ] || dirty=true
             git -C "$SRCROOT" remote -v 2>/dev/null | tr '[:upper:]' '[:lower:]' |
               grep -qF -e "/$release_repo.git " -e "/$release_repo " -e ":$release_repo.git " -e ":$release_repo " || dirty=true
+            # A commit not pushed anywhere yet can't be compared, or offered as the source.
+            git -C "$SRCROOT" branch -r --contains HEAD 2>/dev/null | grep -q . || dirty=true
           fi
           /usr/libexec/PlistBuddy -c "Delete :TBBuildCommit" "$plist" 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Delete :TBBuildDirty" "$plist" 2>/dev/null || true

@@ -187,7 +187,11 @@ struct LauncherView: View {
     @ViewBuilder private var discStatus: some View {
         if model.importing {
             StatusCapsule {
-                ProgressRing(progress: model.importProgress)
+                if let progress = model.importProgress {
+                    ProgressRing(progress: progress)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
                 Text("Copying the disc\(model.importProgress.map { " · \(Int(($0 * 100).rounded()))%" } ?? "…")")
             }
         } else if let disc = model.disc, model.checkingDisc {
@@ -446,13 +450,24 @@ struct LauncherView: View {
             if inputs.gamepad != nil { return InputVerdict("Ready to play with your gamepad.", ready: true) }
             return InputVerdict("The Window view plays with a controller. Connect your Sense controllers or a gamepad.", ready: false)
         }
+        // Full and Progressive: each hand is a Sense controller if one's in it, else the bare hand
+        // (the provider picks per hand); a gamepad plays alongside either.
+        let handsPlay = inputs.hands == .allowed || inputs.hands == .notAsked
         if inputs.senseLeft != nil && inputs.senseRight != nil {
+            // Their buttons work regardless; where they are needs accessory tracking (or the hands).
+            if inputs.accessories == .denied && !handsPlay {
+                return InputVerdict("Accessory tracking is off for Twilight Princess VR, so the sword and shield won't follow your controllers. Turn it on in Settings.",
+                                    ready: false, handsNeeded: true)
+            }
             return InputVerdict("Ready to play with your Sense controllers. Have fun!", ready: true)
         }
-        if inputs.anySense {
-            return InputVerdict("Only one Sense controller is connected. Turn on the other to hold the sword and the shield.", ready: false)
-        }
         if inputs.gamepad != nil { return InputVerdict("Ready to play with your gamepad.", ready: true) }
+        if inputs.anySense {
+            return handsPlay
+                ? InputVerdict("Ready with one Sense controller. Your other hand plays bare.", ready: true)
+                : InputVerdict("Only one Sense controller is connected and hand tracking is off. Turn on the other controller, or turn hand tracking on in Settings.",
+                               ready: false, handsNeeded: true)
+        }
         switch inputs.hands {
         case .allowed:
             return InputVerdict("Ready to play with your hands. The Controls tab shows how.", ready: true)
@@ -476,8 +491,12 @@ struct LauncherView: View {
     private func importDisc(_ url: URL) {
         // Its progress and any problem show on Play.
         tab = .play
-        // Never under a game that's open (it reads the disc in place).
-        guard model.phase == .idle else { return }
+        // Never under a game that's open (it reads the disc in place): said, and AirDrop's copy
+        // isn't left behind.
+        guard model.phase == .idle else {
+            model.declineImport(of: url)
+            return
+        }
         model.importDisc(from: url)
     }
 
@@ -553,9 +572,11 @@ struct LauncherView: View {
     static let repository = "edgytoast/tpvr-visionos"
 
     /// The built app is GPL-3.0 (it links the OpenXR provider), so the source of this very build is
-    /// offered here: the repository at the commit it was built from.
+    /// offered here: the repository at the commit it was built from (a development build's isn't
+    /// public, so its branch).
     private static var sourceOfThisBuild: URL? {
-        URL(string: "https://github.com/\(repository)/tree/\(BuildInfo.current.commit ?? "visionos")")
+        let build = BuildInfo.current
+        return URL(string: "https://github.com/\(repository)/tree/\(build.dirty ? "visionos" : build.commit ?? "visionos")")
     }
 
     static let about = AboutContent(
@@ -579,14 +600,18 @@ struct LauncherView: View {
         notices: [
             .init("This repository: CC0", "Trevorbilt's code for the port, Dusklight, the decompilation and TPVR are dedicated to the public domain.",
                   URL(string: "https://github.com/\(repository)/blob/visionos/LICENSE.md")),
-            .init("This app: GPL-3.0", "It links the visionOS OpenXR provider, which is GPL-3.0-or-later, so the app is GPL-3.0. Its source is the repository at the commit this build came from.",
+            .init("This app: GPL-3.0", BuildInfo.current.dirty
+                  ? "It links the visionOS OpenXR provider, which is GPL-3.0-or-later, so the app is GPL-3.0. This is a development build: its source is the copy it was built from, and the repository has the released ones."
+                  : "It links the visionOS OpenXR provider, which is GPL-3.0-or-later, so the app is GPL-3.0. Its source is the repository at the commit this build came from.",
                   sourceOfThisBuild),
             .init("The launcher's shared code: MIT", "TrevorbiltKit, in visionos/TrevorbiltKit.",
                   URL(string: "https://github.com/\(repository)/blob/visionos/visionos/TrevorbiltKit/LICENSE")),
-            .init("Fonts", "Space Mono and Roboto (the launcher), Alegreya SC, Fira Sans, Inter and Noto Mono (the game's menus): SIL Open Font License 1.1. Material Symbols: Apache-2.0.",
+            .init("The launcher's fonts", "Space Mono and Roboto: SIL Open Font License 1.1.",
+                  URL(string: "https://github.com/\(repository)/tree/visionos/visionos/TrevorbiltKit/Sources/TrevorbiltKit/Resources/Fonts")),
+            .init("The game's fonts", "Alegreya SC, Fira Sans, Inter and Noto Mono: SIL Open Font License 1.1. Material Symbols: Apache-2.0.",
                   URL(string: "https://github.com/\(repository)/tree/visionos/res/licenses")),
             .init("Third-party code", "SMAA is MIT. Dawn, SDL, nod and the other submodules and downloads keep their own licences."),
-            .init("Trevorbilt's name and badge", "All rights reserved; not covered by the repository's licences."),
+            .init("Trevorbilt's name, badge and app icons", "All rights reserved; not covered by the repository's licences."),
         ],
         disclaimer: "Twilight Princess VR is a fan project. It isn't affiliated with or endorsed by Nintendo. The game, its characters and its art belong to Nintendo, and the disc is yours to bring.",
         otherPorts: [(name: "SHAR VR",
@@ -619,14 +644,14 @@ private struct StatusCapsule<Label: View, Action: View>: View {
     }
 }
 
-/// How far an import has got, as a ring (a quarter, turning, while that isn't known).
+/// How far an import has got, as a ring.
 private struct ProgressRing: View {
-    let progress: Double?
+    let progress: Double
 
     var body: some View {
         ZStack {
             Circle().stroke(.white.opacity(0.15), lineWidth: 3)
-            Circle().trim(from: 0, to: progress ?? 0.25).stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+            Circle().trim(from: 0, to: progress).stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
         .frame(width: 18, height: 18)

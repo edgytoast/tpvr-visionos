@@ -292,7 +292,10 @@ final class GameModel: ObservableObject {
         defer { try? writer.close() }
         var copied = 0.0
         var reported = -1
-        while let chunk = try reader.read(upToCount: 8 << 20), !chunk.isEmpty {
+        // Each piece in a pool of its own: read as Foundation objects, the pieces could otherwise
+        // all wait for the copy's end to be freed, the whole disc held in memory.
+        while try autoreleasepool(invoking: { () throws -> Bool in
+            guard let chunk = try reader.read(upToCount: 8 << 20), !chunk.isEmpty else { return false }
             try writer.write(contentsOf: chunk)
             copied += Double(chunk.count)
             if total > 0 {
@@ -302,8 +305,20 @@ final class GameModel: ObservableObject {
                     progress(min(copied / total, 1))
                 }
             }
-        }
+            return true
+        }) {}
         try writer.synchronize()
+    }
+
+    /// A disc that arrived (AirDrop, "Open with", the picker) while the game is open: it's not
+    /// brought in, since the game reads the disc in place. AirDrop's copy in Documents/Inbox goes, so
+    /// it doesn't sit there unseen (refreshDisc doesn't look in folders).
+    func declineImport(of url: URL) {
+        importFailure = "The game's open, so the disc wasn't brought in. Quit, then bring it in again."
+        let inbox = documents.appendingPathComponent("Inbox", isDirectory: true).standardizedFileURL.path
+        if url.standardizedFileURL.path.hasPrefix(inbox + "/") {
+            try? FileManager.default.removeItem(at: url)
+        }
     }
 
     private var importTask: UIBackgroundTaskIdentifier = .invalid

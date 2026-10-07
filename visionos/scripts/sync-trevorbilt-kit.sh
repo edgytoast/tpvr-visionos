@@ -27,7 +27,9 @@ else
     echo "No TrevorbiltKit at $commit in $checkout" >&2
     exit 1
 fi
-origin="$(git -C "$checkout" remote get-url origin 2>/dev/null || echo "a local checkout")"
+# Where it came from, without any credentials a remote's URL carries.
+origin="$(git -C "$checkout" remote get-url origin 2>/dev/null | sed -E 's#://[^/@]*@#://#' || true)"
+origin="${origin:-a local checkout}"
 
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
@@ -39,5 +41,9 @@ rsync -a --delete --exclude VERSION "$staging/$prefix/" "$target/"
     echo "repository: $origin"
     echo "path: $prefix"
     echo "commit: $commit"
+    if [ "$prefix" != "." ]; then
+        echo "(Until TrevorbiltKit has a public repository of its own, its commits live in a port's"
+        echo "development repository, which may be private: this file records which, for its maintainer.)"
+    fi
 } > "$target/VERSION"
 echo "TrevorbiltKit at ${commit:0:10} ($origin) is in visionos/TrevorbiltKit."
