@@ -12,6 +12,13 @@ options:
   deploymentTarget:
     visionOS: "26.0"
   createIntermediateGroups: true
+
+# The launcher every Trevorbilt port shares, vendored here (visionos/scripts/sync-trevorbilt-kit.sh)
+# so everything the app runs is in this repository.
+packages:
+  TrevorbiltKit:
+    path: ../TrevorbiltKit
+
 settings:
   base:
     ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -34,11 +41,48 @@ targets:
       - path: ../../res
         type: folder
         buildPhase: resources
+    # Which commit the app was built from, for its About and Ports tabs: TBBuildCommit (the full
+    # commit, "unknown" without git) and TBBuildDirty, a development build: one with uncommitted
+    # changes, or from anything but a checkout of the public repository, since only its commits can
+    # be compared with what the AVP Ports Index reviewed.
+    postBuildScripts:
+      # TODO: remove once the AVP Ports Index's live feed carries media (schema 1.4.0). Until then a
+      # Debug build bundles the draft feed (DebugFixtures, which never goes into a release) so the
+      # Ports tab can show its pictures on a headset; Release builds never have it.
+      - name: Ports media fixture (Debug)
+        basedOnDependencyAnalysis: false
+        script: |
+          fixture="$SRCROOT/DebugFixtures/ports-media-fixture.json"
+          bundled="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ports-media-fixture.json"
+          if [ "$CONFIGURATION" = "Debug" ] && [ -f "$fixture" ]; then cp "$fixture" "$bundled"; else rm -f "$bundled"; fi
+      - name: Build commit
+        basedOnDependencyAnalysis: false
+        # So it runs after Xcode writes the app's Info.plist, not before (which would lose its keys).
+        inputFiles:
+          - $(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)
+        script: |
+          plist="$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+          release_repo=edgytoast/tpvr-visionos
+          commit=unknown
+          dirty=false
+          if commit_found=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
+            commit=$commit_found
+            # (Not the submodules' own changes: bootstrap.sh patches aurora in place.)
+            git -C "$SRCROOT/../.." diff --quiet --ignore-submodules=dirty HEAD -- 2>/dev/null || dirty=true
+            git -C "$SRCROOT" remote -v 2>/dev/null | tr '[:upper:]' '[:lower:]' |
+              grep -qF -e "/$release_repo.git " -e "/$release_repo " -e ":$release_repo.git " -e ":$release_repo " || dirty=true
+          fi
+          /usr/libexec/PlistBuddy -c "Delete :TBBuildCommit" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Delete :TBBuildDirty" "$plist" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :TBBuildCommit string $commit" -c "Add :TBBuildDirty string $dirty" "$plist"
     info:
       # xcodegen writes Info.plist from these properties (plus the CFBundle defaults).
       path: Info.plist
       properties:
         CFBundleDisplayName: Twilight Princess VR
+        # xcodegen otherwise writes its own 1.0 and 1, whatever MARKETING_VERSION says.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSApplicationCategoryType: public.app-category.games
         LSRequiresIPhoneOS: true
         GCSupportsControllerUserInteraction: true
@@ -106,7 +150,10 @@ targets:
         FRAMEWORK_SEARCH_PATHS: ${TPVR_GAME_BUILD_DIR}
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks"
         GENERATE_INFOPLIST_FILE: NO
+        # The build-commit phase reads the repository's git state.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
     dependencies:
+      - package: TrevorbiltKit
       - framework: ${TPVR_GAME_BUILD_DIR}/DusklightGame.framework
         embed: true
         codeSign: true

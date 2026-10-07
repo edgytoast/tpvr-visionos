@@ -56,12 +56,14 @@ struct GameWindowView: View {
         .frame(minWidth: 640, idealWidth: 1280, maxWidth: 4096, minHeight: 300, idealHeight: 720, maxHeight: 2304)
         .onAppear {
             let openWindow = openWindow
-            model.showLauncher = { openWindow(id: GameModel.launcherWindowID) }
+            model.showLauncher = { openWindow(id: GameModel.launcherWindowID, value: GameModel.launcherWindowID) }
+            model.gameWindowShowing = true
             model.startWindowGame()
             // Out of the way while you play, as with the immersive spaces.
-            dismissWindow(id: GameModel.launcherWindowID)
+            dismissWindow(id: GameModel.launcherWindowID, value: GameModel.launcherWindowID)
         }
         .onDisappear {
+            model.gameWindowShowing = false
             // Closing the window ends the game, and with it the app (progress is kept up to
             // the last autosave or save).
             model.windowClosed()

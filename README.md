@@ -130,7 +130,10 @@ The app uses the newest disc image in its folder. Then tap **Play**.
 ## Play
 
 Before you press **Play**, the launcher asks how you'd like to play: **Full**, **Progressive** or
-**Window**, plus **Show my room around menus** (Full only) and **Foveated rendering**. In Full or
+**Window**, plus **Show my room around menus** (Full only), with **Foveated rendering** under
+**Advanced**. Its **Controls** tab shows every button and gesture for what you're holding, **Ports**
+browses the [AVP Ports Index](https://github.com/edgytoast/avp-ports-index), and **About** has the
+credits, licences and an update check. In Full or
 Progressive, press the Digital Crown to pause: the game holds where you are, and the launcher offers
 **Resume** or **Quit** (if it doesn't appear, open the app from Home). In Window, close the window to
 quit. The game autosaves when you enter a new area or open a dungeon door (Settings › Gameplay ›
@@ -152,9 +155,9 @@ Combat › Sword Hand) and the shield your other hand.
 | Right thumb + little, held and moved sideways | turn |
 
 **The Window view** plays like the original game, so it takes a gamepad, or both Sense controllers
-held as one: right half Cross A, Circle B, R2 R, R1 Z, Options Start; left half Square X,
-Triangle Y, L2 L (targeting), and the D-pad on L1 (up, Midna), Create (left, map), L3 (down) and
-R3 (right). Look at the game window to give it your controller, since visionOS hands a controller
+held as one: right half Cross A, Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half
+Square X, Triangle Y, L2 L (targeting), and the D-pad on L1 (up, item ring), Create (left, map),
+L3 (down, item ring) and R3 (right, map). Look at the game window to give it your controller, since visionOS hands a controller
 to whichever window you're looking at. Close the window to quit.
 
 The port's own options live in the game's settings: **VR › Vision Pro › Anti-Aliasing** and
@@ -257,6 +260,10 @@ app is GPL-3.0. None of that covers:
 - the fonts in `res/`: Alegreya SC, Fira Sans, Inter and Noto Mono are under the SIL Open Font
   License 1.1 and Material Symbols under Apache-2.0, with their licences in
   [res/licenses/](res/licenses), which the app carries too;
+- TrevorbiltKit, the launcher every Trevorbilt port shares, vendored in `visionos/TrevorbiltKit`:
+  its code is MIT ([its licence](visionos/TrevorbiltKit/LICENSE)), its fonts (Space Mono and
+  Roboto) are under the SIL Open Font License 1.1, and its brand assets (the badge, other apps'
+  icons) aren't licensed ([its notice](visionos/TrevorbiltKit/Sources/TrevorbiltKit/Resources/Brand/NOTICE.md));
 - SMAA in the provider, which is MIT
   ([its licence](visionos/openxr-provider/src/smaa/LICENSE.txt));
 - the submodules and the libraries the build downloads, which keep their own licenses.

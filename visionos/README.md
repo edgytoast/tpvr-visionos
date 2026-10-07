@@ -44,8 +44,8 @@ Homebrew's `rustup` is keg-only; the build script puts
 
 1. AirDrop the disc image to the headset and open it with Twilight Princess VR,
    or put it in Files › On My Apple Vision Pro › Twilight Princess VR, or use
-   Import Disc… in the app.
-2. Pick the immersion: Full (with or without your room around the menus),
+   Import disc in the app.
+2. Pick how to play: Full (with or without your room around the menus),
    Progressive (a portal you widen with the Digital Crown), or Window (the game
    beside your other apps; see below).
 3. Press Play. The game opens around you and the launcher goes away.
@@ -69,9 +69,10 @@ Window plays Twilight Princess as the GameCube game, in third person, in a
 window you can move and resize beside your other apps. visionOS gives an app no
 head tracking outside a full space, so the VR mod is off there and you play with
 a gamepad (DualSense, Xbox or another Bluetooth controller) or the two Sense
-controllers held as one: right half Cross A, Circle B, R2 R, R1 Z, Options
-Start; left half Square X, Triangle Y, L2 L (targeting); the D-pad is L1 up
-(Midna), Create left (map), L3 down, R3 right. The picture isn't
+controllers held as one: right half Cross A, Circle B, R2 R (shield), R1 Z
+(Midna), Options Start; left half Square X, Triangle Y, L2 L (targeting); the
+D-pad is L1 up and L3 down (item ring), Create left and R3 right (map). The
+launcher's Controls tab draws all of it. The picture isn't
 flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
@@ -114,6 +115,19 @@ The app takes a few environment variables for headless runs (pass each as
   `"MENU@30~0.3 B@45~0.3 LSTICK=0,1@50~2"`.
 - `TPVR_GPU_TIMING=1` logs the compositor's GPU time every 240 frames (it
   includes waiting for the game's frame, so compare settings by difference).
+- The launcher (Simulator builds only): `TPVR_TEST_TAB=play|controls|ports|about`
+  opens that tab; `TPVR_TEST_SHEET=manage|advanced|credits|diagnostics|port:<id>`
+  opens that sheet (on its tab); `TPVR_TEST_INPUTS=hands:denied,sense:LR,gamepad:none`
+  stands in for what's connected (hands: allowed, denied, notasked or unavailable;
+  sense: none, L, R or LR; gamepad: none or yes);
+  `TPVR_TEST_CONTROLS=hands|sense|gamepad[,window][,menus]` shows that page of the
+  Controls tab (`menus`: the hands' second page); `TPVR_TEST_PAD=none|xbox` draws the
+  gamepad page as if no pad, or an Xbox-kind one, were connected (the Simulator has
+  its own); `TPVR_TEST_FEED=<path>` reads the Ports tab's list from that file
+  (`visionos/App/DebugFixtures/ports-media-fixture.json`, the index's draft feed with
+  pictures, shows them) and `TPVR_TEST_OFFLINE=1` fails its picture downloads.
+  Pick the way to play with `defaults write dev.tpvr.vision.simulator immersion
+  full|progressive|window`.
 - Window mode (`defaults write dev.tpvr.vision.simulator immersion window` in
   the Simulator, then `TPVR_AUTO_PLAY=1`): `TPVR_TEST_WINDOW_TILT=<degrees>`
   turns the window to show the relief from the side, `TPVR_TEST_WINDOW_LAYERS=p`
@@ -143,6 +157,7 @@ The app takes a few environment variables for headless runs (pass each as
 | Path | What |
 | --- | --- |
 | `visionos/App/` | SwiftUI app shell (xcodegen): launcher, immersive space, C bridge calls |
+| `visionos/TrevorbiltKit/` | The launcher every Trevorbilt port shares (MIT), vendored by `visionos/scripts/sync-trevorbilt-kit.sh` from its own repository at the commit in its `VERSION`; not edited here |
 | `src/dusk/visionos/` | The game framework's C bridge (`visionos_host.h`) |
 | `visionos/openxr-provider/` | OpenXR provider over CompositorServices + ARKit, vendored from WiiCompiled Vision (GPL-3.0) |
 | `visionos/patches/aurora`, `visionos/patches/borealis` | visionOS changes to the two submodules |

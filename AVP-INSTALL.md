@@ -93,7 +93,8 @@ otherwise `git submodule update --init --recursive`).
 
 ## Play
 
-1. Open Twilight Princess VR, choose how to play (Full, Progressive or Window) and press Play.
+1. Open Twilight Princess VR, choose how to play (Full, Progressive or Window) and press Play. The
+   launcher's Controls tab shows every button and gesture for what you're holding.
 2. In Full or Progressive, press the Digital Crown to pause. The game holds where you are, and the
    launcher offers Resume or Quit (if it doesn't appear, open the app from Home). In Window, close
    the window to quit. The game autosaves when you enter a new area or open a dungeon door
@@ -112,8 +113,9 @@ the saves out to keep your own backup; deleting the app deletes them.
   pinch the menu, a fist the grip. Hold the left thumb-middle pinch and move your hand to walk; hold
   the right thumb-little pinch and move it sideways to turn.
 - **Window mode:** a gamepad, or both Sense controllers held as one pad: right half Cross A,
-  Circle B, R2 R, R1 Z, Options Start; left half Square X, Triangle Y, L2 L (targeting); D-pad on
-  L1 (up), Create (left), L3 (down) and R3 (right). Close the window to quit.
+  Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half Square X, Triangle Y, L2 L
+  (targeting); D-pad on L1 (up, item ring), Create (left, map), L3 (down, item ring) and R3
+  (right, map). Close the window to quit.
 - Vision Pro options are in the game's VR menu: VR > Vision Pro (anti-aliasing) and VR >
   Performance (render resolution up to 150%).
 

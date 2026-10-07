@@ -1,10 +1,11 @@
 import CompositorServices
 import os
 import SwiftUI
+import TrevorbiltKit
 
-/// The app: a launcher window (the disc, Play) and the immersive space the game
-/// renders into. The game is DusklightGame.framework, driven through its C bridge
-/// (src/dusk/visionos/visionos_host.h) by GameModel.
+/// The app: a launcher window (the Trevorbilt launcher: Play, Controls, Ports, About) and the
+/// immersive spaces and window the game renders into. The game is DusklightGame.framework, driven
+/// through its C bridge (src/dusk/visionos/visionos_host.h) by GameModel.
 @main
 struct TPVRVisionApp: App {
     @StateObject private var model = GameModel()
@@ -12,17 +13,23 @@ struct TPVRVisionApp: App {
 
     init() {
         MemoryWatch.start()
+        Trevorbilt.registerFonts()
     }
 
     private static let testWindowSize = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_SIZE"].flatMap(Double.init) ?? 1
 
     var body: some Scene {
-        WindowGroup(id: GameModel.launcherWindowID) {
+        // Only ever one launcher: it's opened with the same value each time (GameModel.showLauncher),
+        // and visionOS brings the window already showing that value to the front instead of
+        // opening another; the one at launch has it too (defaultValue). As the SHAR port does.
+        WindowGroup(id: GameModel.launcherWindowID, for: String.self) { _ in
             LauncherView()
                 .environmentObject(model)
+        } defaultValue: {
+            GameModel.launcherWindowID
         }
-        .windowResizability(.contentMinSize)
-        .defaultSize(width: 760, height: 640)
+        // The launcher's card is one size on every tab, and the window hugs it.
+        .windowResizability(.contentSize)
 
         // Two spaces, because a space that lists the progressive style makes every
         // drawable "support progressive": each present then needs the system's

@@ -61,6 +61,10 @@ final class GameModel: ObservableObject {
     @Published private(set) var discProblem: String?
     @Published private(set) var checkingDisc = false
     @Published private(set) var importing = false
+    /// How much of the disc an import has copied (nil while that isn't known yet, or for a move).
+    @Published private(set) var importProgress: Double?
+    /// Why the last import didn't work, until the next one starts.
+    @Published private(set) var importFailure: String?
     @Published var message = ""
     @Published var immersion: Immersion {
         didSet { UserDefaults.standard.set(immersion.rawValue, forKey: Self.immersionKey) }
@@ -77,12 +81,6 @@ final class GameModel: ObservableObject {
     }
     /// The immersive space's style, observed by the scene (TPVRVisionApp).
     let space = ImmersionSpaceStyle.shared
-    /// Hand tracking is turned off for this app in Settings (read without asking).
-    @Published private(set) var handTrackingDenied = false
-    /// A gamepad or a Sense controller is connected.
-    @Published private(set) var controllerConnected = false
-    /// Full and Progressive would get no input at all: no hands and no controller.
-    var noInputForImmersive: Bool { !playsWindow && handTrackingDenied && !controllerConnected }
 
     private static let immersionKey = "immersion"
     private static let roomBehindMenusKey = "roomBehindMenus"
@@ -126,8 +124,20 @@ final class GameModel: ObservableObject {
     static let discExtensions: Set<String> = ["iso", "rvz", "gcm", "ciso", "gcz", "wia", "wbfs", "nfs", "tgc"]
 
     let documents: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    /// Reopens the launcher window (set by the launcher, which has the scene actions).
+    /// Reopens the launcher window (set by the launcher, which has the scene actions): with the
+    /// launcher's own value, so visionOS brings back the one there is rather than open a second.
     var showLauncher: (() -> Void)?
+    /// The game's window (Window) is on screen: the launcher then leaves the controller to it.
+    /// (Not "the game is running": that stays true while a paused game's launcher shows.)
+    @Published var gameWindowShowing = false
+    /// Counts the launcher being brought back (a pause, or to say why the game stopped): it comes
+    /// back on Play, where Resume and the reason are.
+    @Published private(set) var launcherReturns = 0
+
+    private func bringBackLauncher() {
+        launcherReturns += 1
+        showLauncher?()
+    }
     private var watchdog: Timer?
 
     init() {
@@ -151,14 +161,6 @@ final class GameModel: ObservableObject {
         }
         removeStalePartials()
         refreshDisc()
-    }
-
-    /// Reads whether hand tracking is allowed and a controller is connected, for the
-    /// launcher's note. Asks nothing: the immersive space asks for hand tracking itself.
-    func refreshInputs() async {
-        let status = await ARKitSession().queryAuthorization(for: [.handTracking])
-        handTrackingDenied = status[.handTracking] == .denied
-        controllerConnected = !GCController.controllers().isEmpty
     }
 
     var canPlay: Bool {
@@ -210,8 +212,11 @@ final class GameModel: ObservableObject {
 
     /// Copies a picked disc image into Documents, where the game reads it in place.
     func importDisc(from url: URL) {
+        guard !importing else { return }
         importing = true
-        message = "Copying \(url.lastPathComponent)…"
+        importProgress = nil
+        importFailure = nil
+        message = ""
         let documents = self.documents
         let destination = documents.appendingPathComponent(url.lastPathComponent)
         // A 1.4 to 4.7 GB copy takes a while: keep going if the wearer looks away. If the
@@ -241,7 +246,9 @@ final class GameModel: ObservableObject {
                         staged = destination.appendingPathExtension(Self.partialExtension)
                         try? fileManager.removeItem(at: staged)
                         do {
-                            try fileManager.copyItem(at: url, to: staged)
+                            try Self.copy(url, to: staged) { fraction in
+                                Task { @MainActor in self.importProgress = fraction }
+                            }
                         } catch {
                             try? fileManager.removeItem(at: staged)
                             throw error
@@ -262,11 +269,41 @@ final class GameModel: ObservableObject {
             }
             await MainActor.run {
                 self.importing = false
-                self.message = failure.map { "Could not copy the disc: \($0)" } ?? ""
+                self.importProgress = nil
+                self.importFailure = failure.map { "The disc didn't copy: \($0)" }
                 self.refreshDisc()
                 self.endImportTask()
             }
         }
+    }
+
+    /// Copies `source` to `destination` in 8 MB pieces, saying how far it has got (at most a
+    /// hundred times), so the launcher can show the copy's progress: FileManager's copy says nothing
+    /// until it's done, and a disc is 1.4 to 4.7 GB.
+    nonisolated private static func copy(_ source: URL, to destination: URL,
+                                         progress: @escaping @Sendable (Double) -> Void) throws {
+        let total = (try? source.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Double.init) ?? 0
+        guard FileManager.default.createFile(atPath: destination.path, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown, userInfo: [NSFilePathErrorKey: destination.path])
+        }
+        let reader = try FileHandle(forReadingFrom: source)
+        defer { try? reader.close() }
+        let writer = try FileHandle(forWritingTo: destination)
+        defer { try? writer.close() }
+        var copied = 0.0
+        var reported = -1
+        while let chunk = try reader.read(upToCount: 8 << 20), !chunk.isEmpty {
+            try writer.write(contentsOf: chunk)
+            copied += Double(chunk.count)
+            if total > 0 {
+                let percent = Int(copied / total * 100)
+                if percent != reported {
+                    reported = percent
+                    progress(min(copied / total, 1))
+                }
+            }
+        }
+        try writer.synchronize()
     }
 
     private var importTask: UIBackgroundTaskIdentifier = .invalid
@@ -413,7 +450,7 @@ final class GameModel: ObservableObject {
         } else {
             phase = .failed(message: String(cString: dusk_visionos_last_error()))
             // The launcher closed when the space opened; bring it back to say why.
-            showLauncher?()
+            bringBackLauncher()
         }
     }
 
@@ -441,7 +478,7 @@ final class GameModel: ObservableObject {
             }
             phase = .ended(exitCode: code)
             // Something went wrong: bring the launcher back to say so.
-            showLauncher?()
+            bringBackLauncher()
         } else if quitRequested {
             dusk_visionos_request_quit()
         } else if phase == .running && !playsWindow && dusk_visionos_layer_invalidated() {
@@ -451,7 +488,7 @@ final class GameModel: ObservableObject {
                 // launcher offers Resume or Quit. If visionOS doesn't show it now,
                 // opening the app from Home does.
                 phase = .paused
-                showLauncher?()
+                bringBackLauncher()
             } else {
                 // Closed before the game was ever seen in it: its VR startup gives up
                 // waiting for the space, so there's nothing to resume. Quit, as before.

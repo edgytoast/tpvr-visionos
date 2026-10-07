@@ -1,0 +1,489 @@
+{
+  "$schema": "https://raw.githubusercontent.com/edgytoast/avp-ports-index/main/schema/feed-v1.schema.json",
+  "schema_version": "1.4.0-draft",
+  "identifier": "com.trevorbilt.avp-ports-index",
+  "generated_at": "2026-10-07T07:26:52Z",
+  "publisher": {
+    "name": "trevorbilt",
+    "curator": "Trevor \"Toast\"",
+    "github": "edgytoast",
+    "url": "https://trevorbilt.com",
+    "contact": "admin@trevorbilt.com"
+  },
+  "license": "CC0-1.0",
+  "entries": [
+    {
+      "id": "twilight-princess-vr",
+      "name": "Twilight Princess VR",
+      "game": {
+        "title": "The Legend of Zelda: Twilight Princess",
+        "original_platform": "gamecube",
+        "original_release_year": 2006
+      },
+      "repo_url": "https://github.com/edgytoast/tpvr-visionos",
+      "source_ref": null,
+      "source_url": "https://github.com/edgytoast/tpvr-visionos/tree/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9",
+      "install_doc_url": "https://github.com/edgytoast/tpvr-visionos/blob/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/AVP-INSTALL.md",
+      "developer": {
+        "name": "Trevorbilt",
+        "github": "edgytoast",
+        "url": "https://trevorbilt.com",
+        "github_verified": true
+      },
+      "credits": [
+        {
+          "name": "JoeyAW",
+          "role": "TPVR, the VR mod this port is built on",
+          "url": "https://github.com/JoeyAW/TPVR"
+        },
+        {
+          "name": "Twilit Realm",
+          "role": "Dusklight, the Twilight Princess PC port",
+          "url": "https://twilitrealm.dev/"
+        },
+        {
+          "name": "zeldaret",
+          "role": "Twilight Princess decompilation",
+          "url": "https://github.com/zeldaret/tp"
+        },
+        {
+          "name": "encounter",
+          "role": "Aurora, the GameCube and Wii graphics layer",
+          "url": "https://github.com/encounter/aurora"
+        },
+        {
+          "name": "iChris4",
+          "role": "WiiCompiled Vision, source of the visionOS OpenXR provider",
+          "url": "https://github.com/iChris4/Wiicompiled_VR"
+        }
+      ],
+      "upstream": [
+        "https://github.com/JoeyAW/TPVR",
+        "https://github.com/TwilitRealm/dusklight",
+        "https://github.com/zeldaret/tp"
+      ],
+      "self_reported_status": "working",
+      "status_notes": "Plays on Apple Vision Pro (visionOS 27) in full and progressive immersion, with PS VR2 Sense controllers or bare hands. Window mode (third person, gamepad) is newer: characters look a little flatter than in the game.",
+      "owner_verified": {
+        "verified": false,
+        "verified_on": null,
+        "verified_commit": null
+      },
+      "trust_tier": "working",
+      "curator_own": true,
+      "health": {
+        "status": "ok",
+        "failing_since": null
+      },
+      "scanned_commit": "a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9",
+      "scanned_at": "2026-10-07T07:01:57Z",
+      "scan_kind": "automated",
+      "commits_since_scan": 0,
+      "scan_state": "current",
+      "archived": false,
+      "last_commit_date": "2026-10-07T04:17:02Z",
+      "license": {
+        "kind": "open-source",
+        "spdx": "CC0-1.0"
+      },
+      "visionos_min": "26.0",
+      "input": [
+        "game-controller",
+        "hand-tracking"
+      ],
+      "experiences": [
+        "3d-shared-space",
+        "6dof-immersive",
+        "6dof-progressive"
+      ],
+      "install": [
+        "build"
+      ],
+      "tags": [
+        "zelda",
+        "twilight-princess",
+        "vr",
+        "first-person",
+        "gamecube",
+        "wii",
+        "decompilation",
+        "hand-tracking"
+      ],
+      "description": "Twilight Princess in first person on Apple Vision Pro: JoeyAW's TPVR mod on Dusklight, built natively for visionOS. Full or progressive immersion with PS VR2 Sense controllers or bare hands, or the GameCube game in a window beside your apps, with real depth. Bring your own disc.",
+      "page_url": "https://github.com/edgytoast/avp-ports-index/blob/main/ports/twilight-princess-vr.md",
+      "media": {
+        "icon": {
+          "kind": "layered",
+          "layers": [
+            {
+              "layer": "back",
+              "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Back.solidimagestacklayer/Content.imageset/Back.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 39048,
+              "sha256": "6af87336e2ee53c66bbcc0d11877937a9ca7bdfc2082aae78a1db8695bb9ec06",
+              "format": "png"
+            },
+            {
+              "layer": "middle",
+              "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Middle.solidimagestacklayer/Content.imageset/Middle.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 124181,
+              "sha256": "77e2032cd45d5033eb37ba9b440e6f3dad82d82ccbd080ed64d9a9b44901d71c",
+              "format": "png"
+            },
+            {
+              "layer": "front",
+              "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Front.solidimagestacklayer/Content.imageset/Front.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 116263,
+              "sha256": "d6fdee278d3a65966659b93def5179629edab6a19bc0c4f5ff2a02cdb61f2fc3",
+              "format": "png"
+            }
+          ]
+        },
+        "screenshots": [
+          {
+            "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/docs/images/window-view.jpg",
+            "alt": "Link at Ordon Ranch, in a window floating in a living room",
+            "width": 1600,
+            "height": 900,
+            "bytes": 171535,
+            "sha256": "c9d3f91f26037437afa5e31bf194467c626ba5b03e300baaa57b0b7a1b38ac46",
+            "format": "jpeg"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/docs/images/full-immersion.jpg",
+            "alt": "Ordon Ranch in first person: the ranch house, goats and a rancher, with the HUD floating ahead",
+            "width": 1600,
+            "height": 900,
+            "bytes": 269050,
+            "sha256": "256761e065afb0cf24d1649924783648761e5f94a3726dadf9a069d8588c115d",
+            "format": "jpeg"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/edgytoast/tpvr-visionos/a4fbe68d0a8446e6678bb328e273cb1e3d6b72e9/docs/images/window-angle.jpg",
+            "alt": "The same window seen from the side: Link and the ranch house have real depth behind the glass",
+            "width": 1600,
+            "height": 1025,
+            "bytes": 184753,
+            "sha256": "89646502795cadf67303561fe5dcc32ab46e5209574c2c12977a4a50106c0030",
+            "format": "jpeg"
+          }
+        ],
+        "source": "readme"
+      }
+    },
+    {
+      "id": "shar-visionos",
+      "name": "SHAR VR",
+      "game": {
+        "title": "The Simpsons: Hit & Run",
+        "original_platform": "pc",
+        "original_release_year": 2003
+      },
+      "repo_url": "https://github.com/edgytoast/shar-visionos",
+      "source_ref": null,
+      "source_url": "https://github.com/edgytoast/shar-visionos/tree/6d34c501924fcb414263ebbee197b718860446b6",
+      "install_doc_url": "https://github.com/edgytoast/shar-visionos/blob/6d34c501924fcb414263ebbee197b718860446b6/AVP-INSTALL.md",
+      "developer": {
+        "name": "Trevorbilt",
+        "github": "edgytoast",
+        "url": "https://trevorbilt.com",
+        "github_verified": true
+      },
+      "credits": [
+        {
+          "name": "Trevorbilt",
+          "role": "visionOS port",
+          "url": "https://trevorbilt.com"
+        },
+        {
+          "name": "Radical Entertainment",
+          "role": "Original game (2003)",
+          "url": "https://en.wikipedia.org/wiki/Radical_Entertainment"
+        },
+        {
+          "name": "Svxy",
+          "role": "The original source code, on GitHub",
+          "url": "https://github.com/Svxy/The-Simpsons-Hit-and-Run"
+        },
+        {
+          "name": "ZenoArrows",
+          "role": "Source port (Nintendo Switch, PS Vita)",
+          "url": "https://github.com/ZenoArrows/The-Simpsons-Hit-and-Run"
+        },
+        {
+          "name": "Carlox33",
+          "role": "Android port",
+          "url": "https://github.com/Carlox33/The-Simpsons-Hit-and-Run-Android"
+        },
+        {
+          "name": "kote2345",
+          "role": "VR mod (Meta Quest 3, PC VR)",
+          "url": "https://github.com/kote2345/The-Simpsons-Hit-and-Run-VR"
+        }
+      ],
+      "upstream": [
+        "https://github.com/kote2345/The-Simpsons-Hit-and-Run-VR",
+        "https://github.com/Carlox33/The-Simpsons-Hit-and-Run-Android",
+        "https://github.com/ZenoArrows/The-Simpsons-Hit-and-Run"
+      ],
+      "self_reported_status": "working",
+      "status_notes": "Plays in the Full, Progressive and Window views, with PS VR2 Sense controllers, a gamepad or bare hands. Built and played on Apple Vision Pro.",
+      "owner_verified": {
+        "verified": false,
+        "verified_on": null,
+        "verified_commit": null
+      },
+      "trust_tier": "working",
+      "curator_own": true,
+      "health": {
+        "status": "ok",
+        "failing_since": null
+      },
+      "scanned_commit": "6d34c501924fcb414263ebbee197b718860446b6",
+      "scanned_at": "2026-10-07T07:26:52Z",
+      "scan_kind": "automated",
+      "commits_since_scan": 0,
+      "scan_state": "current",
+      "archived": false,
+      "last_commit_date": "2026-10-06T21:13:19Z",
+      "license": {
+        "kind": "open-source",
+        "spdx": "MIT"
+      },
+      "visionos_min": "26.0",
+      "input": [
+        "game-controller",
+        "hand-tracking"
+      ],
+      "experiences": [
+        "3d-shared-space",
+        "6dof-immersive",
+        "6dof-progressive"
+      ],
+      "install": [
+        "build"
+      ],
+      "tags": [
+        "vr",
+        "6dof",
+        "driving",
+        "open-world",
+        "source-port"
+      ],
+      "description": "The Simpsons: Hit & Run in six degrees of freedom on Apple Vision Pro. Walk Springfield with a Sense controller in each hand, drive from the driver's seat, or play it as a 3D window beside your other apps. A native visionOS port of kote2345's Hit & Run VR mod.",
+      "page_url": "https://github.com/edgytoast/avp-ports-index/blob/main/ports/shar-visionos.md",
+      "media": {
+        "icon": {
+          "kind": "layered",
+          "layers": [
+            {
+              "layer": "back",
+              "url": "https://raw.githubusercontent.com/edgytoast/shar-visionos/6d34c501924fcb414263ebbee197b718860446b6/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Back.solidimagestacklayer/Content.imageset/Back.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 73017,
+              "sha256": "bfc59e06045c8b8899e7cef6e355fa6bd729c55b4247b83e44b3d7af3a707518",
+              "format": "png"
+            },
+            {
+              "layer": "middle",
+              "url": "https://raw.githubusercontent.com/edgytoast/shar-visionos/6d34c501924fcb414263ebbee197b718860446b6/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Middle.solidimagestacklayer/Content.imageset/Middle.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 13154,
+              "sha256": "bb86f27582c84ad9cdf0d6c4bead67497f42401c16f9dd6291ede3edece6c866",
+              "format": "png"
+            },
+            {
+              "layer": "front",
+              "url": "https://raw.githubusercontent.com/edgytoast/shar-visionos/6d34c501924fcb414263ebbee197b718860446b6/visionos/App/Assets.xcassets/AppIcon.solidimagestack/Front.solidimagestacklayer/Content.imageset/Front.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 255706,
+              "sha256": "03f6d2e0a807d4e86127ea624f6c8f80b9d1995a8e392d137bef0abd613f1542",
+              "format": "png"
+            }
+          ]
+        },
+        "screenshots": [
+          {
+            "url": "https://raw.githubusercontent.com/edgytoast/shar-visionos/6d34c501924fcb414263ebbee197b718860446b6/docs/images/window-view.jpg",
+            "alt": "Homer outside 742 Evergreen Terrace, in a window floating in a living room",
+            "width": 1600,
+            "height": 900,
+            "bytes": 171984,
+            "sha256": "a320cc2af0dbe94cf7bd325c0c09b1934d08a8623f1d033df2963a9fd6ee7638",
+            "format": "jpeg"
+          },
+          {
+            "url": "https://raw.githubusercontent.com/edgytoast/shar-visionos/6d34c501924fcb414263ebbee197b718860446b6/docs/images/window-angle.jpg",
+            "alt": "The same window seen from the side: the scene has real depth behind the glass",
+            "width": 1600,
+            "height": 1025,
+            "bytes": 156675,
+            "sha256": "9878be455e47250e07507e710fdbfba0e193ea6d05f4f4effaa045ced787f657",
+            "format": "jpeg"
+          }
+        ],
+        "source": "readme"
+      }
+    },
+    {
+      "id": "half-life-vr",
+      "name": "Lambda VisionPro",
+      "game": {
+        "title": "Half-Life",
+        "original_platform": "pc",
+        "original_release_year": 1998
+      },
+      "repo_url": "https://github.com/illixion/halflife-visionos",
+      "source_ref": null,
+      "source_url": "https://github.com/illixion/halflife-visionos/tree/289207393355fa68384b49c189218d1fa07705e8",
+      "install_doc_url": "https://github.com/illixion/halflife-visionos/blob/289207393355fa68384b49c189218d1fa07705e8/AVP-INSTALL.md",
+      "developer": {
+        "name": "Ixion",
+        "github": "illixion",
+        "url": null,
+        "github_verified": true
+      },
+      "credits": [
+        {
+          "name": "FWGS",
+          "role": "Xash3D-FWGS, the engine",
+          "url": "https://github.com/FWGS/xash3d-fwgs"
+        },
+        {
+          "name": "FWGS",
+          "role": "hlsdk-portable, the Half-Life game code",
+          "url": "https://github.com/FWGS/hlsdk-portable"
+        },
+        {
+          "name": "ANGLE",
+          "role": "OpenGL ES on Metal",
+          "url": "https://github.com/google/angle"
+        },
+        {
+          "name": "Lambda1VR (DrBeef)",
+          "role": "Inspiration (Quest VR port); no code reused",
+          "url": "https://github.com/DrBeef/Lambda1VR"
+        },
+        {
+          "name": "Valve",
+          "role": "Original game",
+          "url": null
+        }
+      ],
+      "upstream": [
+        "https://github.com/FWGS/xash3d-fwgs",
+        "https://github.com/FWGS/hlsdk-portable"
+      ],
+      "self_reported_status": "working",
+      "status_notes": "Playable end to end on Apple Vision Pro, per the README. The hand-tracked VR input is described there as proof-of-concept quality: functional, with rough edges.",
+      "owner_verified": {
+        "verified": false,
+        "verified_on": null,
+        "verified_commit": null
+      },
+      "trust_tier": "working",
+      "curator_own": false,
+      "health": {
+        "status": "ok",
+        "failing_since": null
+      },
+      "scanned_commit": "289207393355fa68384b49c189218d1fa07705e8",
+      "scanned_at": "2026-10-06T19:07:03Z",
+      "scan_kind": "automated",
+      "commits_since_scan": 0,
+      "scan_state": "current",
+      "archived": false,
+      "last_commit_date": "2026-10-06T18:15:14Z",
+      "license": {
+        "kind": "open-source",
+        "spdx": "GPL-3.0"
+      },
+      "visionos_min": "26.4",
+      "input": [
+        "hand-tracking",
+        "game-controller"
+      ],
+      "experiences": [
+        "6dof-immersive"
+      ],
+      "install": [
+        "build"
+      ],
+      "tags": [
+        "fps",
+        "half-life",
+        "vr",
+        "6dof",
+        "hand-tracking",
+        "xash3d"
+      ],
+      "description": "Half-Life in full immersion on Apple Vision Pro: the Xash3D-FWGS engine with its ref_gl renderer on Metal through ANGLE, presented with Compositor Services, with hand-tracked weapons and locomotion. Bring your own Half-Life from Steam (the pre-25th-anniversary build).",
+      "page_url": "https://github.com/edgytoast/avp-ports-index/blob/main/ports/half-life-vr.md",
+      "media": {
+        "icon": {
+          "kind": "layered",
+          "layers": [
+            {
+              "layer": "back",
+              "url": "https://raw.githubusercontent.com/illixion/halflife-visionos/289207393355fa68384b49c189218d1fa07705e8/LambdaVision/LambdaVision/Assets.xcassets/AppIcon.solidimagestack/Back.solidimagestacklayer/Content.imageset/back.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 5689,
+              "sha256": "9b3b1d9bafcb61017537acb5a797ccab2df0e5cba03b9c090ba30e6ad4254a77",
+              "format": "png"
+            },
+            {
+              "layer": "middle",
+              "url": "https://raw.githubusercontent.com/illixion/halflife-visionos/289207393355fa68384b49c189218d1fa07705e8/LambdaVision/LambdaVision/Assets.xcassets/AppIcon.solidimagestack/Middle.solidimagestacklayer/Content.imageset/middle.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 14776,
+              "sha256": "89431a2ade4de6fbcbb22180a364579895536b6db7e6cd6d2b024f8d772ceb81",
+              "format": "png"
+            },
+            {
+              "layer": "front",
+              "url": "https://raw.githubusercontent.com/illixion/halflife-visionos/289207393355fa68384b49c189218d1fa07705e8/LambdaVision/LambdaVision/Assets.xcassets/AppIcon.solidimagestack/Front.solidimagestacklayer/Content.imageset/front.png",
+              "alt": null,
+              "width": 1024,
+              "height": 1024,
+              "bytes": 14776,
+              "sha256": "89431a2ade4de6fbcbb22180a364579895536b6db7e6cd6d2b024f8d772ceb81",
+              "format": "png"
+            }
+          ]
+        },
+        "screenshots": [
+          {
+            "url": "https://raw.githubusercontent.com/illixion/halflife-visionos/289207393355fa68384b49c189218d1fa07705e8/images/ingame.jpg",
+            "alt": "In-game screenshot",
+            "width": 1920,
+            "height": 1080,
+            "bytes": 301711,
+            "sha256": "7f6bc0a96597f1e73a417fa9a8ce93ae191a295c7653e683b6eb6bda0397aa69",
+            "format": "jpeg"
+          }
+        ],
+        "source": "readme"
+      }
+    }
+  ],
+  "unavailable": [],
+  "tombstones": []
+}
