@@ -280,8 +280,12 @@ final class MirrorScene {
         let fits = mesh.map { $0.mesh.vertexCapacity >= vertexCount && $0.mesh.indexCapacity >= indexCount } ?? false
         if !fits {
             do {
+                // Grown in steps, not doubled: each write goes into a fresh buffer of the mesh's
+                // capacity, and past some size between 3.2 and 4.3 MB those cost RealityKit 12 to 15
+                // ms instead of 0.3 (in the Simulator, 83,500 vertices: 0.35 ms in a 3.2 MB buffer,
+                // 11 to 15 ms in 4.3 MB, as in the 4.7 MB that doubling made). 36 bytes a vertex.
                 let made = try LowLevelMesh(descriptor: Self.descriptor(
-                    vertices: max(65536, vertexCount.nextPowerOfTwo), indices: max(131072, indexCount.nextPowerOfTwo)))
+                    vertices: max(65536, vertexCount.roundedUp(to: 8192)), indices: max(131072, indexCount.roundedUp(to: 16384))))
                 let resource = try MeshResource(from: made)
                 mesh = (made, resource)
                 counts.meshesMade += 1
@@ -758,4 +762,5 @@ final class MirrorScene {
 
 private extension Int {
     var nextPowerOfTwo: Int { self <= 1 ? 1 : 1 << (Int.bitWidth - (self - 1).leadingZeroBitCount) }
+    func roundedUp(to step: Int) -> Int { (self + step - 1) / step * step }
 }
