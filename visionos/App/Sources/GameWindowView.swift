@@ -286,7 +286,9 @@ final class GameScreen {
         }
         if mirrorShowing, let mirror {
             // The mirror draws the world; the HUD and the screen effects come from the frame.
-            let base = Self.showEffects ? texture(frame.base, format: .bgra8Unorm_srgb) : nil
+            // The picture before the screen effects: what turned black (fades, letterbox bars) is
+            // found from it and goes on the glass, with or without the effects' layer.
+            let base = texture(frame.base, format: .bgra8Unorm_srgb)
             var layer: MTLTexture?
             if base != nil, let effectsTexture, let effectsMesh, mirror.plane > 1 {
                 layer = effectsTexture.replace(using: commands)
@@ -617,6 +619,7 @@ private struct HudFlags {
     var hasUi: UInt32
     var hasBase: UInt32
     var ghost: UInt32
+    var writeEffects: UInt32
 }
 
 /// The window's Metal kernels (adapted from the SHAR port's visionos_window.mm).
@@ -665,8 +668,8 @@ private struct Pipelines {
     func hud(_ commands: MTLCommandBuffer, final: MTLTexture, scene: MTLTexture, base: MTLTexture?, ui: MTLTexture?,
              hud: MTLTexture, effects: MTLTexture?, ghost: Bool = false) {
         guard let compute = commands.makeComputeCommandEncoder() else { return }
-        var flags = HudFlags(hasUi: ui != nil ? 1 : 0, hasBase: base != nil && effects != nil ? 1 : 0,
-                             ghost: ghost ? 1 : 0)
+        var flags = HudFlags(hasUi: ui != nil ? 1 : 0, hasBase: base != nil ? 1 : 0,
+                             ghost: ghost ? 1 : 0, writeEffects: base != nil && effects != nil ? 1 : 0)
         compute.setComputePipelineState(self.hud)
         compute.setTexture(final, index: 0)
         compute.setTexture(scene, index: 1)
@@ -874,7 +877,7 @@ private struct Pipelines {
         return float4(max(after - before * (1.0 - a), 0.0), a);
     }
 
-    struct HudFlags { uint hasUi, hasBase, ghost; };
+    struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; };
 
     struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; float depthScale; };
 
@@ -938,7 +941,9 @@ private struct Pipelines {
                 if (!changed) colour = float4(0, 0, 0, effect.a);
                 effect = float4(0);
             }
-            effects.write(effect, id);
+            // The effects' own layer, when it's on (TPVR_TEST_WINDOW_EFFECTS); the black ones above
+            // go on the glass either way.
+            if (flags.writeEffects != 0) effects.write(effect, id);
         }
         if (flags.hasUi != 0)
         {
