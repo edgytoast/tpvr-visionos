@@ -336,9 +336,13 @@ final class GameScreen {
         return shown.isEmpty ? "pb" : shown
     }()
 
-    // Test runs: TPVR_TEST_WINDOW_EFFECTS=0 leaves the screen effects out of the mirror; =ghost puts
-    // the game's own picture in their layer at half opacity (one Link if it lines up, two if not).
-    private static let showEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] != "0"
+    // The screen effects' layer (bloom, mist, light shafts on a grid draped over the game's depths)
+    // is off: from anywhere but the game camera's own eye point it came apart from the 3D scene, a
+    // ghost of each figure's glow beside it and faint streaks fanning back from every silhouette
+    // (the grid stretched along the view rays there). Fades and letterbox bars stay, on the glass
+    // with the HUD. Test runs: TPVR_TEST_WINDOW_EFFECTS=1 brings the layer back; =ghost puts the
+    // game's own picture in it at half opacity (one Link if it lines up, two if not).
+    private static let showEffects = ["1", "ghost"].contains(ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] ?? "")
     private static let ghostEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] == "ghost"
 
     // Test runs: TPVR_TEST_WINDOW_DUMP=<frame> writes that frame's scene, finished frame and (with
@@ -416,7 +420,7 @@ final class GameScreen {
         hudSize = size
         let rows = Self.rows
         let columns = max(16, Int((Float(rows) * Float(size.x) / Float(max(size.y, 1))).rounded()))
-        if mirror != nil, let layer = try? LowLevelTexture(descriptor: descriptor),
+        if mirror != nil, Self.showEffects, let layer = try? LowLevelTexture(descriptor: descriptor),
            let layerResource = try? TextureResource(from: layer),
            let mesh = try? Self.makeGridMesh(columns: columns, rows: rows),
            let meshResource = try? MeshResource(from: mesh) {

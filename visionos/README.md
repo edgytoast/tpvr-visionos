@@ -75,9 +75,9 @@ Start; left half Square X, Triangle Y, L2 L (targeting); the D-pad is L1 up
 flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
 depth and holds up from any angle as you look and lean. The HUD and Dusklight's
-menus sit on the glass. Characters cast their shadows. The game's screen effects
-(bloom, mist, light shafts, fades and cutscene bars) are laid
-over the scene, each glow on what it lights. Close the window to quit (progress is
+menus sit on the glass. Characters cast their shadows. Fades and cutscene bars
+are on the glass too; bloom, mist and light shafts are left out of the window,
+since laid over the 3D scene they ghosted and streaked from off to the side. Close the window to quit (progress is
 kept up to the last autosave or save); the game pauses while the window is in
 the background. In the window the game renders at no more than 3x its native
 resolution, whatever Settings › Graphics says: a window shows no more, and at
@@ -120,8 +120,9 @@ The app takes a few environment variables for headless runs (pass each as
   or `=b` shows one relief layer, `TPVR_TEST_WINDOW_FLAT=1` lays the picture flat
   for comparison, and `TPVR_TEST_WINDOW_DUMP=<frame>` writes that frame's scene,
   distances, final image and (with the mirror) the scene before its screen effects
-  raw into Documents. `TPVR_TEST_WINDOW_EFFECTS=0` leaves the screen effects out,
-  `=ghost` shows the game's own picture in their layer at half opacity (one Link
+  raw into Documents. `TPVR_TEST_WINDOW_EFFECTS=1` brings back the screen effects'
+  layer (off by default: it ghosted and streaked off-axis),
+  `=ghost` shows the game's own picture in that layer at half opacity (one Link
   if the layer lines up with the mirror, two if not); `AURORA_MIRROR_GROUPS=1`
   (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the
   mirror kept and skipped. The scene mirror is the default;
