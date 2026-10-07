@@ -79,7 +79,10 @@ menus sit on the glass. Characters cast their shadows. The game's screen effects
 (bloom, mist, light shafts, fades and cutscene bars) are laid
 over the scene, each glow on what it lights. Close the window to quit (progress is
 kept up to the last autosave or save); the game pauses while the window is in
-the background.
+the background. In the window the game renders at no more than 3x its native
+resolution, whatever Settings › Graphics says: a window shows no more, and at
+12x its frames alone took gigabytes. Full and Progressive use the setting as
+it is.
 
 Your saves live in the app's folder (Files › On My Apple Vision Pro › Twilight
 Princess VR), next to the disc: copy them out to back them up. Deleting the app

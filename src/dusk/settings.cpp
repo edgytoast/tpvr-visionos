@@ -17,6 +17,7 @@
 // default there. Elsewhere it stays
 // opt-in, as upstream has it.
 #if defined(__APPLE__) && TARGET_OS_VISION
+#include "dusk/visionos/visionos_window.hpp"
 #define DUSK_AUTOSAVE_DEFAULT true
 #else
 #define DUSK_AUTOSAVE_DEFAULT false
@@ -333,6 +334,18 @@ UserSettings& getSettings() {
 }
 
 void applyInternalResolutionScale(int scale) {
+#if defined(__APPLE__) && TARGET_OS_VISION
+    // Apple Vision Pro, Window mode: the flat frame is what the window shows, and it copies it
+    // each frame into four slots of IOSurfaces (visionos_window.cpp). At 12x native
+    // (7680x6336) that came to over 9 GB of GPU memory the moment a scene started, and the
+    // window's memory guard had to quit the game. A window shows no more than about 3x, so it
+    // renders at that; the immersive modes render their eyes at their own size and keep the
+    // setting as it is. Auto (0) follows the window's size and stays.
+    constexpr int kWindowMaxScale = 3;
+    if (dusk::visionos::window::enabled() && scale > kWindowMaxScale) {
+        scale = kWindowMaxScale;
+    }
+#endif
     VISetFrameBufferScale(static_cast<float>(scale));
 }
 

@@ -181,7 +181,8 @@ final class GameScreen {
 
     func update() {
         switch memoryGuard.check(hasMirror: mirror != nil, mirror: { self.mirror?.diagnostics ?? "off" },
-                                 extra: { "\(self.surfaces.count) frame surfaces, \(self.frames) window frames, "
+                                 extra: { "\(self.surfaces.count) frame surfaces (\(self.surfaceSizes)), "
+                                          + "\(self.frames) window frames, "
                                           + "\(Self.framesInFlight.load(ordering: .relaxed)) in flight" }) {
         case .dropMirror: dropMirror()
         case .quit: dusk_visionos_request_quit()  // the game returns and the app ends with it (GameModel)
@@ -228,6 +229,11 @@ final class GameScreen {
             print("[TPVR] window frame \(frames): scene \(frame.scene != nil), ui \(frame.ui != nil), "
                   + "tangents \(frame.tan_half_x) x \(frame.tan_half_y), focus \(frame.focus), effects \(effects.isEnabled)")
         }
+    }
+
+    /// The frame surfaces' sizes, for the memory log: they follow the game's internal resolution.
+    private var surfaceSizes: String {
+        Set(surfaces.values.map { "\($0.width)x\($0.height)" }).sorted().joined(separator: ", ")
     }
 
     /// Memory ran away (WindowMemoryGuard): the mirror goes, its textures and mesh with it, and the
