@@ -125,10 +125,12 @@ The app takes a few environment variables for headless runs (pass each as
   the game's own picture in that layer at half opacity (one Link if the layer
   lines up with the mirror, two if not); `AURORA_MIRROR_BAND=1` clips the portal
   at the glass and squashes what's nearer into a band behind it, as before (the
-  band bent the ground near the camera); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the
-  mirror's translucent parts in the level's one mesh, as before each got an entity
-  of its own in the game's order (RealityKit ordered them by distance and they
-  flickered); `AURORA_MIRROR_GROUPS=1`
+  band bent the ground near the camera); `TPVR_TEST_WINDOW_SIZE=<factor>` opens
+  the window that much larger (the nearest ground eases in more, in a wider
+  window); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
+  the level's one mesh, as before each got an entity of its own in the game's
+  order (RealityKit ordered them by distance and they flickered);
+  `AURORA_MIRROR_GROUPS=1`
   (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the
   mirror kept and skipped. The scene mirror is the default;
   `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,

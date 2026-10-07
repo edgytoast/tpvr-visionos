@@ -195,6 +195,9 @@ typedef struct dusk_visionos_mirror_frame {
 // Whether the window wants the mirror (set before or while it shows). Turning it on sends every
 // texture again.
 void dusk_visionos_set_mirror_enabled(bool enabled);
+// How far in front of its glass the window lets the scene come out, in window widths, and the
+// narrowest half-view tangent it shows as is (aurora::mirror::set_front_allowance).
+void dusk_visionos_set_mirror_front_allowance(float widths, float min_view_tangent);
 // The newest frame no later than game frame `up_to` (the window frame shown with it: the two then
 // match); its pointers last until the next call (main thread). False before the first.
 bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame, uint32_t up_to);

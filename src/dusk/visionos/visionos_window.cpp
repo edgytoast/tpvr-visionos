@@ -743,6 +743,10 @@ void dusk_visionos_set_mirror_enabled(bool enabled) {
     aurora::mirror::set_enabled(enabled);
 }
 
+void dusk_visionos_set_mirror_front_allowance(float widths, float min_view_tangent) {
+    aurora::mirror::set_front_allowance(widths, min_view_tangent);
+}
+
 static_assert(sizeof(dusk_visionos_mirror_vertex) == sizeof(aurora::mirror::Vertex));
 static_assert(sizeof(dusk_visionos_mirror_part) == sizeof(aurora::mirror::Part));
 static_assert(offsetof(dusk_visionos_mirror_part, wrap_s) == offsetof(aurora::mirror::Part, wrapS));

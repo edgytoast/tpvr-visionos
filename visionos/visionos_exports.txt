@@ -18,4 +18,5 @@ _dusk_visionos_window_tick
 _dusk_visionos_window_acquire
 _dusk_visionos_window_release
 _dusk_visionos_set_mirror_enabled
+_dusk_visionos_set_mirror_front_allowance
 _dusk_visionos_mirror_acquire

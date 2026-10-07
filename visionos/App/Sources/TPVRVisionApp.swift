@@ -14,6 +14,8 @@ struct TPVRVisionApp: App {
         MemoryWatch.start()
     }
 
+    private static let testWindowSize = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_SIZE"].flatMap(Double.init) ?? 1
+
     var body: some Scene {
         WindowGroup(id: GameModel.launcherWindowID) {
             LauncherView()
@@ -41,7 +43,8 @@ struct TPVRVisionApp: App {
                 .environmentObject(model)
         }
         .windowStyle(.plain)
-        .defaultSize(width: 1280, height: 720)
+        // Test runs: TPVR_TEST_WINDOW_SIZE=<factor> opens it that much larger (the Simulator can't resize it).
+        .defaultSize(width: 1280 * Self.testWindowSize, height: 720 * Self.testWindowSize)
         .windowResizability(.contentSize)
 
         // Progressive: Hyrule through a portal the Digital Crown widens.

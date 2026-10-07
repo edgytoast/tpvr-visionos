@@ -49,7 +49,8 @@ struct GameWindowView: View {
         .handlesGameControllerEvents(matching: .gamepad)
         // Next to no depth, so the face is where the window's bar and corner handles are: given the
         // depth a plain window offers (as deep as it is tall), the face sat at the back of it and
-        // didn't line up with them on the headset (SHAR). The game is behind the portal anyway.
+        // didn't line up with them on the headset (SHAR). What the scene has nearer than the face
+        // still shows in front of it, up to where visionOS cuts it off (GameScreen.frontAllowance).
         .frame(depth: 4)
         .aspectRatio(aspect, contentMode: .fit)
         .frame(minWidth: 640, idealWidth: 1280, maxWidth: 4096, minHeight: 300, idealHeight: 720, maxHeight: 2304)
@@ -181,11 +182,17 @@ final class GameScreen {
         }
         if bounds.extents != loggedExtents {
             loggedExtents = bounds.extents
+            dusk_visionos_set_mirror_front_allowance(frontAllowance / max(bounds.extents.x, 0.01), ReliefParams.minViewTangent)
             print(String(format: "[TPVR] window: %.3f x %.3f x %.3f m, from z %.3f to %.3f in the view's scene",
                          bounds.extents.x, bounds.extents.y, bounds.extents.z, bounds.min.z, bounds.max.z))
         }
     }
     private static var loggedExtents = SIMD3<Float>.zero
+    /// How far in front of the window the scene may come out (metres). visionOS cuts a window's
+    /// content off about 0.47 m in front of its face, whatever its size (measured in the Simulator
+    /// with markers at set distances, at 0.72 and 1.15 m wide): the mirror keeps what's nearer than
+    /// the glass inside this, so the ground under the camera isn't cut off at the window's foot.
+    private static let frontAllowance: Float = 0.40
 
     func update() {
         switch memoryGuard.check(hasMirror: mirror != nil, mirror: { self.mirror?.diagnostics ?? "off" },
@@ -424,9 +431,9 @@ final class GameScreen {
         portal = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [PortalMaterial()])
         // Not clipped at the glass, as in the SHAR port: what the mirror has nearer than the glass
         // (TP's pitched-down ground towards the camera) comes out in front of it, inside the
-        // window's opening, as the shape it is. Clipped there, it had to be squashed into a band
-        // behind the glass, which bent the ground. Test runs: AURORA_MIRROR_BAND=1 clips again (and
-        // brings back the mirror's band).
+        // window's opening, as the shape it is (only the nearest of it eased in, within
+        // frontAllowance). Clipped there, it had to be squashed into a band behind the glass, which
+        // bent the ground. Test runs: AURORA_MIRROR_BAND=1 clips again (and brings back the band).
         if ProcessInfo.processInfo.environment["AURORA_MIRROR_BAND"] == "1" {
             portal.components.set(PortalComponent(target: world,
                                                   clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),

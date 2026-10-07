@@ -12,10 +12,10 @@ index 02a96af..9fcbde8 100644
          lib/gx/shader.cpp
 diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
 new file mode 100644
-index 0000000..ebedd90
+index 0000000..2d60ec8
 --- /dev/null
 +++ b/include/aurora/mirror.h
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,114 @@
 +#pragma once
 +
 +// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
@@ -103,8 +103,8 @@ index 0000000..ebedd90
 +  float tanHalfX, tanHalfY; // the scene projection's half-view tangents
 +  float focus;              // the camera's distance to what it looks at (view units)
 +  // Where a window showing the frame should put its glass (view units): a little short of the
-+  // focus. Nothing is nearer: what was is moved back onto it along its own line of sight, so the
-+  // picture from the camera is unchanged.
++  // focus. What's nearer comes out in front of it, eased into the window's allowance
++  // (set_front_allowance) along its own line of sight, so the picture from the camera is unchanged.
 +  float plane;
 +  // Textures new since the last acquire, and ones no longer used. A texture whose id was sent
 +  // before is new pixels for it (a shadow, read back from the GPU each frame): replace it in place.
@@ -117,6 +117,12 @@ index 0000000..ebedd90
 +// Whether to record (any thread). Turning it on starts the textures over: each is sent again.
 +void set_enabled(bool enabled) noexcept;
 +bool enabled() noexcept;
++
++// How far in front of its glass the window showing the frames lets them come out, in window widths
++// (any thread; 0, the default: no limit), and the narrowest half-view tangent it shows as is (a
++// narrower view's depths are compressed to the picture seen from that tangent, which the window's
++// scale of depth has to match). Nearer geometry eases into the allowance from half of it.
++void set_front_allowance(float widths, float minViewTangent) noexcept;
 +
 +// The newest recorded frame whose tag is no later than `upTo` (the game frame the caller shows
 +// alongside, so the two match), or false before the first. Its pointers stay valid until the next
@@ -269,10 +275,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..e9d2c20
+index 0000000..28102ba
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2814 @@
+@@ -0,0 +1,2909 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -688,6 +694,7 @@ index 0000000..e9d2c20
 +bool g_sawDepthWrite = false;
 +float g_farthest = 0, g_nearestBackground = INFINITY;
 +std::vector<std::pair<uint32_t, uint32_t>> g_backgroundRanges;
++std::vector<std::pair<uint32_t, uint32_t>> g_decalRanges; // lifted in finish, once depths are final
 +std::vector<Group> g_groups;
 +std::unordered_map<uint64_t, size_t> g_solidGroups;
 +int g_lastBlended = -1;
@@ -2152,6 +2159,12 @@ index 0000000..e9d2c20
 +// distance, uncapped, floated a far shadow tens of units off the ground, which a viewer off to the
 +// side saw move against it (the SHAR port's rule: min(0.4%, 2 cm)).
 +constexpr float kDecalLift = 3.f;
++// How far past the view's sides the draws are kept (times the view's half-width), for a viewer
++// leaning to look past the window's edges, or farther from the window than the camera, who sees in
++// front of the glass more widely than the camera did (finish's easing counts on it). 1.4 left the
++// ground beneath the camera out, and the window's foot showed sky.
++constexpr float kClipMargin = 2.f;
++
 +// Farther than this from the camera, a vertex is a runaway (a particle flung to 1e20): its
 +// triangles go, or the frame's bounds take everything with them (SHAR).
 +constexpr float kRunaway = 1e6f;
@@ -2189,16 +2202,10 @@ index 0000000..e9d2c20
 +  for (size_t i = 0; i < g_jobCount; ++i) {
 +    DrawJob& job = *g_jobs[i];
 +    const auto base = static_cast<uint32_t>(g_building.vertices.size());
-+    if ((job.nearer != 1.f || job.decal) && !job.background) {
++    if (job.nearer != 1.f && !job.background) {
 +      for (MirrorVertex& vertex : job.vertices) {
-+        float scale = job.nearer;
-+        if (job.decal) {
-+          const float* p = vertex.position;
-+          const float distance = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]);
-+          scale *= 1.f - std::min(4e-3f, kDecalLift / std::max(distance, 1.f));
-+        }
 +        for (float& c : vertex.position) {
-+          c *= scale;
++          c *= job.nearer;
 +        }
 +      }
 +    }
@@ -2207,6 +2214,9 @@ index 0000000..e9d2c20
 +      sane[v] = !runaway(job.vertices[v].position);
 +    }
 +    g_building.vertices.insert(g_building.vertices.end(), job.vertices.begin(), job.vertices.end());
++    if (job.decal) {
++      g_decalRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
++    }
 +    auto& indices = g_groups[job.group].indices;
 +    indices.reserve(indices.size() + job.triangles.size());
 +    const size_t before = indices.size();
@@ -2422,6 +2432,7 @@ index 0000000..e9d2c20
 +  g_solidGroups.clear();
 +  g_lastBlended = -1;
 +  g_backgroundRanges.clear();
++  g_decalRanges.clear();
 +  g_haveProjection = false;
 +  g_sawDepthWrite = false;
 +  g_farthest = 0;
@@ -2429,15 +2440,55 @@ index 0000000..e9d2c20
 +  g_offscreen = 0;
 +}
 +
++// finish's easing of what's nearer than the glass into the window's allowance: a point at view
++// depth d < end moves along its line of sight to depth P - eased(k (P - d)) / k.
++struct Easing {
++  float plane, k, knee, rest, end;
++  // How much a point at `depth` is scaled (about the camera), and how much the easing shortens a
++  // small step in depth there (its slope).
++  float scale(float depth) const {
++    if (!(depth > 1e-3f && depth < end)) {
++      return 1.f;
++    }
++    const float front = k * (plane - depth);
++    const float eased = knee + rest * (1.f - std::exp(-(front - knee) / rest));
++    return (plane - eased / k) / depth;
++  }
++  // How far behind the eased curve (eased depth) the eased edge between points at depths a and b
++  // lies, where it crosses the line of sight through the edge's middle: there the chord is at the
++  // harmonic mean of the ends' scales. (Never in front of the curve: the easing bows towards the
++  // camera.)
++  float behind(float a, float b) const {
++    const float sa = scale(a), sb = scale(b), middle = (a + b) * 0.5f;
++    return middle * (2.f / (1.f / sa + 1.f / sb) - scale(middle));
++  }
++};
++
 +// Splits every group's triangles that reach in front of `plane` wherever an edge's far end is more
-+// than 40% deeper than its near end, edge midpoints shared.
-+void subdivide_near(std::vector<MirrorVertex>& vertices, std::vector<Group>& groups, float plane) {
++// than 40% deeper than its near end, edge midpoints shared. A midpoint is marked (`marks`, one per
++// vertex) when both its ends are. With an easing, a marked (decal) edge is also split while, eased,
++// it lies behind the eased curve by more than half a decal's lift: a decal (a path, a stain, a
++// shadow) whose triangles aren't the ground's has chords of its own, and lying farther behind the
++// curve than its lift, it went under the ground in patches. The ground's chords are never in front
++// of the curve, so only the decals' need it, which keeps it to their triangles (all of them split
++// so, the frame grew to 470,000 vertices).
++void subdivide_near(std::vector<MirrorVertex>& vertices, std::vector<Group>& groups, float plane,
++                    std::vector<uint8_t>& marks, const Easing* easing = nullptr) {
 +  const size_t budget = vertices.size() + 400000;
 +  std::unordered_map<uint64_t, uint32_t> midpoints;
 +  const auto depth = [&](uint32_t i) { return -vertices[i].position[2]; };
 +  const auto splits = [&](uint32_t i, uint32_t j) {
 +    const float a = depth(i), b = depth(j), near = std::min(a, b), far = std::max(a, b);
-+    if (near >= plane || far <= near * 1.4f || vertices.size() >= budget) {
++    if (near >= plane || vertices.size() >= budget) {
++      return false;
++    }
++    if (easing != nullptr && marks[i] != 0 && marks[j] != 0 && near > 1e-3f) {
++      const float lift = std::min(kDecalLift, 4e-3f * easing->scale(near) * near);
++      if (easing->behind(a, b) > 0.5f * lift) {
++        return true;
++      }
++    }
++    if (far <= near * 1.4f) {
 +      return false;
 +    }
 +    float length2 = 0;
@@ -2465,6 +2516,7 @@ index 0000000..e9d2c20
 +      m.add[c] = half((from_half(a.add[c]) + from_half(b.add[c])) * 0.5f);
 +    }
 +    vertices.push_back(m);
++    marks.push_back(marks[i] & marks[j]);
 +    const auto index = static_cast<uint32_t>(vertices.size() - 1);
 +    midpoints.emplace(key, index);
 +    return index;
@@ -2535,7 +2587,7 @@ index 0000000..e9d2c20
 +struct Job {
 +  Built built;
 +  std::vector<Group> groups;
-+  std::vector<std::pair<uint32_t, uint32_t>> backgroundRanges;
++  std::vector<std::pair<uint32_t, uint32_t>> backgroundRanges, decalRanges;
 +  float farthest = 0, nearestBackground = INFINITY;
 +  bool scene = false;
 +  uint32_t tag = 0;
@@ -2553,6 +2605,10 @@ index 0000000..e9d2c20
 +// The last frame's glass and focus (game units) and its share of vertices squashed into the near
 +// band, for the periodic log.
 +std::atomic<float> g_lastPlane{0}, g_lastFocus{0}, g_lastBandShare{0};
++// How far the window lets the scene come out in front of its glass (window widths; 0: as far as it
++// goes), and the narrowest view it shows as is (set_front_allowance).
++std::atomic<float> g_frontAllowance{0}, g_minViewTangent{0};
++std::atomic<float> g_lastAllowance{0}; // the last frame's, the lesser limit (finish)
 +
 +void finish(Job& job) {
 +  Built& out = job.built;
@@ -2591,32 +2647,72 @@ index 0000000..e9d2c20
 +    // SHAR port), so what's nearer comes out in front of it, inside the window's opening, as the
 +    // shape it is. The band folded TP's pitched-down ground into a near-vertical sheet at the glass
 +    // ("the ground bends near the camera") and squeezed coplanar layers there until they z-fought.
-+    // Test runs: AURORA_MIRROR_BAND=1 brings the band back (with TPVR_TEST_WINDOW_CLIP=1 in the app).
++    // Test runs: AURORA_MIRROR_BAND=1 brings the band back (and the portal's clip in the app).
++    //
++    // How far it comes out has limits, though. Someone farther from the window than the camera's
++    // place (most are) looks in front of the glass more widely than the camera did: along the
++    // window's foot, below the picture, they see towards the ground under the camera, which isn't
++    // there (the draws are kept only out to kClipMargin times the view), and past it, under the
++    // ground behind the glass, the sky: a strip of it along the window's foot. Their line of sight
++    // still meets the ground if it comes out no farther than where that line leaves the kept
++    // draws, which, from however far away, is (1 - 1 / kClipMargin) of the way to the camera.
++    // And visionOS cuts a window's content off about half a metre in front of it (the window's
++    // allowance, set_front_allowance). So beyond half the lesser of the two, what's nearer eases
++    // into the rest along its own line of sight: the picture from the camera stays the same, and
++    // the ground keeps its shape to below Link's feet. Easing changes triangles' shapes, so the
++    // ones reaching that near are subdivided first, as for the band.
 +    static const bool s_band = [] {
 +      const char* band = std::getenv("AURORA_MIRROR_BAND");
 +      return band != nullptr && std::strcmp(band, "1") == 0;
 +    }();
 +    const float onPlane = out.plane * 1.0005f, band = 0.03f, bandEnd = onPlane * (1.f + band);
-+    size_t banded = 0;
-+    if (s_band) {
-+      subdivide_near(out.vertices, job.groups, bandEnd);
++    // In window widths in front of the glass, at depth d: k (plane - d) (MirrorScene.place); the
++    // camera is k plane in front of it.
++    const float k = 1.f / (2.f * out.plane * std::max(out.tanHalfX, g_minViewTangent.load(std::memory_order_relaxed)));
++    const float window = g_frontAllowance.load(std::memory_order_relaxed);
++    const float allowance = std::min(window, 0.9f * k * out.plane * (1.f - 1.f / kClipMargin));
++    // C1 at the knee (it starts at slope 1), then nearing the allowance without reaching it.
++    const float knee = allowance * 0.5f;
++    const Easing easing{out.plane, k, knee, allowance - knee, out.plane - knee / k};
++    const bool ease = !s_band && window > 0.f && easing.end > 0.f;
++    std::vector<uint8_t> decal(out.vertices.size(), 0);
++    for (const auto& [first, end] : job.decalRanges) {
++      std::fill(decal.begin() + first, decal.begin() + std::min<size_t>(end, decal.size()), uint8_t{1});
 +    }
-+    for (MirrorVertex& vertex : out.vertices) {
-+      const float depth = -vertex.position[2];
-+      if (depth > 1e-3f && depth < bandEnd) {
-+        ++banded;
-+        if (!s_band) {
-+          continue;
-+        }
-+        const float scale = (onPlane + band * onPlane * depth / bandEnd) / depth;
-+        for (float& c : vertex.position) {
-+          c *= scale;
++    size_t moved = 0;
++    if (s_band) {
++      subdivide_near(out.vertices, job.groups, bandEnd, decal);
++    } else if (ease) {
++      subdivide_near(out.vertices, job.groups, easing.end, decal, &easing);
++    }
++    for (size_t v = 0; v < out.vertices.size(); ++v) {
++      float* p = out.vertices[v].position;
++      const float depth = -p[2];
++      float scale = 1.f;
++      if (s_band && depth > 1e-3f && depth < bandEnd) {
++        scale = (onPlane + band * onPlane * depth / bandEnd) / depth;
++        ++moved;
++      } else if (ease && depth > 1e-3f && depth < easing.end) {
++        scale = easing.scale(depth);
++        ++moved;
++      }
++      // A decal (a path, a stain, a shadow: drawn on what's under it) lifted towards the camera
++      // once depths are final (lifted first, the easing shortened the lift): by 0.4% of its
++      // distance, at most kDecalLift.
++      if (decal[v] != 0) {
++        const float distance = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) * scale;
++        scale *= 1.f - std::min(4e-3f, kDecalLift / std::max(distance, 1.f));
++      }
++      if (scale != 1.f) {
++        for (int c = 0; c < 3; ++c) {
++          p[c] *= scale;
 +        }
 +      }
 +    }
 +    g_lastPlane = out.plane;
 +    g_lastFocus = out.focus;
-+    g_lastBandShare = out.vertices.empty() ? 0.f : static_cast<float>(banded) / static_cast<float>(out.vertices.size());
++    g_lastAllowance = ease ? allowance : 0.f;
++    g_lastBandShare = out.vertices.empty() ? 0.f : static_cast<float>(moved) / static_cast<float>(out.vertices.size());
 +    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
 +    for (const MirrorVertex& vertex : out.vertices) {
 +      // (Runaways' triangles are gone; the sky, pushed at most 100 times, stays inside this.)
@@ -2700,6 +2796,7 @@ index 0000000..e9d2c20
 +      std::swap(g_job.built, g_building);
 +      std::swap(g_job.groups, g_groups);
 +      std::swap(g_job.backgroundRanges, g_backgroundRanges);
++      std::swap(g_job.decalRanges, g_decalRanges);
 +      g_job.farthest = g_farthest;
 +      g_job.nearestBackground = g_nearestBackground;
 +      g_job.scene = scene;
@@ -2733,9 +2830,9 @@ index 0000000..e9d2c20
 +             g_lastParts.load(), g_stats.seconds / f * 1000.0, static_cast<double>(g_decodeNanos.exchange(0)) / f / 1e6,
 +             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
 +    log_tally(f);
-+    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices within its band or nearer (clipped "
-+             "ones counted too)",
-+             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f);
++    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices moved nearer it (into its band, or "
++             "easing into {:.2f} window widths in front; clipped ones counted too)",
++             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f, g_lastAllowance.load());
 +    g_stats = {};
 +  }
 +}
@@ -2928,9 +3025,8 @@ index 0000000..e9d2c20
 +  const auto& proj = st.proj;
 +  const float far = std::fabs(proj.m2[2]) > 1e-9f ? proj.m2[3] / proj.m2[2] : 1e6f;
 +  job.nearClip = std::max(1.f, std::fabs(1.f - proj.m2[2]) > 1e-9f ? -proj.m2[2] * far / (1.f - proj.m2[2]) : 1.f);
-+  constexpr float kMargin = 1.4f;
-+  job.kx = kMargin / proj.m0[0];
-+  job.ky = kMargin / proj.m1[1];
++  job.kx = kClipMargin / proj.m0[0];
++  job.ky = kClipMargin / proj.m1[1];
 +  // Without vertex colours or lighting, every vertex's TEV result is the same: run it once.
 +  job.perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE;
 +  for (int c = 0; c < 2; ++c) {
@@ -3027,6 +3123,11 @@ index 0000000..e9d2c20
 +}
 +
 +bool enabled() noexcept { return gx::mirror::g_enabled.load(); }
++
++void set_front_allowance(float widths, float minViewTangent) noexcept {
++  gx::mirror::g_frontAllowance = std::isfinite(widths) ? std::max(widths, 0.f) : 0.f;
++  gx::mirror::g_minViewTangent = std::isfinite(minViewTangent) ? std::max(minViewTangent, 0.f) : 0.f;
++}
 +
 +bool acquire(Frame& frame, uint32_t upTo) noexcept {
 +  using namespace gx::mirror;
