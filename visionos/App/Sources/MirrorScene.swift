@@ -1,6 +1,7 @@
 import Metal
 import QuartzCore
 import RealityKit
+import Synchronization
 
 /// The window's scene mirror: the game's own 3D draws, rebuilt each frame as one RealityKit mesh,
 /// so RealityKit renders Hyrule from the viewer's real eyes and the window shows it from any angle,
@@ -51,7 +52,7 @@ final class MirrorScene {
     private static let addRed = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ADD_RED"] == "1"
 
     private var timing = (updates: 0, frames: 0, seconds: 0.0, since: CACurrentMediaTime(), vertices: 0, parts: 0, total: 0)
-    private var counts = (texturesMade: 0, texturesFailed: 0, materialSets: 0)
+    private var counts = (texturesMade: 0, texturesFailed: 0, materialSets: 0, meshesMade: 0, fills: 0)
     // Of an update's time: filling the mesh, and setting its parts (where RealityKit waits for its
     // renderer: a mesh with more vertex attributes doubled it).
     private var stages = (fill: 0.0, parts: 0.0)
@@ -129,6 +130,7 @@ final class MirrorScene {
             hasScene = false
             return false
         }
+        last = (Int(frame.vertex_count), Int(frame.index_count), Int(frame.part_count))
         let fillStart = CACurrentMediaTime()
         let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
                           indexCount: Int(frame.index_count))
@@ -211,6 +213,7 @@ final class MirrorScene {
                     vertices: max(65536, vertexCount.nextPowerOfTwo), indices: max(131072, indexCount.nextPowerOfTwo)))
                 let resource = try MeshResource(from: made)
                 mesh = (made, resource)
+                counts.meshesMade += 1
                 if entity.model == nil {
                     entity.model = ModelComponent(mesh: resource, materials: [])
                 } else {
@@ -222,6 +225,7 @@ final class MirrorScene {
             }
         }
         guard let (mesh, _) = mesh else { return false }
+        counts.fills += 1
         // Into fresh buffers RealityKit swaps in once written (SHAR: written in place, the
         // headset's renderer drew between the vertices and the indices).
         mesh.replaceUnsafeMutableBytes(bufferIndex: 0) { raw in
@@ -423,7 +427,9 @@ final class MirrorScene {
         }
         if generate { blit.generateMipmaps(for: destination) }
         blit.endEncoding()
+        uploadsInFlight.add(1, ordering: .relaxed)
         commands.addCompletedHandler { done in
+            uploadsInFlight.subtract(1, ordering: .relaxed)
             guard let error = done.error else { return }
             let message = "\(label): upload failed\(retries > 0 ? ", trying again" : ""): \(error)"
             DispatchQueue.main.async {
@@ -553,6 +559,27 @@ final class MirrorScene {
     }
 
     // MARK: - Report
+
+    /// What the mirror holds, for the window's memory log (WindowMemoryGuard).
+    var diagnostics: String {
+        var textureBytes = 0
+        for texture in lowLevelTextures.values {
+            let descriptor = texture.descriptor
+            let level = descriptor.width * descriptor.height * 4
+            textureBytes += descriptor.mipmapLevelCount > 1 ? level * 4 / 3 : level
+        }
+        let waitingBytes = pendingTextures.reduce(0) { $0 + $1.pixels.count }
+        let vertices = mesh?.mesh.vertexCapacity ?? 0, indices = mesh?.mesh.indexCapacity ?? 0
+        return "last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts; "
+            + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB; \(counts.texturesMade) made, "
+            + "\(counts.texturesFailed) failed), \(pendingTextures.count) waiting (\(waitingBytes >> 20) MB), "
+            + "\(Self.uploadsInFlight.load(ordering: .relaxed)) uploads in flight, \(materials.count) materials "
+            + "(\(materialList.count) listed), mesh room for \(vertices) vertices and \(indices) indices "
+            + "(\(counts.meshesMade) meshes made, \(counts.fills) fills)"
+    }
+    private var last = (vertices: 0, indices: 0, parts: 0)
+    /// Texture uploads committed to the GPU and not yet done, for the memory log.
+    private static let uploadsInFlight = Atomic<Int>(0)
 
     /// Every 5 s: how often RealityKit updates, how many game frames came, and what they cost here.
     private func report(_ start: CFTimeInterval) {

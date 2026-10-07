@@ -2,6 +2,7 @@ import GameController
 import Metal
 import RealityKit
 import SwiftUI
+import Synchronization
 
 /// Twilight Princess in a window in the shared space (Immersion: Window), beside other apps,
 /// moved and resized with visionOS's own controls. visionOS gives no head pose outside a Full
@@ -108,6 +109,9 @@ final class GameScreen {
     private var frames = 0
     private var mirror: MirrorScene?
     private var mirrorShowing = false
+    private let memoryGuard: WindowMemoryGuard
+    /// Window frames committed to the GPU and not yet done, for the memory log.
+    private static let framesInFlight = Atomic<Int>(0)
     private var shownGameFrame: UInt32 = 0
 
     private static let rows = 216
@@ -129,6 +133,7 @@ final class GameScreen {
         }
         self.device = device
         self.queue = queue
+        memoryGuard = WindowMemoryGuard(device: device)
         pipelines = try Pipelines(device: device)
         world.components.set(WorldComponent())
         portal = ModelEntity()
@@ -175,6 +180,16 @@ final class GameScreen {
     private static var loggedExtents = SIMD3<Float>.zero
 
     func update() {
+        switch memoryGuard.check(hasMirror: mirror != nil, mirror: { self.mirror?.diagnostics ?? "off" },
+                                 extra: { "\(self.surfaces.count) frame surfaces, \(self.frames) window frames, "
+                                          + "\(Self.framesInFlight.load(ordering: .relaxed)) in flight" }) {
+        case .dropMirror: dropMirror()
+        case .quit: dusk_visionos_request_quit()  // the game returns and the app ends with it (GameModel)
+        // The game thread is stuck: exit's C++ teardown (Dawn's device, the window's slots) could
+        // block on it or crash a worker, so the process ends without it. The log line is synced.
+        case .forceExit: _exit(0)
+        case .none: break
+        }
         dusk_visionos_window_tick()
         var frame = dusk_visionos_window_frame()
         let fresh = dusk_visionos_window_acquire(&frame)
@@ -202,13 +217,30 @@ final class GameScreen {
         if encode(frame, into: commands) {
             root.isEnabled = true
         }
-        commands.addCompletedHandler { _ in dusk_visionos_window_release(serial) }
+        Self.framesInFlight.add(1, ordering: .relaxed)
+        commands.addCompletedHandler { _ in
+            dusk_visionos_window_release(serial)
+            Self.framesInFlight.subtract(1, ordering: .relaxed)
+        }
         commands.commit()
         frames += 1
         if frames == 1 || frames % 900 == 0 {
             print("[TPVR] window frame \(frames): scene \(frame.scene != nil), ui \(frame.ui != nil), "
                   + "tangents \(frame.tan_half_x) x \(frame.tan_half_y), focus \(frame.focus), effects \(effects.isEnabled)")
         }
+    }
+
+    /// Memory ran away (WindowMemoryGuard): the mirror goes, its textures and mesh with it, and the
+    /// window shows the game's own picture, as it does before the mirror's first frame.
+    private func dropMirror() {
+        dusk_visionos_set_mirror_enabled(false)
+        mirror?.root.removeFromParent()
+        mirror = nil
+        mirrorShowing = false
+        effects.isEnabled = false
+        effects.model = nil
+        effectsTexture = nil
+        effectsMesh = nil
     }
 
     // MARK: - One frame
