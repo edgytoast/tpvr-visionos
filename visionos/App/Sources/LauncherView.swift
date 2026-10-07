@@ -108,6 +108,10 @@ struct LauncherView: View {
                     ?? (guide.windowView ? .gamepad : .hands)
                 tab = .controls
             }
+            // Headless Simulator runs: TPVR_TEST_IMPORT=<host path> imports that file as if picked.
+            if let path = TestHooks.value("TPVR_TEST_IMPORT") {
+                importDisc(URL(fileURLWithPath: path))
+            }
             // Headless runs: `SIMCTL_CHILD_TPVR_AUTO_PLAY=1 xcrun simctl launch ...` (or the
             // same variable in a devicectl launch) presses Play on its own, disc or not.
             // Synthesized taps don't reach visionOS Simulator windows.
@@ -456,8 +460,8 @@ struct LauncherView: View {
         if inputs.senseLeft != nil && inputs.senseRight != nil {
             // Their buttons work regardless; where they are needs accessory tracking (or the hands).
             if inputs.accessories == .denied && !handsPlay {
-                return InputVerdict("Accessory tracking is off for Twilight Princess VR, so the sword and shield won't follow your controllers. Turn it on in Settings.",
-                                    ready: false, handsNeeded: true)
+                return InputVerdict("Accessory tracking is off for Twilight Princess VR, so the sword and shield won't follow your controllers. Turn it on for this app in the Settings app.",
+                                    ready: false)
             }
             return InputVerdict("Ready to play with your Sense controllers. Have fun!", ready: true)
         }
@@ -465,8 +469,8 @@ struct LauncherView: View {
         if inputs.anySense {
             return handsPlay
                 ? InputVerdict("Ready with one Sense controller. Your other hand plays bare.", ready: true)
-                : InputVerdict("Only one Sense controller is connected and hand tracking is off. Turn on the other controller, or turn hand tracking on in Settings.",
-                               ready: false, handsNeeded: true)
+                : InputVerdict("Only one Sense controller is connected and hand tracking is off. Turn on the other controller, or turn hand tracking on for this app in the Settings app.",
+                               ready: false)
         }
         switch inputs.hands {
         case .allowed:
@@ -494,7 +498,11 @@ struct LauncherView: View {
         // Never under a game that's open (it reads the disc in place): said, and AirDrop's copy
         // isn't left behind.
         guard model.phase == .idle else {
-            model.declineImport(of: url)
+            model.declineImport(of: url, because: "The game's open, so the disc wasn't brought in. Quit, then bring it in again.")
+            return
+        }
+        guard !model.importing else {
+            model.declineImport(of: url, because: "One disc at a time: bring this one in once the copy that's running is done.")
             return
         }
         model.importDisc(from: url)

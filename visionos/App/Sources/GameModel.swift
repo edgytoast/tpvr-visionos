@@ -230,7 +230,7 @@ final class GameModel: ObservableObject {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let failure: String?
             do {
-                if url.standardizedFileURL != destination.standardizedFileURL {
+                if url.resolvingSymlinksInPath().standardizedFileURL != destination.resolvingSymlinksInPath().standardizedFileURL {
                     let fileManager = FileManager.default
                     // AirDrop and "Open with" hand the file over in the app's own
                     // Documents/Inbox: move it rather than keep two copies of a
@@ -240,7 +240,7 @@ final class GameModel: ObservableObject {
                     // an interrupted copy can't leave a truncated disc behind, and
                     // the disc it replaces stays until then.
                     let staged: URL
-                    if url.standardizedFileURL.path.hasPrefix(documents.standardizedFileURL.path) {
+                    if Self.isInside(url, documents) {
                         staged = url
                     } else {
                         staged = destination.appendingPathExtension(Self.partialExtension)
@@ -313,12 +313,19 @@ final class GameModel: ObservableObject {
     /// A disc that arrived (AirDrop, "Open with", the picker) while the game is open: it's not
     /// brought in, since the game reads the disc in place. AirDrop's copy in Documents/Inbox goes, so
     /// it doesn't sit there unseen (refreshDisc doesn't look in folders).
-    func declineImport(of url: URL) {
-        importFailure = "The game's open, so the disc wasn't brought in. Quit, then bring it in again."
-        let inbox = documents.appendingPathComponent("Inbox", isDirectory: true).standardizedFileURL.path
-        if url.standardizedFileURL.path.hasPrefix(inbox + "/") {
+    func declineImport(of url: URL, because reason: String) {
+        importFailure = reason
+        if Self.isInside(url, documents.appendingPathComponent("Inbox", isDirectory: true)) {
             try? FileManager.default.removeItem(at: url)
         }
+    }
+
+    /// Whether `url` is inside `folder`, symlinks resolved: a headset may hand AirDrop's file over
+    /// as /private/var/... while the app's own folders read /var/....
+    nonisolated private static func isInside(_ url: URL, _ folder: URL) -> Bool {
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let base = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        return path.hasPrefix(base.hasSuffix("/") ? base : base + "/")
     }
 
     private var importTask: UIBackgroundTaskIdentifier = .invalid
