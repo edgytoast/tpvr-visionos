@@ -269,10 +269,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..73213f5
+index 0000000..e9d2c20
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2813 @@
+@@ -0,0 +1,2814 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -2733,7 +2733,8 @@ index 0000000..73213f5
 +             g_lastParts.load(), g_stats.seconds / f * 1000.0, static_cast<double>(g_decodeNanos.exchange(0)) / f / 1e6,
 +             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
 +    log_tally(f);
-+    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices nearer than the glass's band",
++    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices within its band or nearer (clipped "
++             "ones counted too)",
 +             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f);
 +    g_stats = {};
 +  }

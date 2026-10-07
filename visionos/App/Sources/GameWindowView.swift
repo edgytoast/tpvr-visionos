@@ -89,6 +89,9 @@ final class GameScreen {
     // at the depth of what it lies on (the game's depth buffer), so that it stays on it from any
     // angle: Link's glow on Link, the sky's in the sky.
     private let effects = ModelEntity()
+    // The mirror's level, then the screen effects (when on), then the HUD: drawn in that order,
+    // whatever their depths, so nothing of the level nearer than the glass covers the HUD.
+    private let sortGroup = ModelSortGroup(depthPass: nil)
     private var effectsMesh: LowLevelMesh?
     private var effectsGrid = SIMD2<Int>.zero
     private var reliefMaterial: ShaderGraphMaterial
@@ -122,6 +125,10 @@ final class GameScreen {
         relief.faceCulling = .none
         reliefMaterial = relief
         hudMaterial = try await ShaderGraphMaterial(named: "/Root/HudFrame", from: "WindowFrame.usda", in: .main)
+        // On the glass, over everything (the sort group): the level now comes out nearer than the
+        // glass, and depth-tested, the HUD, the fades and the letterbox bars went under it.
+        hudMaterial.readsDepth = false
+        hudMaterial.writesDepth = false
         // Over the whole level, after it (a sort group, below). What only darkens the picture (a
         // fade, letterbox bars) goes on the glass with the HUD instead (WindowHud): on this layer,
         // seen from the side, its farther parts painted over a bar.
@@ -149,9 +156,8 @@ final class GameScreen {
                 world.addChild(effects)
                 // After every part of the level, translucent ones included: RealityKit's own
                 // back-to-front order put the level's translucent rocks over a letterbox bar.
-                let group = ModelSortGroup(depthPass: nil)
-                mirror.sort(in: group, order: 0)
-                effects.components.set(ModelSortGroupComponent(group: group, order: 1))
+                mirror.sort(in: sortGroup, order: 0)
+                effects.components.set(ModelSortGroupComponent(group: sortGroup, order: 1))
                 self.mirror = mirror
                 dusk_visionos_set_mirror_enabled(true)
             } catch {
@@ -161,8 +167,8 @@ final class GameScreen {
         }
     }
 
-    /// Window units onto the window: its face is the back of the view's bounds (visionOS clips what
-    /// stands out of a window), scaled to its width in metres.
+    /// Window units onto the window: its face is the back of the view's bounds, scaled to its width
+    /// in metres. (What the portal's world has nearer than the face still shows, inside the opening.)
     static func fit(_ root: Entity, to bounds: BoundingBox) {
         root.position = [bounds.center.x, bounds.center.y, bounds.min.z]
         root.scale = SIMD3(repeating: bounds.extents.x)
@@ -240,6 +246,22 @@ final class GameScreen {
     }
     private var rateMark = (time: CACurrentMediaTime(), frames: 0)
 
+    /// The game's fade (sRGB colour and cover) as the HUD pass lays it on the glass, premultiplied in
+    /// linear light. The game blends it on the encoded values (out = e x (1 - a) + f x a, aurora's
+    /// targets aren't sRGB), so a linear cover of `a` came out lighter than the game's mid-fade. The
+    /// colour is what the fade leaves over black, and the cover what it takes from white, the most
+    /// of the three channels: exact over black and over white.
+    private static func fadeCover(_ frame: dusk_visionos_window_frame) -> SIMD4<Float> {
+        let linear = { (c: Float) -> Float in c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        let a = min(max(frame.fade_a, 0), 1)
+        guard a > 0 else { return .zero }
+        let fade = SIMD3(frame.fade_r, frame.fade_g, frame.fade_b)
+        let colour = SIMD3((0..<3).map { linear(fade[$0] * a) })
+        let cover = (0..<3).map { 1 + colour[$0] - linear(1 - a + fade[$0] * a) }.max() ?? a
+        let clamped = min(max(cover, 0), 1)
+        return SIMD4(simd_min(colour, SIMD3(repeating: clamped)), clamped)
+    }
+
     /// The frame surfaces' sizes, for the memory log: they follow the game's internal resolution.
     private var surfaceSizes: String {
         Set(surfaces.values.map { "\($0.width)x\($0.height)" }).sorted().joined(separator: ", ")
@@ -279,6 +301,7 @@ final class GameScreen {
               frame.tan_half_x > 0, frame.tan_half_y > 0 else {
             // No 3D scene (title, loading, films): the whole picture is flat on the glass.
             pipelines.flat(commands, final: final, ui: ui, hud: hud)
+            pipelines.mipmaps(commands, hud)
             primary?.isEnabled = false
             backstop?.isEnabled = false
             effects.isEnabled = false
@@ -300,7 +323,8 @@ final class GameScreen {
                                       positions: effectsMesh.replace(bufferIndex: 0, using: commands))
             }
             pipelines.hud(commands, final: final, scene: scene, base: base, ui: ui, hud: hud, effects: layer,
-                          ghost: Self.ghostEffects)
+                          fade: Self.fadeCover(frame), ghost: Self.ghostEffects)
+            pipelines.mipmaps(commands, hud)
             effects.isEnabled = layer != nil
             primary?.isEnabled = false
             backstop?.isEnabled = false
@@ -316,7 +340,9 @@ final class GameScreen {
             blit.copy(from: scene, to: colour.replace(using: commands))
             blit.endEncoding()
         }
+        // (The relief's picture, from `scene`, has the game's fade in it already.)
         pipelines.hud(commands, final: final, scene: scene, base: nil, ui: ui, hud: hud, effects: nil)
+        pipelines.mipmaps(commands, hud)
         effects.isEnabled = false
         var params = ReliefParams(frame: frame, columns: grid.x, rows: grid.y)
         pipelines.relief(commands, distance: distance, params: &params,
@@ -397,9 +423,9 @@ final class GameScreen {
         // Not clipped at the glass, as in the SHAR port: what the mirror has nearer than the glass
         // (TP's pitched-down ground towards the camera) comes out in front of it, inside the
         // window's opening, as the shape it is. Clipped there, it had to be squashed into a band
-        // behind the glass, which bent the ground. Test runs: TPVR_TEST_WINDOW_CLIP=1 clips again
-        // (with AURORA_MIRROR_BAND=1 for the mirror's band).
-        if ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_CLIP"] == "1" {
+        // behind the glass, which bent the ground. Test runs: AURORA_MIRROR_BAND=1 clips again (and
+        // brings back the mirror's band).
+        if ProcessInfo.processInfo.environment["AURORA_MIRROR_BAND"] == "1" {
             portal.components.set(PortalComponent(target: world,
                                                   clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),
                                                   crossingMode: .disabled))
@@ -410,15 +436,26 @@ final class GameScreen {
         portal.components.set(InputTargetComponent())
         portal.components.set(CollisionComponent(shapes: [.generateBox(width: 1, height: height, depth: 0.004)]))
         hud = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [hudMaterial])
-        hud.position.z = 0.002
+        // In the portal's world, on the glass, last in the sort group: the level's sort group can
+        // order only what's in the same world.
+        hud.position.z = -0.0005  // behind the glass: AURORA_MIRROR_BAND's clip takes what's in front
+        hud.components.set(ModelSortGroupComponent(group: sortGroup, order: 2))
         root.addChild(portal)
-        root.addChild(hud)
+        world.addChild(hud)
     }
 
     private func makeHud(size: SIMD2<Int>) -> Bool {
         let descriptor = LowLevelTexture.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: size.x, height: size.y,
                                                     textureUsage: [.shaderRead, .shaderWrite])
-        guard let texture = try? LowLevelTexture(descriptor: descriptor),
+        // The HUD with mipmaps, made by the GPU each frame (Pipelines.mipmaps): written at up to 3x
+        // the game's resolution and shown on a window that covers far fewer pixels, it aliased
+        // without them, worst with the window small, far off or seen at an angle. Its pixels are
+        // premultiplied, so the averaging keeps edges clean.
+        let levels = Int(log2(Double(max(size.x, size.y)))) + 1
+        let hudDescriptor = LowLevelTexture.Descriptor(pixelFormat: .bgra8Unorm_srgb, width: size.x, height: size.y,
+                                                       mipmapLevelCount: levels,
+                                                       textureUsage: [.shaderRead, .shaderWrite, .renderTarget])
+        guard let texture = try? LowLevelTexture(descriptor: hudDescriptor),
               let resource = try? TextureResource(from: texture) else {
             print("[TPVR] the window's \(size.x)x\(size.y) HUD texture failed")
             return false
@@ -627,6 +664,7 @@ private struct HudFlags {
     var hasBase: UInt32
     var ghost: UInt32
     var writeEffects: UInt32
+    var fade: SIMD4<Float>  // the game's fade on the glass: linear colour times cover, then cover
 }
 
 /// The window's Metal kernels (adapted from the SHAR port's visionos_window.mm).
@@ -673,10 +711,13 @@ private struct Pipelines {
     /// The HUD over the scene, and (given `base`, the scene before the screen effects, and an
     /// `effects` target) what those effects did to it.
     func hud(_ commands: MTLCommandBuffer, final: MTLTexture, scene: MTLTexture, base: MTLTexture?, ui: MTLTexture?,
-             hud: MTLTexture, effects: MTLTexture?, ghost: Bool = false) {
+             hud: MTLTexture, effects: MTLTexture?, fade: SIMD4<Float> = .zero, ghost: Bool = false) {
         guard let compute = commands.makeComputeCommandEncoder() else { return }
+        let writeEffects = base != nil && effects != nil
+        // With the effects' layer on, the fade is in it.
         var flags = HudFlags(hasUi: ui != nil ? 1 : 0, hasBase: base != nil ? 1 : 0,
-                             ghost: ghost ? 1 : 0, writeEffects: base != nil && effects != nil ? 1 : 0)
+                             ghost: ghost ? 1 : 0, writeEffects: writeEffects ? 1 : 0,
+                             fade: writeEffects ? .zero : fade)
         compute.setComputePipelineState(self.hud)
         compute.setTexture(final, index: 0)
         compute.setTexture(scene, index: 1)
@@ -688,6 +729,13 @@ private struct Pipelines {
         compute.dispatchThreads(MTLSize(width: hud.width, height: hud.height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         compute.endEncoding()
+    }
+
+    /// The rest of `texture`'s mipmaps from its level 0, on the GPU.
+    func mipmaps(_ commands: MTLCommandBuffer, _ texture: MTLTexture) {
+        guard texture.mipmapLevelCount > 1, let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.generateMipmaps(for: texture)
+        blit.endEncoding()
     }
 
     func effectsGrid(_ commands: MTLCommandBuffer, distance: MTLTexture, params: inout EffectsGridParams,
@@ -868,6 +916,23 @@ private struct Pipelines {
     // Premultiplied `over`.
     static float4 Over(float4 top, float4 under) { return top + under * (1.0 - top.a); }
 
+    // A pixel the HUD changed, as the least cover `a` and premultiplied colour `c` that explain it:
+    // after = before * (1 - a) + c. A translucent panel or a soft glow over the 3D then keeps the
+    // window's own 3D under it, as the game's scene was, instead of the scene as the game's camera
+    // saw it, pinned opaque to the glass (the bright halos behind ITEMS and MAP); an opaque pixel
+    // comes out opaque. (Linear values: the views are sRGB.)
+    static float4 HudCover(float3 before, float3 after)
+    {
+        float a = 0.0;
+        for (int i = 0; i < 3; ++i)
+        {
+            if (after[i] > before[i]) a = max(a, (after[i] - before[i]) / max(1.0 - before[i], 1e-4));
+            else if (after[i] < before[i]) a = max(a, (before[i] - after[i]) / max(before[i], 1e-4));
+        }
+        a = saturate(a);
+        return float4(clamp(after - before * (1.0 - a), 0.0, a), a);
+    }
+
     // The screen effects (bloom, mist, light shafts, fades, letterbox bars): what they did to the
     // game's 3D picture, as a premultiplied layer over the window's own 3D. The picture went from
     // `before` to `after`; as `after = before * (1 - a) + e` the layer takes the least cover `a`
@@ -884,7 +949,7 @@ private struct Pipelines {
         return float4(max(after - before * (1.0 - a), 0.0), a);
     }
 
-    struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; };
+    struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; float4 fade; };
 
     struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; float depthScale; };
 
@@ -911,7 +976,8 @@ private struct Pipelines {
                 nearest = min(nearest, distance.read(uint2(at)).r);
             }
         }
-        // A hair behind the glass at the least: on it, the portal's clipping plane cut it away.
+        // A hair behind the glass at the least (when the portal clips at the glass, AURORA_MIRROR_BAND=1,
+        // what's on it is cut away).
         nearest = clamp(nearest, p.planeDistance * 1.0005, 60000.0);
         const float tanX = mix(-p.tanHalf.x, p.tanHalf.x, u), tanY = mix(p.tanHalf.y, -p.tanHalf.y, v);
         const float scale = 1.0 / (2.0 * p.planeDistance * p.tanHalf.x);
@@ -919,9 +985,10 @@ private struct Pipelines {
                                                                  scale * p.depthScale * (p.planeDistance - nearest));
     }
 
-    // The HUD is whatever the game drew over its scene: pixels the 2D pass changed, opaque in their
-    // final colour (a translucent panel keeps the scene it was blended with), with Dusklight's
-    // menus (premultiplied) over it. With the mirror, the screen effects go to their own layer.
+    // The HUD is whatever the game drew over its scene: pixels the 2D pass changed, as the least
+    // cover that explains each (HudCover), over what covers the glass beneath it (the game's fade,
+    // and what turned black: letterbox bars, a fade's end), with Dusklight's menus (premultiplied)
+    // over all that. With the mirror's effects' layer on, the screen effects go to it.
     kernel void WindowHud(texture2d<float, access::read> final [[texture(0)]],
                           texture2d<float, access::read> scene [[texture(1)]],
                           texture2d<float, access::read> ui [[texture(2)]],
@@ -934,7 +1001,9 @@ private struct Pipelines {
         if (id.x >= hud.get_width() || id.y >= hud.get_height()) return;
         const float4 drawn = final.read(id), under = scene.read(id);
         const bool changed = any(abs(drawn.rgb - under.rgb) > 0.004);
-        float4 colour = changed ? float4(drawn.rgb, 1) : float4(0);
+        // What covers the glass under the HUD: the game's fade over its 3D scene, then what turned
+        // black (below).
+        float4 glass = flags.fade;
         if (flags.hasBase != 0)
         {
             const uint2 at = uint2(float2(id) * float2(base.get_width(), base.get_height()) /
@@ -945,13 +1014,15 @@ private struct Pipelines {
             // covered half her face from the side; a partial fade is the same at any depth.
             if (flags.ghost == 0 && effect.a > 0.999 && all(effect.rgb < 0.0005))
             {
-                if (!changed) colour = float4(0, 0, 0, effect.a);
+                glass = Over(float4(0, 0, 0, effect.a), glass);
                 effect = float4(0);
             }
             // The effects' own layer, when it's on (TPVR_TEST_WINDOW_EFFECTS); the black ones above
             // go on the glass either way.
             if (flags.writeEffects != 0) effects.write(effect, id);
         }
+        // The HUD the game drew over all that: over black, exactly the game's pixel.
+        float4 colour = changed ? Over(HudCover(under.rgb, drawn.rgb), glass) : glass;
         if (flags.hasUi != 0)
         {
             const uint2 at = uint2(float2(id) * float2(ui.get_width(), ui.get_height()) /

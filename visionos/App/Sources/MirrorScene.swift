@@ -168,11 +168,12 @@ final class MirrorScene {
     }
 
     /// View space into window units: the window spans the camera's view at the frame's `plane` (a
-    /// little short of its focus, nothing nearer), so the camera sits 1 / (2 tan) window widths in
-    /// front of the glass. A narrower view than ReliefParams.minViewTangent (a cutscene's telephoto
-    /// shot) has its depths compressed to the picture it would have from a camera that close, which
-    /// is the same picture; left as it was, its camera sat two window widths out and anyone nearer
-    /// saw past the edges of what the game drew.
+    /// little short of its focus; what's nearer comes out in front of it), so the camera sits
+    /// 1 / (2 tan) window widths in front of the glass. A narrower view than
+    /// ReliefParams.minViewTangent (a cutscene's telephoto shot) has its depths compressed to the
+    /// picture it would have from a camera that close, which is the same picture; left as it was,
+    /// its camera sat two window widths out and anyone nearer saw past the edges of what the game
+    /// drew.
     private func place(_ frame: dusk_visionos_mirror_frame) {
         let plane = max(frame.plane, 1)
         let tan = frame.tan_half_x

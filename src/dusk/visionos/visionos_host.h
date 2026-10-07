@@ -117,6 +117,9 @@ typedef struct dusk_visionos_window_frame {
     uint32_t game_frame;  // the game's frame number (24 bits), as the scene mirror's
     float tan_half_x, tan_half_y;  // the camera's half field of view as tangents
     float focus;                   // the camera's distance to what it looks at (game units)
+    // The game's fade over its 3D scene (sRGB colour 0-1) and how much it covers (0-1): in the
+    // scene and the finished frame alike, so the window lays it over its own 3D on the glass.
+    float fade_r, fade_g, fade_b, fade_a;
 } dusk_visionos_window_frame;
 
 // The newest frame not yet taken, or false.

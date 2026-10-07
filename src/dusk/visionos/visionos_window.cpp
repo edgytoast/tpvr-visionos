@@ -22,6 +22,8 @@
 #include "dusk/visionos/visionos_sense_pad.hpp"
 #include "dusk/ui/ui.hpp"
 #include "f_op/f_op_view.h"
+#include "d/d_com_inf_game.h"
+#include "m_Do/m_Do_graphic.h"
 
 #include "../../../extern/aurora/lib/rmlui.hpp"
 #include <aurora/aurora.h>
@@ -39,6 +41,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstddef>
 #include <mutex>
 #include <vector>
@@ -85,6 +88,9 @@ struct Slot {
     wgpu::TextureView pendingScene, pendingDepth, pendingFinal, pendingUi, pendingBase;
     uint32_t sceneWidth = 0, sceneHeight = 0, finalWidth = 0, finalHeight = 0, uiWidth = 0, uiHeight = 0;
     uint32_t baseWidth = 0, baseHeight = 0;
+    // The game's fade over its 3D scene this frame (sRGB colour 0-1, then its cover): drawn
+    // before the scene is taken, so the scene and the finished frame both have it.
+    float fade[4]{};
 };
 
 constexpr size_t kSlots = 4;
@@ -603,6 +609,17 @@ void before_hud() {
     slot.sceneWidth = targets.width;
     slot.sceneHeight = targets.height;
     slot.camera = g_camera;
+    // The fade (or the brightness's darkening) calcFade drew over the 3D scene, just before here
+    // (m_Do_graphic.cpp, the camera pass): the window lays it on the glass over its own 3D. A
+    // fade drawn over the HUD (isFade() & 0x80) comes later and is in the finished frame only.
+    slot.fade[0] = slot.fade[1] = slot.fade[2] = slot.fade[3] = 0.f;
+    if (std::strcmp(dComIfGp_getStartStageName(), "F_SP127") != 0 && (mDoGph_gInf_c::isFade() & 0x80) == 0) {
+        const GXColor& fade = mDoGph_gInf_c::getFadeColor();
+        slot.fade[0] = fade.r / 255.f;
+        slot.fade[1] = fade.g / 255.f;
+        slot.fade[2] = fade.b / 255.f;
+        slot.fade[3] = fade.a / 255.f;
+    }
     const TaskPayload payload{static_cast<uint32_t>(index)};
     g_scenePushed = aurora::gfx::push_encoder_task(g_sceneTask, &payload, sizeof(payload));
 }
@@ -715,6 +732,10 @@ bool dusk_visionos_window_acquire(dusk_visionos_window_frame* frame) {
     frame->tan_half_y = slot.camera.tanHalfY;
     frame->focus = slot.camera.focus;
     frame->game_frame = slot.gameFrame;
+    frame->fade_r = slot.fade[0];
+    frame->fade_g = slot.fade[1];
+    frame->fade_b = slot.fade[2];
+    frame->fade_a = slot.fade[3];
     return true;
 }
 
