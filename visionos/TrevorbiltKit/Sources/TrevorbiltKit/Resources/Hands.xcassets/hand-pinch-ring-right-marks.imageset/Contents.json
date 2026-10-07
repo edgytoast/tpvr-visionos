@@ -1,0 +1,15 @@
+{
+  "images": [
+    {
+      "filename": "hand-pinch-ring-right-marks.svg",
+      "idiom": "universal"
+    }
+  ],
+  "info": {
+    "author": "xcode",
+    "version": 1
+  },
+  "properties": {
+    "preserves-vector-representation": true
+  }
+}

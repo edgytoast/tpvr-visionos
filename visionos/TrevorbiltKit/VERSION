@@ -1,0 +1,4 @@
+TrevorbiltKit, vendored by visionos/scripts/sync-trevorbilt-kit.sh; edit it in its own repository.
+repository: https://github.com/edgytoast/shar-vr-visionos.git
+path: visionos/TrevorbiltKit
+commit: d9faab5e4da1d2e7c0941f764b1aaf296338bb85

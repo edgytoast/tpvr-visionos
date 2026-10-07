@@ -1,0 +1,54 @@
+{
+  "width": 500,
+  "height": 280,
+  "anchors": {
+    "leftIndex": [
+      73.0,
+      62.9
+    ],
+    "leftLittle": [
+      171.2,
+      83.2
+    ],
+    "leftMiddle": [
+      107.3,
+      50.0
+    ],
+    "leftPalm": [
+      122,
+      182
+    ],
+    "leftRing": [
+      140.9,
+      60.2
+    ],
+    "leftThumb": [
+      30,
+      146
+    ],
+    "rightIndex": [
+      427.0,
+      62.9
+    ],
+    "rightLittle": [
+      328.8,
+      83.2
+    ],
+    "rightMiddle": [
+      392.7,
+      50.0
+    ],
+    "rightPalm": [
+      378,
+      182
+    ],
+    "rightRing": [
+      359.1,
+      60.2
+    ],
+    "rightThumb": [
+      470,
+      146
+    ]
+  }
+}
