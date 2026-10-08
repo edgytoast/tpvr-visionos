@@ -22,9 +22,9 @@ extern "C" {
 // dusk_visionos_start_game.
 void dusk_visionos_set_disc_path(const char* path);
 
-// Checks a disc image before Play, from its header (quick, any thread): NULL when it's
-// a Twilight Princess release the game plays, otherwise why not, as a sentence for the
-// launcher (a static string).
+// Checks a disc image before Play, from its header and, for a plain GameCube image, its
+// file table (quick, any thread): NULL when it's a whole Twilight Princess release the game
+// plays, otherwise why not, as a sentence for the launcher (a static string).
 const char* dusk_visionos_check_disc(const char* path);
 
 // The cp_layer_renderer_t of the immersive space's CompositorLayer, retained by
