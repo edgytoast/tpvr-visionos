@@ -271,7 +271,9 @@ final class GameModel: ObservableObject {
             await MainActor.run {
                 self.importing = false
                 self.importProgress = nil
-                self.importFailure = failure.map { "The disc didn't copy: \($0)" }
+                // (A disc turned away while this one copied keeps its sentence: the import began
+                // with none.)
+                if let failure { self.importFailure = "The disc didn't copy: \(failure)" }
                 self.refreshDisc()
                 self.endImportTask()
             }

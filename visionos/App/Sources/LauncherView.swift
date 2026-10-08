@@ -185,13 +185,23 @@ struct LauncherView: View {
     /// way to bring one.
     @ViewBuilder private var discStatus: some View {
         if model.importing {
-            StatusCapsule {
-                if let progress = model.importProgress {
-                    ProgressRing(progress: progress)
-                } else {
-                    ProgressView().controlSize(.small)
+            VStack(spacing: 6) {
+                StatusCapsule {
+                    if let progress = model.importProgress {
+                        ProgressRing(progress: progress)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text("Copying the disc\(model.importProgress.map { " · \(Int(($0 * 100).rounded()))%" } ?? "…")")
                 }
-                Text("Copying the disc\(model.importProgress.map { " · \(Int(($0 * 100).rounded()))%" } ?? "…")")
+                // A second disc turned away while this one copies.
+                if let failure = model.importFailure {
+                    Text(failure)
+                        .font(.tbBody(12, weight: .medium))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 460)
+                }
             }
         } else if let disc = model.disc, model.checkingDisc {
             StatusCapsule {
@@ -202,6 +212,10 @@ struct LauncherView: View {
             TrevorbiltCard(padding: 20) {
                 VStack(alignment: .leading, spacing: 12) {
                     StatusHeadline(.problem, title: "\(disc.lastPathComponent) won't play", detail: problem)
+                    // An import that didn't work (out of space, say): there's no Manage here to hold it.
+                    if let failure = model.importFailure {
+                        StatusHeadline(.problem, title: "That didn't work", detail: failure)
+                    }
                     if model.phase == .idle {
                         Button("Import another disc") { pickingDisc = true }
                             .buttonStyle(TrevorbiltSecondaryButtonStyle())
@@ -499,7 +513,14 @@ struct LauncherView: View {
         }
         // Never under a game that's open (it reads the disc in place): said, and AirDrop's copy
         // isn't left behind.
-        guard model.phase == .idle else {
+        switch model.phase {
+        case .idle:
+            break
+        case .ended, .failed:
+            model.declineImport(of: url, because: "The game has stopped, so the disc wasn't brought in. Close Twilight "
+                + "Princess VR, open it again, then bring the disc in.")
+            return
+        default:
             model.declineImport(of: url, because: "The game's open, so the disc wasn't brought in. Quit, then bring it in again.")
             return
         }
