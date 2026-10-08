@@ -256,13 +256,14 @@ final class GameModel: ObservableObject {
                     }
                     try? fileManager.removeItem(at: destination)
                     try fileManager.moveItem(at: staged, to: destination)
-                    // Copies keep the source's date, and the launcher plays the newest
-                    // disc: the one just brought in is the newest.
-                    var imported = destination
-                    var values = URLResourceValues()
-                    values.contentModificationDate = Date()
-                    try? imported.setResourceValues(values)
                 }
+                // The launcher plays the newest disc, and copies keep the source's date: the one
+                // just brought in is the newest. So is one picked from the app's own folder (moved
+                // nowhere): picking it is how a player goes back to it from a newer one that won't play.
+                var imported = destination
+                var values = URLResourceValues()
+                values.contentModificationDate = Date()
+                try? imported.setResourceValues(values)
                 failure = nil
             } catch {
                 failure = error.localizedDescription
