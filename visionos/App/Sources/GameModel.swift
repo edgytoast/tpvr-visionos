@@ -55,9 +55,10 @@ final class GameModel: ObservableObject {
     @Published private(set) var phase: Phase = .idle
     @Published private(set) var disc: URL?
     /// Why the disc can't play (another game, an unsupported release, a file that isn't
-    /// a disc image), from the game's own check of its header; nil when it can, or while
-    /// it's being checked. A copy cut short after the header passes; the import's
-    /// .partial file is what keeps those from appearing.
+    /// a disc image, a GameCube image cut short), from the game's own check of its header
+    /// and, for a plain GameCube image, its file table; nil when it can, or while it's being
+    /// checked. Other formats cut short after the header pass: for those, the import's
+    /// .partial file is what keeps a cut copy from appearing.
     @Published private(set) var discProblem: String?
     @Published private(set) var checkingDisc = false
     @Published private(set) var importing = false
@@ -120,7 +121,8 @@ final class GameModel: ObservableObject {
         playsProgressive ? Self.progressiveSpaceID : Self.immersiveSpaceID
     }
 
-    /// Disc images nod (the game's disc reader) opens; Dusklight wants GZ2E01 or GZ2P01.
+    /// Disc images nod (the game's disc reader) opens; Dusklight wants GZ2E01, GZ2P01 or GZ2J01,
+    /// or a Wii release but the Korean one.
     static let discExtensions: Set<String> = ["iso", "rvz", "gcm", "ciso", "gcz", "wia", "wbfs", "nfs", "tgc"]
 
     let documents: URL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

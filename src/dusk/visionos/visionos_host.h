@@ -17,7 +17,7 @@
 extern "C" {
 #endif
 
-// The disc image to load (GZ2E01 or GZ2P01, .iso or .rvz), passed to the game as
+// The disc image to load (GZ2E01, GZ2P01, GZ2J01 or a Wii release; .iso, .rvz, ...), passed to the game as
 // --dvd. NULL or "" leaves the choice to the saved setting. Call before
 // dusk_visionos_start_game.
 void dusk_visionos_set_disc_path(const char* path);
