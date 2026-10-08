@@ -159,7 +159,7 @@ struct LauncherView: View {
                         Button("Quit", role: .destructive) { model.quitFromPause() }
                             .buttonStyle(TrevorbiltSecondaryButtonStyle())
                     }
-                    .disabled(model.phase != .paused)
+                    .disabled(model.phase != .paused || model.quitting)
                 } else {
                     Button("Play") { Task { await play() } }
                         .buttonStyle(TrevorbiltPrimaryButtonStyle(width: 240))
@@ -364,7 +364,9 @@ struct LauncherView: View {
         case .opening: return "Opening Hyrule…"
         case .running: return "Playing. Press the Digital Crown to pause."
         case .ended, .failed: return "Close Twilight Princess VR and open it again to play."
-        case .paused, .resuming: return model.message.isEmpty ? nil : model.message
+        case .paused, .resuming:
+            if model.quitting { return "Quitting… progress is kept up to the last autosave or save." }
+            return model.message.isEmpty ? nil : model.message
         case .idle: break
         }
         if !model.message.isEmpty { return model.message }  // the space didn't open at Play
@@ -535,7 +537,7 @@ struct LauncherView: View {
     /// Opens the same space again; the game carries on once it has the new layer
     /// (GameModel.attach). The launcher goes, as at Play.
     private func resume() async {
-        guard model.phase == .paused else { return }
+        guard model.phase == .paused, !model.quitting else { return }
         model.markResuming()
         switch await openImmersiveSpace(id: model.spaceIDForPlay) {
         case .opened:

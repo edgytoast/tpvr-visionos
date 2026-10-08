@@ -364,7 +364,7 @@ final class GameModel: ObservableObject {
     /// Resume, from the launcher: the same space opens again and the game carries on
     /// once it has the new layer (attach).
     func markResuming() {
-        if phase == .paused {
+        if phase == .paused, !quitting {
             phase = .resuming
         }
     }
@@ -380,10 +380,14 @@ final class GameModel: ObservableObject {
     /// Quit, from the launcher while paused: the game shuts down and the app ends with
     /// it (checkGame), keeping progress up to the last autosave or save.
     func quitFromPause() {
-        guard phase == .paused else { return }
+        guard phase == .paused, !quitting else { return }
         quitRequested = true
+        quitting = true
         dusk_visionos_request_quit()
     }
+    /// Quit was pressed while paused: the game is shutting down, and Resume would only open a
+    /// space the app then leaves.
+    @Published private(set) var quitting = false
 
     /// The space didn't open at Play: no game started, so Play is there again, with why. (It
     /// needed the app opened again, as after a game, though none had run.)
