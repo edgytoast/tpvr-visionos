@@ -23,6 +23,12 @@ final class MirrorScene {
     private let backdrop = ModelEntity(mesh: .generatePlane(width: 1, height: 1),
                                        materials: [UnlitMaterial(color: .black)])
     private var mesh: (mesh: LowLevelMesh, resource: MeshResource)?
+    // A bigger mesh being filled: its resource is made, and it replaces the last one, only once it
+    // has its parts (fill, update, adopt). Made before then, RealityKit sometimes never drew it: the
+    // level was missing about one launch in ten (the porting plugin's scaffold).
+    private var nextMesh: LowLevelMesh?
+    // The level's materials as the entity has them, for the model made with the first resource.
+    private var modelMaterials: [any Material] = []
     private let queue: MTLCommandQueue
     // Blended parts, each in an entity of its own in the window's sort group, in the game's order
     // (as the SHAR port does). In the one mesh, all with the frame's bounds, RealityKit ordered
@@ -166,7 +172,7 @@ final class MirrorScene {
         let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
                           indexCount: Int(frame.index_count))
         stages.fill += CACurrentMediaTime() - fillStart
-        guard filled, let (mesh, _) = mesh else { return hasScene }
+        guard let mesh = filled else { return hasScene }
 
         let keys = (0..<Int(frame.part_count)).map { MaterialKey(parts[$0]) }
         updateMaterials(keys)
@@ -195,6 +201,12 @@ final class MirrorScene {
                                            topology: .triangle, materialIndex: materialIndex, bounds: bounds))
         }
         mesh.parts.replaceAll(solid)
+        if mesh === nextMesh {
+            if !solid.isEmpty { adopt(mesh) }
+            // Until it's adopted, the one drawn shows nothing rather than an older frame (whose
+            // parts' materials may since have moved in the list).
+            if nextMesh != nil { self.mesh?.mesh.parts.replaceAll([]) }
+        }
         // Each blended part into the slot that had its material last frame, if one did: by position,
         // a dust puff appearing mid-list moved every later part to another slot, its geometry and
         // material changing at once (which RealityKit may not show in the same frame).
@@ -284,31 +296,31 @@ final class MirrorScene {
             indexCapacity: indices, indexType: .uint32)
     }
 
+    /// The frame into the level's mesh, or into a bigger one (`nextMesh`) when it doesn't fit; nil
+    /// when there's none to fill.
     private func fill(vertices: UnsafePointer<dusk_visionos_mirror_vertex>, vertexCount: Int,
-                      indices: UnsafePointer<UInt32>, indexCount: Int) -> Bool {
-        let fits = mesh.map { $0.mesh.vertexCapacity >= vertexCount && $0.mesh.indexCapacity >= indexCount } ?? false
-        if !fits {
+                      indices: UnsafePointer<UInt32>, indexCount: Int) -> LowLevelMesh? {
+        var target = nextMesh ?? mesh?.mesh
+        if target.map({ $0.vertexCapacity < vertexCount || $0.indexCapacity < indexCount }) ?? true {
             do {
                 // Grown in steps, not doubled: each write goes into a fresh buffer of the mesh's
                 // capacity, and past some size between 3.2 and 4.3 MB those cost RealityKit 12 to 15
                 // ms instead of 0.3 (in the Simulator, 83,500 vertices: 0.35 ms in a 3.2 MB buffer,
                 // 11 to 15 ms in 4.3 MB, as in the 4.7 MB that doubling made). 36 bytes a vertex.
+                // (Never smaller than the last in either: frames alternating between more vertices
+                // and more indices would make a mesh each time.)
                 let made = try LowLevelMesh(descriptor: Self.descriptor(
-                    vertices: max(65536, vertexCount.roundedUp(to: 8192)), indices: max(131072, indexCount.roundedUp(to: 16384))))
-                let resource = try MeshResource(from: made)
-                mesh = (made, resource)
+                    vertices: max(65536, target?.vertexCapacity ?? 0, vertexCount.roundedUp(to: 8192)),
+                    indices: max(131072, target?.indexCapacity ?? 0, indexCount.roundedUp(to: 16384))))
+                nextMesh = made
+                target = made
                 counts.meshesMade += 1
-                if entity.model == nil {
-                    entity.model = ModelComponent(mesh: resource, materials: [])
-                } else {
-                    entity.model?.mesh = resource
-                }
             } catch {
                 print("[TPVR] mirror: a mesh of \(vertexCount) vertices failed: \(error)")
-                return false
+                return nil
             }
         }
-        guard let (mesh, _) = mesh else { return false }
+        guard let mesh = target else { return nil }
         counts.fills += 1
         // Into fresh buffers RealityKit swaps in once written (SHAR: written in place, the
         // headset's renderer drew between the vertices and the indices).
@@ -323,7 +335,24 @@ final class MirrorScene {
         mesh.replaceUnsafeMutableIndices { raw in
             raw.copyMemory(from: UnsafeRawBufferPointer(start: indices, count: indexCount * 4))
         }
-        return true
+        return mesh
+    }
+
+    /// The bigger mesh, its parts set, in place of the last one. On failure the next frame tries
+    /// again (and the last one shows nothing meanwhile).
+    private func adopt(_ next: LowLevelMesh) {
+        let resource: MeshResource
+        do { resource = try MeshResource(from: next) } catch {
+            Self.report("the level's mesh resource failed: \(error)")
+            return
+        }
+        mesh = (next, resource)
+        nextMesh = nil
+        if entity.model == nil {
+            entity.model = ModelComponent(mesh: resource, materials: modelMaterials)
+        } else {
+            entity.model?.mesh = resource
+        }
     }
 
     /// TPVR_TEST_MIRROR_ADD_RED: the vertex at `vertex` gets mul 0, add opaque red.
@@ -434,7 +463,8 @@ final class MirrorScene {
         guard changed else { return }
         counts.materialSets += 1
         materialReady = materialList.map { material(for: $0) != nil }
-        entity.model?.materials = materialList.map { material(for: $0) ?? templates["OpaqueRR"]! }
+        modelMaterials = materialList.map { material(for: $0) ?? templates["OpaqueRR"]! }
+        entity.model?.materials = modelMaterials
     }
 
     private func material(for key: MaterialKey) -> ShaderGraphMaterial? {
