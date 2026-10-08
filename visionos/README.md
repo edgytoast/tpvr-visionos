@@ -8,7 +8,8 @@ You need your own Twilight Princess disc image: GameCube (GZ2E01, GZ2P01, GZ2J01
 (any release except Korean), as `.iso`, `.rvz` or `.wbfs`. Dusklight runs the
 GameCube code either way (the decompilation matches the GameCube release), so a
 Wii disc plays as the GameCube version, left-handed Link included. Nothing from
-the game is in this repository or the app.
+the game is in the app, and nothing but screenshots of it (`docs/images/`) is in
+this repository.
 
 ## Build
 

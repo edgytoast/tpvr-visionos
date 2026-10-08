@@ -38,7 +38,9 @@ prelaunch-background {
     position: absolute;
     width: 100%;
     height: 100%;
-    decorator: image(../prelaunch-bg.png cover left center);
+    /* A plain wash rather than upstream's render from the game (Nintendo's art, which this port
+       doesn't ship). */
+    decorator: vertical-gradient(#26381F #0A0E09);
     opacity: 0;
     transition: opacity 1s linear-in-out;
 }
