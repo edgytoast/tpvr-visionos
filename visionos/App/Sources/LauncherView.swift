@@ -367,6 +367,7 @@ struct LauncherView: View {
         case .paused, .resuming: return model.message.isEmpty ? nil : model.message
         case .idle: break
         }
+        if !model.message.isEmpty { return model.message }  // the space didn't open at Play
         if model.importing { return "Play is ready as soon as the disc is in." }
         if model.checkingDisc { return "Checking the disc…" }
         if model.disc == nil { return "Bring your disc first." }

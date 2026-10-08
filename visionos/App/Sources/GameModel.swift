@@ -355,6 +355,7 @@ final class GameModel: ObservableObject {
 
     func markOpening() {
         if phase == .idle {
+            message = ""
             phase = .opening
             space.style = styleForPlay()
         }
@@ -384,8 +385,12 @@ final class GameModel: ObservableObject {
         dusk_visionos_request_quit()
     }
 
+    /// The space didn't open at Play: no game started, so Play is there again, with why. (It
+    /// needed the app opened again, as after a game, though none had run.)
     func openingFailed(_ reason: String) {
-        phase = .failed(message: reason)
+        guard phase == .opening else { return }
+        phase = .idle
+        message = reason
     }
 
     /// Called from the CompositorLayer closure once the immersive space has a
