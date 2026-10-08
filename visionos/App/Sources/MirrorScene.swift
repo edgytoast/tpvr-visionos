@@ -357,19 +357,25 @@ final class MirrorScene {
         let current = levelMeshes[index]?.mesh
         if end > (current?.indexCapacity ?? 0) {
             place(true)
+            // Into a new mesh: this one's last indices are in the old layout, and a frame-old read
+            // of them would put other parts' triangles in every part again.
+            if current != nil { levelMeshes[index] = nil }
         }
-        let fresh = (vertices: max(65536, vertexCount.roundedUp(to: 8192)), indices: max(196608, end.roundedUp(to: 16384)))
+        // A quarter more indices than this frame lays out, so new parts and outgrown regions find
+        // room past the end for a while before the layout starts again.
+        let fresh = (vertices: max(65536, vertexCount.roundedUp(to: 8192)),
+                     indices: max(196608, (end * 5 / 4).roundedUp(to: 16384)))
         notePeak(vertices: vertexCount, indices: end)
         // Sized down once it's a quarter bigger than lately needed and past the slow size.
         let recent = (vertices: max(peak.vertices, peak.previousVertices), indices: max(peak.indices, peak.previousIndices))
-        let oversized = current.map { $0.vertexCapacity * 36 > 3_200_000 && $0.vertexCapacity > (recent.vertices * 5 / 4).roundedUp(to: 8192) } ?? false
+        let oversized = (levelMeshes[index]?.mesh).map { $0.vertexCapacity * 36 > 3_200_000 && $0.vertexCapacity > (recent.vertices * 5 / 4).roundedUp(to: 8192) } ?? false
         if oversized {
-            let smaller = (vertices: max(65536, recent.vertices.roundedUp(to: 8192)), indices: max(196608, recent.indices.roundedUp(to: 16384)))
+            let smaller = (vertices: max(65536, recent.vertices.roundedUp(to: 8192)),
+                           indices: max(196608, (recent.indices * 5 / 4).roundedUp(to: 16384)))
             if let made = try? LowLevelMesh(descriptor: Self.descriptor(vertices: max(smaller.vertices, fresh.vertices),
                                                                         indices: max(smaller.indices, fresh.indices))) {
                 levelMeshes[index] = LevelMesh(mesh: made)
                 counts.meshesMade += 1
-                if end > made.indexCapacity { place(true) }
             }
         }
         if levelMeshes[index].map({ $0.mesh.vertexCapacity < vertexCount || $0.mesh.indexCapacity < end }) ?? true {
