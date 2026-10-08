@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
         --simulator) sysroot="xrsimulator"; flavour="xrsimulator-arm64"; shift ;;
         --jobs) jobs="${2:?}"; shift 2 ;;
         --force) force=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        -h|--help) sed -n '7,19p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done

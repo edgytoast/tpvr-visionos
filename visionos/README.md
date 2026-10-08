@@ -39,8 +39,9 @@ visionos/scripts/build-visionos.sh --team TEAMID --install
   commits plus `visionos/patches` (`bootstrap.sh --check`); after an update that
   changed a patch, `bootstrap.sh --reset` puts them back. `--allow-modified` builds
   them as they are, for work on aurora before its patch is written again; the
-  app then calls itself a development build. Don't `git checkout` files inside `extern/aurora`: the patches'
-  new files are only intent-to-add there, and checking one out empties it.
+  app then calls itself a development build. To undo an edit inside `extern/aurora`, use `bootstrap.sh
+  --reset`, not `git checkout`: a patch's new file can be intent-to-add there (a
+  patch applied with `--index`), and checking it out empties it.
 - Build products and caches live in `.scratch/` (gitignored). Dawn is built once
   per revision by `visionos/scripts/build-dawn-visionos.sh`.
 

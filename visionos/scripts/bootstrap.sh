@@ -20,7 +20,7 @@ cd "${root}"
 mode="${1:-}"
 case "${mode}" in
     ""|--reset|--check) ;;
-    *) sed -n '2,13p' "$0" >&2; exit 2 ;;
+    *) sed -n '2,14p' "$0" >&2; exit 2 ;;
 esac
 
 # Whether a submodule's files are its pinned commit with the patches applied: the tree they
@@ -72,7 +72,8 @@ fi
 if [[ "${mode}" == "--reset" ]]; then
     for target in extern/aurora extern/borealis; do
         if [[ -e "${target}/.git" ]]; then
-            git -C "${target}" checkout -q -f -- .
+            # Its index too: a patch applied with --index, or intent-to-add, survives a checkout.
+            git -C "${target}" reset -q --hard
             git -C "${target}" clean -fdq
             echo "reset ${target}"
         fi
