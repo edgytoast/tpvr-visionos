@@ -34,6 +34,12 @@ visionos/scripts/build-visionos.sh --team TEAMID --install
   suffix: a bare ID may already belong to another team, and automatic signing
   then falls back to a wildcard profile without the memory entitlement.
 - `--debug` builds Debug instead of RelWithDebInfo/Release.
+- The build stops unless `extern/aurora` and `extern/borealis` are their pinned
+  commits plus `visionos/patches` (`bootstrap.sh --check`); after an update that
+  changed a patch, `bootstrap.sh --reset` puts them back. `--allow-modified` builds
+  them as they are, for work on aurora before its patch is written again; the
+  app then calls itself a development build. Don't `git checkout` files inside `extern/aurora`: the patches'
+  new files are only intent-to-add there, and checking one out empties it.
 - Build products and caches live in `.scratch/` (gitignored). Dawn is built once
   per revision by `visionos/scripts/build-dawn-visionos.sh`.
 

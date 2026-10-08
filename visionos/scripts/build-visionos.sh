@@ -4,10 +4,16 @@
 # (xcodegen + xcodebuild), and optionally installs it on a paired headset.
 #
 #   visionos/scripts/build-visionos.sh --team TEAMID [--bundle-id ID] [--debug]
-#                                      [--install [--device UDID]] [--game-only]
-#   visionos/scripts/build-visionos.sh --simulator [--debug] [--game-only]
+#                                      [--install [--device UDID]] [--game-only] [--allow-modified]
+#   visionos/scripts/build-visionos.sh --simulator [--debug] [--game-only] [--allow-modified]
 #
 # --simulator builds for the visionOS Simulator, unsigned (no team needed).
+# The build first checks that extern/aurora and extern/borealis are their pinned
+# commits plus visionos/patches (bootstrap.sh --check), and stops if not: an update
+# that changed a patch needs bootstrap.sh --reset, or the app would be built from
+# the old patches and say it was built from the new commit. --allow-modified builds
+# them as they are (editing aurora before its patch is written); the app then says
+# it's a development build.
 #
 # The bundle ID defaults to dev.tpvr.vision.<TEAMID>: a bare ID may already be
 # registered to another team, and then automatic signing falls back to a
@@ -27,6 +33,7 @@ install=0
 device=""
 game_only=0
 simulator=0
+allow_modified=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -37,7 +44,8 @@ while [[ $# -gt 0 ]]; do
         --device) device="${2:?}"; shift 2 ;;
         --game-only) game_only=1; shift ;;
         --simulator) simulator=1; shift ;;
-        -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+        --allow-modified) allow_modified=1; shift ;;
+        -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -53,6 +61,12 @@ rust_toolchain="${TPVR_RUST_TOOLCHAIN:-nightly-2026-09-30}"
 for tool in cmake ninja xcodegen xcrun rustup; do
     command -v "${tool}" >/dev/null || { echo "ERROR: ${tool} not found" >&2; exit 1; }
 done
+if [[ ${allow_modified} -eq 0 ]] && ! "${root}/visionos/scripts/bootstrap.sh" --check; then
+    echo "ERROR: the submodules above aren't their pinned commits plus visionos/patches." >&2
+    echo "  visionos/scripts/bootstrap.sh --reset   puts them back (edits made there are lost)" >&2
+    echo "  --allow-modified                        builds them as they are (a development build)" >&2
+    exit 1
+fi
 if [[ ${simulator} -eq 1 ]]; then
     platform="SIMULATOR_VISIONOS"; rust_target="aarch64-apple-visionos-sim"; flavour="xrsimulator"
     dawn_flags=(--simulator)

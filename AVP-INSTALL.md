@@ -91,6 +91,24 @@ otherwise `git submodule update --init --recursive`).
    Management. Apps signed with a free personal team stop opening after 7 days until you build and
    install again.
 
+## Update
+
+The index's clone command checks out the exact commit it reviewed, so the checkout isn't on a branch
+and `git pull` has nothing to pull into. To move to the newest code, then rebuild:
+
+```bash
+git fetch origin
+git checkout visionos
+git pull
+visionos/scripts/bootstrap.sh --reset
+visionos/scripts/build-visionos.sh --team YOURTEAMID --install
+```
+
+`bootstrap.sh --reset` puts the two graphics submodules back at their pinned commits and applies this
+port's patches again, which an update that changes a patch needs. The build checks this and stops
+with that command if the submodules don't match their pinned commits plus the patches. Your disc
+and saves stay on the headset.
+
 ## Play
 
 1. Open Twilight Princess VR, choose how to play (Full, Progressive or Window) and press Play. The

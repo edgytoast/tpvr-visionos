@@ -620,7 +620,7 @@ struct LauncherView: View {
         appName: "Twilight Princess VR",
         repository: repository,
         releaseBranch: "visionos",
-        updateInstructions: "git pull, then visionos/scripts/build-visionos.sh --team <your team> --install (AVP-INSTALL.md has the details). Your disc and saves stay.",
+        updateInstructions: "git fetch origin, git checkout visionos, git pull, visionos/scripts/bootstrap.sh --reset, then visionos/scripts/build-visionos.sh --team <your team> --install (AVP-INSTALL.md › Update). Your disc and saves stay.",
         credits: [
             .init("Trevorbilt", "The Vision Pro port: the visionOS app, the immersive spaces and the room around the menus, the Window view's scene mirror, the input and the build.", "https://trevorbilt.com"),
             .init("Nintendo", "Made The Legend of Zelda: Twilight Princess, released in 2006 for GameCube and Wii.",

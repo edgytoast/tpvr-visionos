@@ -43,8 +43,9 @@ targets:
         buildPhase: resources
     # Which commit the app was built from, for its About and Ports tabs: TBBuildCommit (the full
     # commit, "unknown" without git) and TBBuildDirty, a development build: one with uncommitted
-    # changes, or from anything but a checkout of the public repository, since only its commits can
-    # be compared with what the AVP Ports Index reviewed.
+    # changes, submodules that aren't their pinned commits plus visionos/patches, or from anything
+    # but a checkout of the public repository, since only its commits can be compared with what the
+    # AVP Ports Index reviewed (and offered as the source of this build).
     postBuildScripts:
       - name: Build commit
         basedOnDependencyAnalysis: false
@@ -58,9 +59,13 @@ targets:
           dirty=false
           if commit_found=$(git -C "$SRCROOT" rev-parse HEAD 2>/dev/null); then
             commit=$commit_found
-            # Changes not committed, new files included (not the submodules' own changes:
-            # bootstrap.sh patches aurora in place).
+            # Changes not committed, new files included (the submodules' own changes are checked
+            # below: bootstrap.sh patches aurora in place).
             [ -z "$(git -C "$SRCROOT/../.." status --porcelain --ignore-submodules=dirty 2>/dev/null)" ] || dirty=true
+            # The submodules as the commit says: their pins plus its patches. Otherwise the app was
+            # built from other sources than the commit it would name (old patches after an update,
+            # or edits).
+            "$SRCROOT/../scripts/bootstrap.sh" --check >/dev/null 2>&1 || dirty=true
             git -C "$SRCROOT" remote -v 2>/dev/null | tr '[:upper:]' '[:lower:]' |
               grep -qF -e "/$release_repo.git " -e "/$release_repo " -e ":$release_repo.git " -e ":$release_repo " || dirty=true
             # A commit not pushed anywhere yet can't be compared, or offered as the source.
