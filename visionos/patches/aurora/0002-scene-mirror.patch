@@ -275,10 +275,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..0ff583d
+index 0000000..31b3c58
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2986 @@
+@@ -0,0 +1,3008 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -650,6 +650,7 @@ index 0000000..0ff583d
 +  bool mipmapped = false;
 +  uint32_t lastFrame = 0;
 +  std::vector<uint64_t> variants; // swizzled copies' ids, removed with it
++  uint64_t hash = 0; // of the decoded pixels: a swept id comes back only for the same ones
 +};
 +
 +struct OwnedTexture {
@@ -706,7 +707,13 @@ index 0000000..0ff583d
 +// The ids of textures swept away (by source key, and the variants by their key), so one that comes
 +// back has the id it had: the window keeps materials by texture id, and a new one for the same
 +// texture grew the level's material list each time an area's textures returned, setting it again.
-+std::unordered_map<uint64_t, uint64_t> g_retiredTextures, g_retiredVariants;
++// (A texture's with the hash of its pixels: the source key samples them only, and memory a level
++// freed can hold another texture of the same shape whose sampled bytes match.)
++struct Retired {
++  uint64_t id, hash;
++};
++std::unordered_map<uint64_t, Retired> g_retiredTextures;
++std::unordered_map<uint64_t, uint64_t> g_retiredVariants;
 +uint64_t g_nextTextureId = 1;
 +
 +// Framebuffer copies read back (capture_entry): one per revision of a copy destination used this
@@ -855,10 +862,15 @@ index 0000000..0ff583d
 +  auto rgba = decode(obj, tlut);
 +  if (!rgba.empty()) {
 +    entry.ok = true;
++    entry.hash = xxh3_hash_s(rgba.data(), rgba.size());
++    entry.id = 0;
 +    if (auto retired = g_retiredTextures.find(key); retired != g_retiredTextures.end()) {
-+      entry.id = retired->second;
++      if (retired->second.hash == entry.hash) {
++        entry.id = retired->second.id;
++      }
 +      g_retiredTextures.erase(retired);
-+    } else {
++    }
++    if (entry.id == 0) {
 +      entry.id = g_nextTextureId++;
 +    }
 +    double sum[4] = {0, 0, 0, 0};
@@ -948,7 +960,7 @@ index 0000000..0ff583d
 +        g_removedTextures.push_back(it->second.id);
 +        g_removedTextures.insert(g_removedTextures.end(), it->second.variants.begin(), it->second.variants.end());
 +        const uint64_t id = it->second.id;
-+        g_retiredTextures[it->first] = id;
++        g_retiredTextures[it->first] = {id, it->second.hash};
 +        std::erase_if(g_variants, [id](const auto& v) {
 +          if ((v.first >> 8) != id) {
 +            return false;
@@ -2807,6 +2819,12 @@ index 0000000..0ff583d
 +    out = std::move(g_spareFrames.back());
 +    g_spareFrames.pop_back();
 +  }
++  // A texture let go of and back (the same id) before the window took the removal: the removal no
++  // longer stands. Taken together, the window would otherwise apply it after the return and keep the
++  // texture aside while it's in use.
++  for (const auto& texture : job.textures) {
++    std::erase(g_pendingRemoved, texture.id);
++  }
 +  for (auto& texture : job.textures) {
 +    g_pendingTextures.push_back(std::move(texture));
 +  }
@@ -2866,6 +2884,10 @@ index 0000000..0ff583d
 +      g_job.tanHalfX = g_haveProjection ? 1.f / g_p0 : 1.f;
 +      g_job.tanHalfY = g_haveProjection ? 1.f / g_p2 : 1.f;
 +      g_jobPending = true;
++    }
++    // (As in finish: a removal of an earlier frame still waiting here is cancelled by a return.)
++    for (const auto& texture : g_newTextures) {
++      std::erase(g_job.removed, texture.id);
 +    }
 +    for (auto& texture : g_newTextures) {
 +      g_job.textures.push_back(std::move(texture));

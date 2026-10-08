@@ -491,6 +491,9 @@ final class MirrorScene {
                     Self.upload(queue: queue, pixels: rgba, width: Int(texture.width), height: Int(texture.height), into: existing)
                     continue
                 }
+                // Sent again with its id (let go of and back before the window took it), the same
+                // pixels (aurora gives an id back only for them): the one made stands.
+                if texture.mipmapped, textures[texture.id] != nil { continue }
                 let pending = PendingTexture(id: texture.id, pixels: Data(bytes: rgba, count: count),
                                              width: Int(texture.width), height: Int(texture.height),
                                              mipmapped: texture.mipmapped, cutout: texture.cutout)
@@ -506,12 +509,21 @@ final class MirrorScene {
         // textures go together, a few hundred at once: one pass over each collection.
         if let removed = frame.removed, frame.removed_count > 0 {
             let gone = Set((0..<Int(frame.removed_count)).map { removed[$0] })
+            var failedGone: Set<UInt64> = []
             for id in gone where !parkedSet.contains(id) {
                 if textures[id] != nil {
                     parked.append(id)
                     parkedSet.insert(id)
-                } else {
-                    failedTextures.remove(id)
+                } else if failedTextures.remove(id) != nil {
+                    failedGone.insert(id)
+                }
+            }
+            // One that couldn't be made was drawn white: its material goes, so that when it comes
+            // back (with its id) and is made, the part waits for it and the list is set once.
+            if !failedGone.isEmpty {
+                materials = materials.filter { !failedGone.contains($0.key.texture) }
+                for (index, key) in materialList.enumerated() where failedGone.contains(key.texture) {
+                    materialReady[index] = false
                 }
             }
             pendingTextures.removeAll { gone.contains($0.id) }
