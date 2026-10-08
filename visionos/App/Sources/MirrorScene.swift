@@ -49,6 +49,10 @@ final class MirrorScene {
     private var levelMeshes: [LevelMesh?] = [nil, nil]
     private var shownMesh = 1  // the one the entity draws; the other is filled next
     private var shownResource: MeshResource?
+    // The most the level has needed lately (this 10 s and the last), for sizing its meshes down
+    // again after a big frame: their room only ever grew, and past about 3.2 MB of vertices every
+    // fill costs RealityKit 12 to 15 ms instead of 0.3, in small areas too.
+    private var peak = (vertices: 0, indices: 0, previousVertices: 0, previousIndices: 0, since: CACurrentMediaTime())
     // Test runs: TPVR_TEST_MIRROR_ONE_LEVEL_MESH=1 fills the one on screen, as before.
     private static let oneLevelMesh = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ONE_LEVEL_MESH"] == "1"
     // The level's materials as the entity has them, for the model made with the first resource.
@@ -354,7 +358,21 @@ final class MirrorScene {
         if end > (current?.indexCapacity ?? 0) {
             place(true)
         }
-        if current.map({ $0.vertexCapacity < vertexCount || $0.indexCapacity < end }) ?? true {
+        let fresh = (vertices: max(65536, vertexCount.roundedUp(to: 8192)), indices: max(196608, end.roundedUp(to: 16384)))
+        notePeak(vertices: vertexCount, indices: end)
+        // Sized down once it's a quarter bigger than lately needed and past the slow size.
+        let recent = (vertices: max(peak.vertices, peak.previousVertices), indices: max(peak.indices, peak.previousIndices))
+        let oversized = current.map { $0.vertexCapacity * 36 > 3_200_000 && $0.vertexCapacity > (recent.vertices * 5 / 4).roundedUp(to: 8192) } ?? false
+        if oversized {
+            let smaller = (vertices: max(65536, recent.vertices.roundedUp(to: 8192)), indices: max(196608, recent.indices.roundedUp(to: 16384)))
+            if let made = try? LowLevelMesh(descriptor: Self.descriptor(vertices: max(smaller.vertices, fresh.vertices),
+                                                                        indices: max(smaller.indices, fresh.indices))) {
+                levelMeshes[index] = LevelMesh(mesh: made)
+                counts.meshesMade += 1
+                if end > made.indexCapacity { place(true) }
+            }
+        }
+        if levelMeshes[index].map({ $0.mesh.vertexCapacity < vertexCount || $0.mesh.indexCapacity < end }) ?? true {
             do {
                 // Grown in steps, not doubled: each write goes into a fresh buffer of the mesh's
                 // capacity, and past some size between 3.2 and 4.3 MB those cost RealityKit 12 to 15
@@ -362,9 +380,10 @@ final class MirrorScene {
                 // 11 to 15 ms in 4.3 MB, as in the 4.7 MB that doubling made). 36 bytes a vertex.
                 // (Never smaller than the last in either: frames alternating between more vertices
                 // and more indices would make a mesh each time.)
+                let grown = levelMeshes[index]?.mesh
                 let made = try LowLevelMesh(descriptor: Self.descriptor(
-                    vertices: max(65536, current?.vertexCapacity ?? 0, vertexCount.roundedUp(to: 8192)),
-                    indices: max(196608, current?.indexCapacity ?? 0, end.roundedUp(to: 16384))))
+                    vertices: max(fresh.vertices, grown?.vertexCapacity ?? 0),
+                    indices: max(fresh.indices, grown?.indexCapacity ?? 0)))
                 levelMeshes[index] = LevelMesh(mesh: made)
                 counts.meshesMade += 1
             } catch {
@@ -399,6 +418,17 @@ final class MirrorScene {
                               materialIndex: part.materialIndex, bounds: bounds)
         }
         return (index, levelParts)
+    }
+
+    /// Notes this frame's needs in the 10-s peak (`peak`).
+    private func notePeak(vertices: Int, indices: Int) {
+        let now = CACurrentMediaTime()
+        if now - peak.since > 10 {
+            peak = (vertices, indices, peak.vertices, peak.indices, now)
+        } else {
+            peak.vertices = max(peak.vertices, vertices)
+            peak.indices = max(peak.indices, indices)
+        }
     }
 
     /// The level mesh just filled, its parts set, on screen: false when it can't be, and the level
@@ -468,7 +498,10 @@ final class MirrorScene {
         // slot would go on drawing the old resource while the next frames wrote into the new mesh.
         var fresh = false
         var target = slot.mesh
-        if target.map({ $0.vertexCapacity < used.count || $0.indexCapacity < count }) ?? true {
+        // Made again when it doesn't fit, or when it's big and four times what the part needs (its
+        // room otherwise only grew, as the level's did).
+        if target.map({ $0.vertexCapacity < used.count || $0.indexCapacity < count
+                        || ($0.vertexCapacity > 16384 && $0.vertexCapacity > used.count.nextPowerOfTwo * 4) }) ?? true {
             guard let made = try? LowLevelMesh(descriptor: Self.descriptor(
                 vertices: max(256, used.count.nextPowerOfTwo), indices: max(768, count.nextPowerOfTwo))) else {
                 return false
