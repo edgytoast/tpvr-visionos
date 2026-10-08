@@ -270,7 +270,7 @@ struct LauncherView: View {
         }
     }
 
-    private static let discHelp = "Your Twilight Princess disc image: GameCube (GZ2E01 or GZ2P01) or any Wii release but the Korean one, as .iso, .rvz, .wbfs, .gcz, .ciso or .wia. AirDrop it to this Vision Pro, put it in Files › On My Apple Vision Pro › Twilight Princess VR, or import it here. Either plays as the GameCube version."
+    private static let discHelp = "Your Twilight Princess disc image: GameCube (GZ2E01, GZ2P01 or GZ2J01) or any Wii release but the Korean one, as .iso, .rvz, .wbfs, .gcz, .ciso or .wia. AirDrop it to this Vision Pro, put it in Files › On My Apple Vision Pro › Twilight Princess VR, or import it here. Either plays as the GameCube version."
 
     private var playAs: some View {
         VStack(spacing: 8) {

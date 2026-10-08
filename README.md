@@ -115,8 +115,8 @@ The full install guide, with troubleshooting, is [AVP-INSTALL.md](AVP-INSTALL.md
 
 ## Bring your game
 
-Twilight Princess VR plays your own disc image: GameCube (GZ2E01 or GZ2P01) or any Wii release
-except the Korean one, as `.iso`, `.rvz` or `.wbfs`. [Dolphin's guide](https://wiki.dolphin-emu.org/index.php?title=Ripping_Games)
+Twilight Princess VR plays your own disc image: GameCube (GZ2E01, GZ2P01 or GZ2J01) or any Wii
+release except the Korean one, as `.iso`, `.rvz` or `.wbfs`. [Dolphin's guide](https://wiki.dolphin-emu.org/index.php?title=Ripping_Games)
 explains how to dump your disc. A Wii disc plays as the GameCube version, which the decompilation
 matches. Any of these get it onto the headset:
 

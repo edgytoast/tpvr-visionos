@@ -21,7 +21,7 @@ extern "C" const char* dusk_visionos_check_disc(const char* path) {
     case dusk::iso::ValidationError::WrongGame:
         return "This disc image isn't Twilight Princess.";
     case dusk::iso::ValidationError::WrongVersion:
-        return "This Twilight Princess release isn't supported. Use a GameCube disc (GZ2E01, GZ2P01) or a "
+        return "This Twilight Princess release isn't supported. Use a GameCube disc (GZ2E01, GZ2P01, GZ2J01) or a "
                "Wii disc other than the Korean release.";
     default:
         return "The disc image couldn't be checked. Copy it in again.";

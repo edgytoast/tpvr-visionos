@@ -35,9 +35,9 @@ You supply your own game; this repository contains none.
 
 1. Dump your own disc as `.iso`, `.rvz` or `.wbfs`. Dolphin's guide explains how:
    https://wiki.dolphin-emu.org/index.php?title=Ripping_Games
-2. Use a supported release: GameCube GZ2E01 (USA) or GZ2P01 (Europe), or any Wii release except
-   the Korean one. Dolphin shows a disc's game ID in its game list. A Wii disc plays as the GameCube
-   version, which the decompilation matches.
+2. Use a supported release: GameCube GZ2E01 (USA), GZ2P01 (Europe) or GZ2J01 (Japan), or any Wii
+   release except the Korean one. Dolphin shows a disc's game ID in its game list. A Wii disc plays
+   as the GameCube version, which the decompilation matches.
 3. After installing the app (below), put the disc image on the headset: AirDrop it and open it with
    Twilight Princess VR, copy it to Files > On My Apple Vision Pro > Twilight Princess VR, or use
    Import Disc in the app. The app uses the newest disc image in that folder.
