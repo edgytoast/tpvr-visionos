@@ -19,6 +19,13 @@ namespace dusk::visionos::sense_pad {
 // connected, detaches it when none is.
 void update();
 
+// Game thread, once a frame in every mode. SDL also opens each Sense half as a gamepad of its own,
+// which nothing should play (the VR mod reads the halves through the OpenXR provider, Window mode
+// through the joined gamepad): they lose their player slots, and a real gamepad left without a
+// slot the game reads takes player 1. In Full, a half on player 1 doubled the Sense buttons with
+// the original game's, and a gamepad connected after the halves landed on a slot nothing read.
+void tidy_ports();
+
 // SDL's own view of a Sense half (its MFi driver lists each as a gamepad): the game's UI skips
 // these events, or each press arrived twice (the half's, then the joined pad's).
 bool ignores(const SDL_Event& event);

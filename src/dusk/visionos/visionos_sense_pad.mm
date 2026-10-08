@@ -178,6 +178,37 @@ void update() {
     }
 }
 
+void tidy_ports() {
+    int count = 0;
+    SDL_JoystickID* gamepads = SDL_GetGamepads(&count);
+    if (gamepads == nullptr) return;
+    bool taken = false;
+    SDL_Gamepad* waiting = nullptr;
+    for (int i = 0; i < count; ++i) {
+        SDL_Gamepad* gamepad = SDL_GetGamepadFromID(gamepads[i]);
+        if (gamepad == nullptr) continue;
+        const char* name = SDL_GetGamepadName(gamepad);
+        const int player = SDL_GetGamepadPlayerIndex(gamepad);
+        if (gamepads[i] != g_pad && name != nullptr && std::strstr(name, "Sense") != nullptr) {
+            if (player != -1) SDL_SetGamepadPlayerIndex(gamepad, -1);
+            continue;
+        }
+        // The VR mod's menu gamepad keeps player 2 (vr_menu_gamepad.hpp).
+        if (name != nullptr && std::strcmp(name, "Dusklight VR Menu Controller") == 0) continue;
+        if (player == 0) {
+            taken = true;
+        } else if (waiting == nullptr && gamepads[i] != g_pad) {
+            waiting = gamepad;
+        }
+    }
+    SDL_free(gamepads);
+    if (!taken && waiting != nullptr) {
+        SDL_SetGamepadPlayerIndex(waiting, 0);
+        const char* name = SDL_GetGamepadName(waiting);
+        std::fprintf(stderr, "[dusk::visionos::sense] %s takes player 1\n", name != nullptr ? name : "a gamepad");
+    }
+}
+
 bool ignores(const SDL_Event& event) {
     SDL_JoystickID which = 0;
     switch (event.type) {

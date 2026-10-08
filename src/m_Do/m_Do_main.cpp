@@ -202,8 +202,8 @@ bool launchUILoop() {
                     break;
                 }
 #if defined(__APPLE__) && TARGET_OS_VISION
-                if (dusk::visionos::window::enabled() && dusk::visionos::sense_pad::ignores(event->sdl)) {
-                    break;  // a Sense half: its presses come through the joined gamepad
+                if (dusk::visionos::sense_pad::ignores(event->sdl)) {
+                    break;  // a Sense half: its presses come through the VR mod or the joined gamepad
                 }
 #endif
                 dusk::mouse::handle_event(event->sdl);
@@ -298,8 +298,8 @@ void main01(void) {
                     break;
                 }
 #if defined(__APPLE__) && TARGET_OS_VISION
-                if (dusk::visionos::window::enabled() && dusk::visionos::sense_pad::ignores(event->sdl)) {
-                    break;  // a Sense half: its presses come through the joined gamepad
+                if (dusk::visionos::sense_pad::ignores(event->sdl)) {
+                    break;  // a Sense half: its presses come through the VR mod or the joined gamepad
                 }
 #endif
                 dusk::mouse::handle_event(event->sdl);
@@ -390,6 +390,7 @@ void main01(void) {
 
 #if defined(__APPLE__) && TARGET_OS_VISION
         dusk::visionos::window::begin_frame();  // Window mode: a frame per window update
+        dusk::visionos::sense_pad::tidy_ports();  // Sense halves off the player slots, every mode
 #endif
         VIWaitForRetrace();
 
