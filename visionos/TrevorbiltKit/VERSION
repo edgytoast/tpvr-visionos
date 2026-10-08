@@ -1,6 +1,5 @@
 TrevorbiltKit, vendored by visionos/scripts/sync-trevorbilt-kit.sh; edit it in its own repository.
-repository: https://github.com/edgytoast/shar-vr-visionos.git
+repository: https://github.com/edgytoast/shar-visionos.git
 path: visionos/TrevorbiltKit
-commit: ef3e80fb4cefa131b3153409c1ae5ffab09ce214
-(Until TrevorbiltKit has a public repository of its own, its commits live in a port's
-development repository, which may be private: this file records which, for its maintainer.)
+commit: 835ff50569d24d5416a49899b89aa1f4b4231c28
+(TrevorbiltKit has no repository of its own yet: this is the port's repository it came from.)

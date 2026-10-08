@@ -42,8 +42,7 @@ rsync -a --delete --exclude VERSION "$staging/$prefix/" "$target/"
     echo "path: $prefix"
     echo "commit: $commit"
     if [ "$prefix" != "." ]; then
-        echo "(Until TrevorbiltKit has a public repository of its own, its commits live in a port's"
-        echo "development repository, which may be private: this file records which, for its maintainer.)"
+        echo "(TrevorbiltKit has no repository of its own yet: this is the port's repository it came from.)"
     fi
 } > "$target/VERSION"
 echo "TrevorbiltKit at ${commit:0:10} ($origin) is in visionos/TrevorbiltKit."
