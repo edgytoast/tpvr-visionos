@@ -145,7 +145,10 @@ The app takes a few environment variables for headless runs (pass each as
   window); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
   the level's one mesh, as before each got an entity of its own in the game's
   order (RealityKit ordered them by distance and they flickered);
-  `AURORA_MIRROR_GROUPS=1`
+  `AURORA_MIRROR_TEST_SWEEP=<frames>` lets go of every texture that often, as if
+  unused for fifteen seconds, to measure their return (the level's material list
+  should stay put); `AURORA_MIRROR_CAPTURE_LOG=1` logs each read-back shadow mask's
+  alpha and how each masked draw is drawn; `AURORA_MIRROR_GROUPS=1`
   (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the
   mirror kept and skipped. The scene mirror is the default;
   `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,

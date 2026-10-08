@@ -49,6 +49,15 @@ final class MirrorScene {
     private var pendingTextures: [PendingTexture] = []
     private var wantedTextures: Set<UInt64> = []
     private var texturesArrived = false
+    // Textures the game let go of (aurora's sweep: unused for fifteen seconds), kept with their
+    // materials, in the order they went: one that comes back (an area returned to, a menu closed)
+    // has the id it had and finds them as they were. Dropped, its return added a material to the
+    // level's list and set the list again, which can cost the renderer a frame of the whole level:
+    // the flashes for minutes after a load, until every texture around had come back once. Up to
+    // parkedBudget bytes; past it, the longest gone go for good.
+    private var parked: [UInt64] = []
+    private var parkedSet: Set<UInt64> = []
+    private static let parkedBudget = 48 << 20
     private var white: TextureResource?
     private var materials: [MaterialKey: ShaderGraphMaterial] = [:]
     // The entity's material list, which the parts index; it grows as materials appear, and is set
@@ -471,6 +480,11 @@ final class MirrorScene {
                 let texture = list[index]
                 let count = Int(texture.width) * Int(texture.height) * 4
                 guard let rgba = texture.rgba, count > 0 else { continue }
+                // Back after being let go: the same texture (aurora keeps its id), still here.
+                if parkedSet.remove(texture.id) != nil {
+                    parked.removeAll { $0 == texture.id }
+                    if textures[texture.id] != nil { continue }
+                }
                 // New pixels for one already made (a shadow, each frame): replaced in place.
                 if let existing = lowLevelTextures[texture.id], existing.descriptor.width == Int(texture.width),
                    existing.descriptor.height == Int(texture.height), existing.descriptor.mipmapLevelCount == 1 {
@@ -492,13 +506,16 @@ final class MirrorScene {
         // textures go together, a few hundred at once: one pass over each collection.
         if let removed = frame.removed, frame.removed_count > 0 {
             let gone = Set((0..<Int(frame.removed_count)).map { removed[$0] })
-            for id in gone {
-                textures[id] = nil
-                lowLevelTextures[id] = nil
-                failedTextures.remove(id)
+            for id in gone where !parkedSet.contains(id) {
+                if textures[id] != nil {
+                    parked.append(id)
+                    parkedSet.insert(id)
+                } else {
+                    failedTextures.remove(id)
+                }
             }
             pendingTextures.removeAll { gone.contains($0.id) }
-            materials = materials.filter { !gone.contains($0.key.texture) }
+            dropParked(beyond: Self.parkedBudget)
         }
         // Wanted ones first, then a few milliseconds' worth an update, at least one.
         if !wantedTextures.isEmpty {
@@ -533,6 +550,31 @@ final class MirrorScene {
             texturesArrived = true
             made += 1
         }
+    }
+
+    /// Lets the longest-gone parked textures go for good, with their materials, until the rest fit.
+    private func dropParked(beyond budget: Int) {
+        var bytes = parkedBytes
+        guard bytes > budget else { return }
+        var dropped: Set<UInt64> = []
+        while bytes > budget, !parked.isEmpty {
+            let id = parked.removeFirst()
+            parkedSet.remove(id)
+            bytes -= Self.bytes(of: lowLevelTextures[id])
+            textures[id] = nil
+            lowLevelTextures[id] = nil
+            failedTextures.remove(id)
+            dropped.insert(id)
+        }
+        materials = materials.filter { !dropped.contains($0.key.texture) }
+    }
+
+    private var parkedBytes: Int { parked.reduce(0) { $0 + Self.bytes(of: lowLevelTextures[$1]) } }
+
+    private static func bytes(of texture: LowLevelTexture?) -> Int {
+        guard let descriptor = texture?.descriptor else { return 0 }
+        let level = descriptor.width * descriptor.height * 4
+        return descriptor.mipmapLevelCount > 1 ? level * 4 / 3 : level
     }
 
     private func makeTexture(_ texture: PendingTexture) -> (LowLevelTexture, TextureResource)? {
@@ -725,7 +767,7 @@ final class MirrorScene {
         let vertices = mesh?.mesh.vertexCapacity ?? 0, indices = mesh?.mesh.indexCapacity ?? 0
         return "\(lastReport); last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts "
             + "(\(last.blended) blended, in \(blendSlots.count) slots); "
-            + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB; \(counts.texturesMade) made, "
+            + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB, \(parked.count) of them parked; \(counts.texturesMade) made, "
             + "\(counts.texturesFailed) failed), \(pendingTextures.count) waiting (\(waitingBytes >> 20) MB), "
             + "\(Self.uploadsInFlight.load(ordering: .relaxed)) uploads in flight, \(materials.count) materials "
             + "(\(materialList.count) listed), mesh room for \(vertices) vertices and \(indices) indices "

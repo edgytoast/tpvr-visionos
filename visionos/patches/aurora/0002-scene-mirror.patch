@@ -275,10 +275,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..28102ba
+index 0000000..0ff583d
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,2909 @@
+@@ -0,0 +1,2986 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -703,6 +703,10 @@ index 0000000..28102ba
 +uint32_t g_frameTag = 0; // the game's number for the frame being recorded (the BEGIN mark's value)
 +std::unordered_map<uint64_t, TexEntry> g_textures;  // by source key
 +std::unordered_map<uint64_t, uint64_t> g_variants; // (base id << 8 | swizzle) -> id
++// The ids of textures swept away (by source key, and the variants by their key), so one that comes
++// back has the id it had: the window keeps materials by texture id, and a new one for the same
++// texture grew the level's material list each time an area's textures returned, setting it again.
++std::unordered_map<uint64_t, uint64_t> g_retiredTextures, g_retiredVariants;
 +uint64_t g_nextTextureId = 1;
 +
 +// Framebuffer copies read back (capture_entry): one per revision of a copy destination used this
@@ -851,7 +855,12 @@ index 0000000..28102ba
 +  auto rgba = decode(obj, tlut);
 +  if (!rgba.empty()) {
 +    entry.ok = true;
-+    entry.id = g_nextTextureId++;
++    if (auto retired = g_retiredTextures.find(key); retired != g_retiredTextures.end()) {
++      entry.id = retired->second;
++      g_retiredTextures.erase(retired);
++    } else {
++      entry.id = g_nextTextureId++;
++    }
 +    double sum[4] = {0, 0, 0, 0};
 +    for (size_t i = 0; i < rgba.size(); i += 4) {
 +      for (int c = 0; c < 4; ++c) {
@@ -898,7 +907,13 @@ index 0000000..28102ba
 +      rgba[i + c] = texel[(swizzle >> (2 * c)) & 3];
 +    }
 +  }
-+  const uint64_t id = g_nextTextureId++;
++  uint64_t id;
++  if (auto retired = g_retiredVariants.find(key); retired != g_retiredVariants.end()) {
++    id = retired->second;
++    g_retiredVariants.erase(retired);
++  } else {
++    id = g_nextTextureId++;
++  }
 +  const bool cutout = binary_alpha(rgba);
 +  g_newTextures.push_back({id, std::move(rgba), obj.width(), obj.height(), entry.mipmapped, cutout});
 +  g_variants.emplace(key, id);
@@ -910,6 +925,8 @@ index 0000000..28102ba
 +  g_textures.clear();
 +  g_copySlots.clear();
 +  g_variants.clear();
++  g_retiredTextures.clear();
++  g_retiredVariants.clear();
 +  g_newTextures.clear();
 +  g_removedTextures.clear();
 +  std::lock_guard lock(g_mutex);
@@ -917,15 +934,28 @@ index 0000000..28102ba
 +  g_pendingRemoved.clear();
 +}
 +
-+// Every few seconds: textures unused for fifteen go.
-+void sweep_textures() {
++// Every few seconds: textures unused for fifteen go. (`all`: every one, for test runs.)
++void sweep_textures(bool all = false) {
++  // Ids kept for textures that never came back (memory a level freed, reused): a long session's worth
++  // at most.
++  if (g_retiredTextures.size() > 65536 || g_retiredVariants.size() > 65536) {
++    g_retiredTextures.clear();
++    g_retiredVariants.clear();
++  }
 +  for (auto it = g_textures.begin(); it != g_textures.end();) {
-+    if (g_frame - it->second.lastFrame > 900) {
++    if (all || g_frame - it->second.lastFrame > 900) {
 +      if (it->second.ok) {
 +        g_removedTextures.push_back(it->second.id);
 +        g_removedTextures.insert(g_removedTextures.end(), it->second.variants.begin(), it->second.variants.end());
 +        const uint64_t id = it->second.id;
-+        std::erase_if(g_variants, [id](const auto& v) { return (v.first >> 8) == id; });
++        g_retiredTextures[it->first] = id;
++        std::erase_if(g_variants, [id](const auto& v) {
++          if ((v.first >> 8) != id) {
++            return false;
++          }
++          g_retiredVariants[v.first] = v.second;
++          return true;
++        });
 +      }
 +      it = g_textures.erase(it);
 +    } else {
@@ -1412,6 +1442,29 @@ index 0000000..28102ba
 +                for (int c = 0; c < 4; ++c) {
 +                  rgba[i + c] = texel[(swizzle >> (2 * c)) & 3];
 +                }
++              }
++            }
++            // Test runs: AURORA_MIRROR_CAPTURE_LOG=1 logs each read-back mask's alpha (a shadow's
++            // darkness): a mask almost all opaque draws as a dark square under its actor.
++            static const bool s_captureLog = [] {
++              const char* value = std::getenv("AURORA_MIRROR_CAPTURE_LOG");
++              return value != nullptr && std::strcmp(value, "1") == 0;
++            }();
++            if (s_captureLog) {
++              static std::atomic<uint32_t> logged{0};
++              double sum = 0;
++              size_t opaque = 0, clear = 0;
++              for (size_t i = 3; i < rgba.size(); i += 4) {
++                sum += rgba[i];
++                opaque += rgba[i] > 230;
++                clear += rgba[i] < 25;
++              }
++              const double texels = static_cast<double>(rgba.size() / 4);
++              const bool square = static_cast<double>(opaque) / texels > 0.9;
++              if (square || logged.fetch_add(1) % 120 == 0) {
++                Log.info("mirror: capture {} swizzle {:#04x}: alpha mean {:.2f}, {:.0f}% opaque, {:.0f}% clear{}",
++                         readback->id, readback->swizzle, sum / texels / 255.0, 100.0 * opaque / texels,
++                         100.0 * clear / texels, square ? "  <<< almost all opaque" : "");
 +              }
 +            }
 +            std::lock_guard lock(g_mutex);
@@ -2783,7 +2836,15 @@ index 0000000..28102ba
 +// frame's geometry is dropped (the window keeps the last); its new textures still go.
 +void publish(bool scene, float focus) {
 +  ++g_frame;
-+  if (g_frame % 300 == 0) {
++  // Test runs: AURORA_MIRROR_TEST_SWEEP=<frames> lets every texture go that often, as if unused for
++  // fifteen seconds (after a menu, or back in an area), to measure what their return costs.
++  static const uint64_t s_testSweep = [] {
++    const char* value = std::getenv("AURORA_MIRROR_TEST_SWEEP");
++    return value != nullptr ? std::strtoull(value, nullptr, 10) : uint64_t{0};
++  }();
++  if (s_testSweep > 0 && g_frame % s_testSweep == 0) {
++    sweep_textures(true);
++  } else if (g_frame % 300 == 0) {
 +    sweep_textures();
 +  }
 +  static std::once_flag started;
@@ -3060,6 +3121,22 @@ index 0000000..28102ba
 +        variant.id = g_nextTextureId++;
 +      }
 +      part.texture = variant.id;
++      // Test runs: AURORA_MIRROR_CAPTURE_LOG=1 also says how each masked draw is drawn.
++      static const bool s_capturePartLog = [] {
++        const char* value = std::getenv("AURORA_MIRROR_CAPTURE_LOG");
++        return value != nullptr && std::strcmp(value, "1") == 0;
++      }();
++      if (s_capturePartLog) {
++        static std::unordered_map<uint64_t, uint32_t> seen;
++        if (seen[variant.id]++ % 600 == 0) {
++          Log.info("mirror: masked draw, capture {} (occurrence {}, revision {}, swizzle {:#04x}): kind {} colour {:.2f}+{:.2f}a "
++                   "opacity {:.2f}+{:.2f}a+{:.2f}luma, depth {}{}, {} vertices, blend {} {}->{}",
++                   variant.id, plan.captureOccurrence, plan.captureRevision, swizzle, part.kind, part.colourBase,
++                   part.colourAlpha, part.opacityBase, part.opacityAlpha, part.opacityLuma,
++                   st.depthCompare ? "test" : "-", st.depthUpdate ? "+write" : "", vtxCount,
++                   static_cast<int>(st.blendMode), static_cast<int>(st.blendFacSrc), static_cast<int>(st.blendFacDst));
++        }
++      }
 +      if (variant.frame != g_frame || variant.revision != plan.captureRevision) {
 +        variant.frame = g_frame;
 +        variant.revision = plan.captureRevision;
