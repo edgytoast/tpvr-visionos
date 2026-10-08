@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 namespace dusk::visionos::sense_pad {
 namespace {
@@ -179,14 +180,24 @@ void update() {
 }
 
 void tidy_ports() {
+    // The gamepads seen last frame, and whether the joined Sense pad was there: a gamepad is moved
+    // to player 1 only when it arrives, or when the joined pad it gave way to leaves. Every frame,
+    // it undid the player's own choice in Settings › Input (a gamepad set to None, or to player 2).
+    static std::vector<SDL_JoystickID> s_seen;
+    static bool s_padWas = false;
+    const bool padLeft = s_padWas && g_pad == 0;
+    s_padWas = g_pad != 0;
     int count = 0;
     SDL_JoystickID* gamepads = SDL_GetGamepads(&count);
     if (gamepads == nullptr) return;
+    std::vector<SDL_JoystickID> seen;
     bool taken = false;
     SDL_Gamepad* waiting = nullptr;
     for (int i = 0; i < count; ++i) {
+        // Opened by aurora when SDL reports it added (at most a frame later): seen once it is.
         SDL_Gamepad* gamepad = SDL_GetGamepadFromID(gamepads[i]);
         if (gamepad == nullptr) continue;
+        seen.push_back(gamepads[i]);
         const char* name = SDL_GetGamepadName(gamepad);
         const int player = SDL_GetGamepadPlayerIndex(gamepad);
         if (gamepads[i] != g_pad && name != nullptr && std::strstr(name, "Sense") != nullptr) {
@@ -197,11 +208,16 @@ void tidy_ports() {
         if (name != nullptr && std::strcmp(name, "Dusklight VR Menu Controller") == 0) continue;
         if (player == 0) {
             taken = true;
-        } else if (waiting == nullptr && gamepads[i] != g_pad) {
+            continue;
+        }
+        const bool arrived = std::find(s_seen.begin(), s_seen.end(), gamepads[i]) == s_seen.end();
+        // (On -1 it's been set to no player: Settings › Input's None, kept.)
+        if (waiting == nullptr && gamepads[i] != g_pad && player > 0 && (arrived || padLeft)) {
             waiting = gamepad;
         }
     }
     SDL_free(gamepads);
+    s_seen = std::move(seen);
     if (!taken && waiting != nullptr) {
         SDL_SetGamepadPlayerIndex(waiting, 0);
         const char* name = SDL_GetGamepadName(waiting);
