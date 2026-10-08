@@ -80,9 +80,10 @@ struct GameWindowView: View {
             model.windowClosed()
         }
         .onChange(of: scenePhase) { _, phase in
-            // Hidden or in the background: hold the game clock, as taking the headset off does
-            // in the immersive spaces.
-            dusk_visionos_set_paused(phase != .active)
+            // In the background (hidden): the game holds, as taking the headset off does in the
+            // immersive spaces. Not when only inactive: a window still in view (Control Center or
+            // a notification over it, say) would freeze while you watched (the SHAR port's rule).
+            dusk_visionos_set_paused(phase == .background)
         }
     }
 }

@@ -567,8 +567,11 @@ void begin_frame() {
         while (g_held.load() && !SDL_HasEvent(SDL_EVENT_QUIT)) {
             dispatch_semaphore_wait(g_tick, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
         }
-        dusk::audio::SetPaused(false);
-        WINDOW_LOG("back: the game carries on\n");
+        // Closed while held: the sound stays off for the frame that takes the quit.
+        if (!SDL_HasEvent(SDL_EVENT_QUIT)) {
+            dusk::audio::SetPaused(false);
+            WINDOW_LOG("back: the game carries on\n");
+        }
     }
     g_frameSlot = -1;
     g_sceneThisFrame = false;
