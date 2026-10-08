@@ -550,17 +550,7 @@ final class MirrorScene {
             }
             // One that couldn't be made was drawn white: its material goes, so that when it comes
             // back (with its id) and is made, the part waits for it and the list is set once.
-            if !failedGone.isEmpty {
-                materials = materials.filter { !failedGone.contains($0.key.texture) }
-                for (index, key) in materialList.enumerated() where failedGone.contains(key.texture) {
-                    materialReady[index] = false
-                }
-                // A blended part's slot forgets it too: back under the same key, it takes the new
-                // material (fillBlend sets one only when the slot's key changes).
-                for slot in blendSlots where slot.material.map({ failedGone.contains($0.texture) }) == true {
-                    slot.material = nil
-                }
-            }
+            forgetMaterials(of: failedGone)
             pendingTextures.removeAll { gone.contains($0.id) }
             dropParked(beyond: Self.parkedBudget)
         }
@@ -590,12 +580,32 @@ final class MirrorScene {
                 textures[pending.id] = resource
                 lowLevelTextures[pending.id] = lowLevel
                 counts.texturesMade += 1
+                // Made at a later try (a shadow's mask is read back each frame, under the same id,
+                // and never let go of): the white stand-in's material goes, or it stayed for the
+                // session, the shadow a dark square.
+                if failedTextures.remove(pending.id) != nil {
+                    forgetMaterials(of: [pending.id])
+                }
             } else {
                 failedTextures.insert(pending.id)
                 counts.texturesFailed += 1
             }
             texturesArrived = true
             made += 1
+        }
+    }
+
+    /// Drops the materials made with these textures (drawn white while they couldn't be made), so
+    /// their parts take new ones: the cached ones, the level's list (set again once they're made),
+    /// and blended parts' slots (fillBlend sets a material only when the slot's key changes).
+    private func forgetMaterials(of ids: Set<UInt64>) {
+        guard !ids.isEmpty else { return }
+        materials = materials.filter { !ids.contains($0.key.texture) }
+        for (index, key) in materialList.enumerated() where ids.contains(key.texture) {
+            materialReady[index] = false
+        }
+        for slot in blendSlots where slot.material.map({ ids.contains($0.texture) }) == true {
+            slot.material = nil
         }
     }
 
