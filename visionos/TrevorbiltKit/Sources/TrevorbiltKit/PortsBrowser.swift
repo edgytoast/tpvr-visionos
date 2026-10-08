@@ -121,15 +121,12 @@ public final class PortsIndex {
 
     private let testFeed: URL?
     private let offline: Bool
-    private let mediaFixture: URL?
 
     /// `testFeed`: read the list from this file, never the network (headless Simulator runs).
-    /// `offline`: every picture download fails as it would offline (likewise). `mediaFixture`: a
-    /// draft feed whose pictures a Debug build borrows while the live feed has none (see `prepared`).
-    public init(testFeed: URL? = nil, offline: Bool = false, mediaFixture: URL? = nil) {
+    /// `offline`: every picture download fails as it would offline (likewise).
+    public init(testFeed: URL? = nil, offline: Bool = false) {
         self.testFeed = testFeed
         self.offline = offline
-        self.mediaFixture = mediaFixture
     }
 
     /// `etag` and `fetched` belong to the cached copy, which is always one that passed `parse`.
@@ -209,21 +206,8 @@ public final class PortsIndex {
         }
     }
 
-    /// A list as shown: in a Debug build, with the draft feed's pictures while the live one has none;
-    /// and with every cached picture it no longer has dropped.
+    /// A list as shown, with every cached picture it no longer has dropped.
     private func prepared(_ feed: PortsFeed) -> PortsFeed {
-        var feed = feed
-        #if DEBUG
-        // (Not into a test run's own feed, which shows what it says.)
-        // TODO: remove once the live feed carries media (the index's schema 1.4.0). Until then a
-        // Debug build borrows each entry's pictures, by id, from the draft feed the app bundles,
-        // so they can be tried on a headset. Release builds never read it.
-        if testFeed == nil, let mediaFixture, !feed.entries.contains(where: { $0.media != nil }),
-           let draft = (try? Data(contentsOf: mediaFixture)).flatMap(Self.parse) {
-            let media = Dictionary(draft.entries.compactMap { entry in entry.media.map { (entry.id, $0) } }) { first, _ in first }
-            for index in feed.entries.indices { feed.entries[index].media = media[feed.entries[index].id] }
-        }
-        #endif
         let hashes = feed.entries.reduce(into: Set<String>()) { $0.formUnion($1.media?.hashes ?? []) }
         Task { await PortImages.shared.prune(keeping: hashes) }
         return feed

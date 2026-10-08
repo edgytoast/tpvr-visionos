@@ -26,14 +26,7 @@ struct LauncherView: View {
     // Headless Simulator runs: TPVR_TEST_INPUTS=hands:denied,sense:none,gamepad:none (InputMonitor).
     @State private var inputs = InputMonitor(testOverride: TestHooks.value("TPVR_TEST_INPUTS"))
     @State private var ports = PortsIndex(testFeed: TestHooks.value("TPVR_TEST_FEED").map { URL(fileURLWithPath: $0) },
-                                          offline: TestHooks.value("TPVR_TEST_OFFLINE") == "1", mediaFixture: Self.mediaFixture)
-    #if DEBUG
-    // TODO: remove once the AVP Ports Index's live feed carries media (schema 1.4.0): the draft feed
-    // a Debug build bundles, whose pictures the Ports tab borrows meanwhile (PortsIndex.prepared).
-    private static let mediaFixture = Bundle.main.url(forResource: "ports-media-fixture", withExtension: "json")
-    #else
-    private static let mediaFixture: URL? = nil
-    #endif
+                                          offline: TestHooks.value("TPVR_TEST_OFFLINE") == "1")
 
     var body: some View {
         TabView(selection: $tab) {

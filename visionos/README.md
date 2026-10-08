@@ -124,8 +124,7 @@ The app takes a few environment variables for headless runs (pass each as
   Controls tab (`menus`: the hands' second page); `TPVR_TEST_PAD=none|xbox` draws the
   gamepad page as if no pad, or an Xbox-kind one, were connected (the Simulator has
   its own); `TPVR_TEST_FEED=<path>` reads the Ports tab's list from that file
-  (`visionos/App/DebugFixtures/ports-media-fixture.json`, the index's draft feed with
-  pictures, shows them) and `TPVR_TEST_OFFLINE=1` fails its picture downloads;
+  instead of the AVP Ports Index's live feed, and `TPVR_TEST_OFFLINE=1` fails its picture downloads;
   `TPVR_TEST_IMPORT=<host path>` imports that file as if it had been picked.
   Pick the way to play with `defaults write dev.tpvr.vision.simulator immersion
   full|progressive|window`.

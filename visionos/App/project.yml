@@ -46,15 +46,6 @@ targets:
     # changes, or from anything but a checkout of the public repository, since only its commits can
     # be compared with what the AVP Ports Index reviewed.
     postBuildScripts:
-      # TODO: remove once the AVP Ports Index's live feed carries media (schema 1.4.0). Until then a
-      # Debug build bundles the draft feed (DebugFixtures, which never goes into a release) so the
-      # Ports tab can show its pictures on a headset; Release builds never have it.
-      - name: Ports media fixture (Debug)
-        basedOnDependencyAnalysis: false
-        script: |
-          fixture="$SRCROOT/DebugFixtures/ports-media-fixture.json"
-          bundled="$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/ports-media-fixture.json"
-          if [ "$CONFIGURATION" = "Debug" ] && [ -f "$fixture" ]; then cp "$fixture" "$bundled"; else rm -f "$bundled"; fi
       - name: Build commit
         basedOnDependencyAnalysis: false
         # So it runs after Xcode writes the app's Info.plist, not before (which would lose its keys).
