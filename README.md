@@ -251,10 +251,15 @@ For PC VR on Windows, use JoeyAW's [TPVR](https://github.com/JoeyAW/TPVR) itself
 
 This repository is CC0-1.0 ([LICENSE.md](LICENSE.md)): Dusklight, the decompilation, TPVR and
 Trevorbilt's own code for the Vision Pro port (the app in `visionos/`, `src/dusk/visionos/` and
-the port's other changes) are dedicated to the public domain. The exception is the vendored OpenXR
-provider, which is GPL-3.0-or-later, Trevorbilt's changes to it included
-([visionos/openxr-provider/](visionos/openxr-provider/README.md)). The app links it, so the built
-app is GPL-3.0. None of that covers:
+the port's other changes) are dedicated to the public domain. The exceptions are GPL-3.0-or-later:
+
+- the vendored OpenXR provider, Trevorbilt's changes to it included
+  ([visionos/openxr-provider/](visionos/openxr-provider/README.md));
+- three files adapted from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR), each
+  marked at its top: `visionos/scripts/build-dawn-visionos.sh`, `src/dusk/visionos/visionos_host.mm`
+  and `visionos/App/Sources/GameModel.swift`.
+
+The app links the provider, so the built app is GPL-3.0. None of that covers:
 
 - the game, its characters and its art, including what shows in the screenshots in `docs/images/`,
   which belong to Nintendo (and the game files, which are yours to bring);

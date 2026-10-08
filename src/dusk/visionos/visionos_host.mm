@@ -1,3 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Adapted from WiiCompiled Vision's runtime/src/platform/visionos/visionos_host.mm
+// (iChris4/Wiicompiled_VR, branch vision-pro), GPL-3.0-or-later. Modified by Trevorbilt, 2026,
+// for Twilight Princess VR.
+
 #include "dusk/visionos/visionos_host.h"
 
 #include "vr/visionos/xr_visionos.h"

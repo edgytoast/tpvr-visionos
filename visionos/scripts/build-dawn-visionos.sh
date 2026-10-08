@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Adapted from WiiCompiled Vision's visionos/Build-VisionOSDawn.sh (iChris4/Wiicompiled_VR, branch
+# vision-pro), GPL-3.0-or-later. Modified by Trevorbilt, 2026, for Twilight Princess VR.
+#
 # Builds Dawn for Apple Vision Pro (or its simulator) as an install tree that
 # aurora's "package" provider consumes (extern/aurora/cmake/AuroraDawnProvider.cmake).
 #
