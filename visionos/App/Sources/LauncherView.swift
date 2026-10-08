@@ -490,6 +490,13 @@ struct LauncherView: View {
     private func importDisc(_ url: URL) {
         // Its progress and any problem show on Play.
         tab = .play
+        // Only a disc image: anything else (a .zip around one, say) was copied, then never seen,
+        // 1+ GB left in the folder with nothing said.
+        guard GameModel.discExtensions.contains(url.pathExtension.lowercased()) else {
+            model.declineImport(of: url, because: "\(url.lastPathComponent) isn't a disc image the game reads (.iso, .rvz, "
+                + ".wbfs, .gcz, .ciso or .wia). If it's a .zip or .7z, unzip it first.")
+            return
+        }
         // Never under a game that's open (it reads the disc in place): said, and AirDrop's copy
         // isn't left behind.
         guard model.phase == .idle else {
