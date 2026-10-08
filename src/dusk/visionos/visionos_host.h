@@ -88,7 +88,8 @@ void dusk_visionos_set_safety_boundary(bool enabled);
 // Game -> bridge (not exported): dusk_visionos_set_room_behind_menus's value.
 bool dusk_visionos_room_behind_menus(void);
 
-// Holds the game clock (the window went to the background or was hidden), or lets it run.
+// The window went to the background or was hidden (true), or is back: the game, its sound and
+// its drawing hold until it's back (window mode), and the game clock with them.
 void dusk_visionos_set_paused(bool paused);
 
 // --- Window mode: the game in a window in the shared space (src/dusk/visionos/visionos_window.hpp).

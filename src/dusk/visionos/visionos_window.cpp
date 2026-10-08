@@ -18,6 +18,7 @@
 
 #include "dusk/visionos/visionos_window.hpp"
 
+#include "dusk/audio/DuskAudioSystem.h"
 #include "dusk/commands.hpp"
 #include "dusk/visionos/visionos_host.h"
 #include "dusk/visionos/visionos_sense_pad.hpp"
@@ -31,7 +32,10 @@
 #include <aurora/gfx.hpp>
 #include <aurora/mirror.h>
 #include <dolphin/gx/GXAurora.h>
+#include <dolphin/pad.h>
 #include <webgpu/webgpu_cpp.h>
+
+#include <SDL3/SDL_events.h>
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOSurface/IOSurfaceRef.h>
@@ -60,6 +64,8 @@ namespace {
 
 std::atomic_bool g_enabled{false};
 dispatch_semaphore_t g_tick = dispatch_semaphore_create(0);
+// The window in the background (dusk_visionos_set_paused): begin_frame holds the game there.
+std::atomic_bool g_held{false};
 // Bumped whenever any slot's surfaces are (re)made: the app drops its textures over them.
 std::atomic<uint64_t> g_surfaceGeneration{1};
 
@@ -548,6 +554,22 @@ void begin_frame() {
     dispatch_semaphore_wait(g_tick, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
     while (dispatch_semaphore_wait(g_tick, DISPATCH_TIME_NOW) == 0) {
     }
+    // In the background: the game holds here, its sound paused and any rumble stopped, until the
+    // window is back or closed (closing pushes a quit to SDL's queue, which the frame then takes).
+    // Holding only the game clock, as before, left the game playing at the 100 ms pace above, its
+    // music on, drawing into a window nobody saw.
+    if (g_held.load() && !SDL_HasEvent(SDL_EVENT_QUIT)) {
+        WINDOW_LOG("in the background: the game holds\n");
+        dusk::audio::SetPaused(true);
+        for (u32 port = 0; port < 4; ++port) {
+            PADControlMotor(port, PAD_MOTOR_STOP_HARD);
+        }
+        while (g_held.load() && !SDL_HasEvent(SDL_EVENT_QUIT)) {
+            dispatch_semaphore_wait(g_tick, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC));
+        }
+        dusk::audio::SetPaused(false);
+        WINDOW_LOG("back: the game carries on\n");
+    }
     g_frameSlot = -1;
     g_sceneThisFrame = false;
     g_scenePushed = false;
@@ -739,6 +761,11 @@ extern "C" {
 
 void dusk_visionos_set_window_mode(bool enabled) {
     set_enabled(enabled);
+}
+
+void dusk_visionos_set_paused(bool paused) {
+    aurora_set_external_pause(paused);
+    g_held.store(paused && enabled());
 }
 
 void dusk_visionos_window_tick(void) {

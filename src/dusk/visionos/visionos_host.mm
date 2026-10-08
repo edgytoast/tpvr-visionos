@@ -182,10 +182,6 @@ void dusk_visionos_set_safety_boundary(bool enabled) {
     xr_visionos_set_safety_boundary(enabled);
 }
 
-void dusk_visionos_set_paused(bool paused) {
-    aurora_set_external_pause(paused);
-}
-
 const char* dusk_visionos_last_error(void) {
     static thread_local std::string copy;
     {

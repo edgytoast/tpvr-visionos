@@ -61,6 +61,17 @@ struct GameWindowView: View {
             model.startWindowGame()
             // Out of the way while you play, as with the immersive spaces.
             dismissWindow(id: GameModel.launcherWindowID, value: GameModel.launcherWindowID)
+            // Test runs: TPVR_TEST_WINDOW_HOLD=<from>-<to> (seconds after the window appears) does
+            // what the window going to the background and coming back does.
+            if let hold = TestHooks.value("TPVR_TEST_WINDOW_HOLD")?.split(separator: "-").compactMap({ Double($0) }),
+               hold.count == 2 {
+                Task {
+                    try? await Task.sleep(for: .seconds(hold[0]))
+                    dusk_visionos_set_paused(true)
+                    try? await Task.sleep(for: .seconds(max(hold[1] - hold[0], 0)))
+                    dusk_visionos_set_paused(false)
+                }
+            }
         }
         .onDisappear {
             model.gameWindowShowing = false

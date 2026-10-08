@@ -150,7 +150,10 @@ The app takes a few environment variables for headless runs (pass each as
   alpha and how each masked draw is drawn; `AURORA_MIRROR_GROUPS=1`
   (in a build with `-DDUSK_GFX_DEBUG_GROUPS=ON`) logs, per draw list, what the
   mirror kept and skipped. The scene mirror is the default;
-  `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
+  `TPVR_TEST_WINDOW_HOLD=<from>-<to>` sends the window to the background and back that
+  many seconds after it appears (the game should hold, silent, in between);
+  `TPVR_TEST_MIRROR_ONE_LEVEL_MESH=1` fills the level's mesh on screen instead of the
+  other of its two; `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
   `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
   parts, textures) into Documents/mirror-dump, which
   `visionos/scripts/render-mirror-dump.py` renders from the game camera (clear the
