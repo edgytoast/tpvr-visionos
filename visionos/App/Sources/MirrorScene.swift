@@ -22,11 +22,35 @@ final class MirrorScene {
     // view, seen from the side), black, as the game's own picture is, not the room.
     private let backdrop = ModelEntity(mesh: .generatePlane(width: 1, height: 1),
                                        materials: [UnlitMaterial(color: .black)])
-    private var mesh: (mesh: LowLevelMesh, resource: MeshResource)?
-    // A bigger mesh being filled: its resource is made, and it replaces the last one, only once it
-    // has its parts (fill, update, adopt). Made before then, RealityKit sometimes never drew it: the
-    // level was missing about one launch in ten (the porting plugin's scaffold).
-    private var nextMesh: LowLevelMesh?
+    // The level's two meshes, each frame filling the one not on screen (its vertices, indices and
+    // parts) before the entity swaps to it; and in each, every solid part's indices in a region of
+    // their own, at the same place from frame to frame (`regions`). RealityKit can draw a mesh's
+    // new parts with its previous indices, or the other way about: laid end to end, the parts'
+    // ranges moved every frame (a part's count changes, and every part after it moves), and a
+    // close-up stone's last triangles were drawn with the grass beside it, or not at all, changing
+    // from frame to frame (the see-through gaps, the ground hole the sky showed through). In a
+    // region of its own a part reads its own triangles, a frame old at worst; the rest of a region
+    // holds empty triangles. A mesh's resource is made only once it has its parts: made before
+    // then, RealityKit sometimes never drew it (the porting plugin's scaffold lost its level about
+    // one launch in ten that way).
+    private struct LevelMesh {
+        let mesh: LowLevelMesh
+        var resource: MeshResource?
+        var regions: [RegionKey: Region] = [:]
+        var regionsEnd = 0
+    }
+    private struct RegionKey: Hashable {
+        let key: MaterialKey
+        let occurrence: Int
+    }
+    private struct Region {
+        let offset: Int, capacity: Int
+    }
+    private var levelMeshes: [LevelMesh?] = [nil, nil]
+    private var shownMesh = 1  // the one the entity draws; the other is filled next
+    private var shownResource: MeshResource?
+    // Test runs: TPVR_TEST_MIRROR_ONE_LEVEL_MESH=1 fills the one on screen, as before.
+    private static let oneLevelMesh = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ONE_LEVEL_MESH"] == "1"
     // The level's materials as the entity has them, for the model made with the first resource.
     private var modelMaterials: [any Material] = []
     private let queue: MTLCommandQueue
@@ -168,12 +192,6 @@ final class MirrorScene {
             return false
         }
         last = (Int(frame.vertex_count), Int(frame.index_count), Int(frame.part_count), last.blended)
-        let fillStart = CACurrentMediaTime()
-        let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices,
-                          indexCount: Int(frame.index_count))
-        stages.fill += CACurrentMediaTime() - fillStart
-        guard let mesh = filled else { return hasScene }
-
         let keys = (0..<Int(frame.part_count)).map { MaterialKey(parts[$0]) }
         updateMaterials(keys)
         let low = SIMD3(frame.bounds_min.0, frame.bounds_min.1, frame.bounds_min.2)
@@ -181,10 +199,8 @@ final class MirrorScene {
         let pad = (high - low) * 0.05 + 1
         let bounds = BoundingBox(min: low - pad, max: high + pad)
         // A part whose texture is still on its way waits: drawn white, it flashed.
-        let partsStart = CACurrentMediaTime()
-        defer { stages.parts += CACurrentMediaTime() - partsStart }
         // The solid parts in the one mesh; each blended one in a slot of its own (fillBlend).
-        var solid: [LowLevelMesh.Part] = []
+        var solidParts: [(index: Int, materialIndex: Int)] = []
         var blendedParts: [(index: Int, material: ShaderGraphMaterial)] = []
         for index in 0..<Int(frame.part_count) {
             let part = parts[index]
@@ -197,16 +213,17 @@ final class MirrorScene {
                 blendedParts.append((index, material))
                 continue
             }
-            solid.append(LowLevelMesh.Part(indexOffset: Int(part.first_index) * 4, indexCount: Int(part.index_count),
-                                           topology: .triangle, materialIndex: materialIndex, bounds: bounds))
+            solidParts.append((index, materialIndex))
         }
+        let fillStart = CACurrentMediaTime()
+        let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices, parts: parts,
+                          keys: keys, solid: solidParts, bounds: bounds)
+        stages.fill += CACurrentMediaTime() - fillStart
+        guard let (filledIndex, solid) = filled, let mesh = levelMeshes[filledIndex]?.mesh else { return hasScene }
+        let partsStart = CACurrentMediaTime()
+        defer { stages.parts += CACurrentMediaTime() - partsStart }
         mesh.parts.replaceAll(solid)
-        if mesh === nextMesh {
-            if !solid.isEmpty { adopt(mesh) }
-            // Until it's adopted, the one drawn shows nothing rather than an older frame (whose
-            // parts' materials may since have moved in the list).
-            if nextMesh != nil { self.mesh?.mesh.parts.replaceAll([]) }
-        }
+        let levelShown = show(filledIndex, hasParts: !solid.isEmpty)
         // Each blended part into the slot that had its material last frame, if one did: by position,
         // a dust puff appearing mid-list moved every later part to another slot, its geometry and
         // material changing at once (which RealityKit may not show in the same frame).
@@ -250,7 +267,7 @@ final class MirrorScene {
         if Self.dumpFrame == timing.total {
             dump(frame)
         }
-        entity.isEnabled = true
+        entity.isEnabled = levelShown
         backdrop.isEnabled = true
         hasScene = true
         timing.vertices += Int(frame.vertex_count)
@@ -296,12 +313,48 @@ final class MirrorScene {
             indexCapacity: indices, indexType: .uint32)
     }
 
-    /// The frame into the level's mesh, or into a bigger one (`nextMesh`) when it doesn't fit; nil
-    /// when there's none to fill.
+    /// The frame into the level mesh not on screen (made, or made bigger, when it doesn't fit): its
+    /// vertices, and the solid parts' indices each in its region. The index of the mesh filled and
+    /// its parts; nil when there's none to fill.
     private func fill(vertices: UnsafePointer<dusk_visionos_mirror_vertex>, vertexCount: Int,
-                      indices: UnsafePointer<UInt32>, indexCount: Int) -> LowLevelMesh? {
-        var target = nextMesh ?? mesh?.mesh
-        if target.map({ $0.vertexCapacity < vertexCount || $0.indexCapacity < indexCount }) ?? true {
+                      indices: UnsafePointer<UInt32>, parts: UnsafePointer<dusk_visionos_mirror_part>,
+                      keys: [MaterialKey], solid: [(index: Int, materialIndex: Int)],
+                      bounds: BoundingBox) -> (Int, [LowLevelMesh.Part])? {
+        let index = Self.oneLevelMesh ? shownMesh : 1 - shownMesh
+        // Each part's region: the one it had, or a new one after the rest when it has none or has
+        // outgrown it (half as much again as it needs, so a part that grows a little stays put).
+        var layout = levelMeshes[index]?.regions ?? [:]
+        var end = levelMeshes[index]?.regionsEnd ?? 0
+        var placed: [(region: Region, first: Int, count: Int)] = []
+        var occurrences: [MaterialKey: Int] = [:]
+        func place(_ fresh: Bool) {
+            if fresh {
+                layout = [:]
+                end = 0
+            }
+            placed = []
+            occurrences = [:]
+            for (partIndex, _) in solid {
+                let key = keys[partIndex]
+                let occurrence = occurrences[key, default: 0]
+                occurrences[key] = occurrence + 1
+                let regionKey = RegionKey(key: key, occurrence: occurrence)
+                let count = Int(parts[partIndex].index_count)
+                if layout[regionKey].map({ $0.capacity < count }) ?? true {
+                    layout[regionKey] = Region(offset: end, capacity: (count + count / 2).roundedUp(to: 96))
+                    end += layout[regionKey]!.capacity
+                }
+                placed.append((layout[regionKey]!, Int(parts[partIndex].first_index), count))
+            }
+        }
+        place(false)
+        // Laid out afresh (only this frame's parts) when the regions no longer fit: parts gone
+        // leave theirs behind until then.
+        let current = levelMeshes[index]?.mesh
+        if end > (current?.indexCapacity ?? 0) {
+            place(true)
+        }
+        if current.map({ $0.vertexCapacity < vertexCount || $0.indexCapacity < end }) ?? true {
             do {
                 // Grown in steps, not doubled: each write goes into a fresh buffer of the mesh's
                 // capacity, and past some size between 3.2 and 4.3 MB those cost RealityKit 12 to 15
@@ -310,17 +363,18 @@ final class MirrorScene {
                 // (Never smaller than the last in either: frames alternating between more vertices
                 // and more indices would make a mesh each time.)
                 let made = try LowLevelMesh(descriptor: Self.descriptor(
-                    vertices: max(65536, target?.vertexCapacity ?? 0, vertexCount.roundedUp(to: 8192)),
-                    indices: max(131072, target?.indexCapacity ?? 0, indexCount.roundedUp(to: 16384))))
-                nextMesh = made
-                target = made
+                    vertices: max(65536, current?.vertexCapacity ?? 0, vertexCount.roundedUp(to: 8192)),
+                    indices: max(196608, current?.indexCapacity ?? 0, end.roundedUp(to: 16384))))
+                levelMeshes[index] = LevelMesh(mesh: made)
                 counts.meshesMade += 1
             } catch {
                 print("[TPVR] mirror: a mesh of \(vertexCount) vertices failed: \(error)")
                 return nil
             }
         }
-        guard let mesh = target else { return nil }
+        guard let mesh = levelMeshes[index]?.mesh else { return nil }
+        levelMeshes[index]?.regions = layout
+        levelMeshes[index]?.regionsEnd = end
         counts.fills += 1
         // Into fresh buffers RealityKit swaps in once written (SHAR: written in place, the
         // headset's renderer drew between the vertices and the indices).
@@ -332,27 +386,45 @@ final class MirrorScene {
                 for index in 0..<vertexCount { Self.paintRed(raw.baseAddress! + index * 36) }
             }
         }
+        // Empty triangles everywhere but the parts' own indices: the rest of each region, and the
+        // regions of parts not in this frame.
         mesh.replaceUnsafeMutableIndices { raw in
-            raw.copyMemory(from: UnsafeRawBufferPointer(start: indices, count: indexCount * 4))
+            raw.initializeMemory(as: UInt8.self, repeating: 0)
+            for (region, first, count) in placed {
+                (raw.baseAddress! + region.offset * 4).copyMemory(from: indices + first, byteCount: count * 4)
+            }
         }
-        return mesh
+        let levelParts = zip(solid, placed).map { part, placement in
+            LowLevelMesh.Part(indexOffset: placement.region.offset * 4, indexCount: placement.count, topology: .triangle,
+                              materialIndex: part.materialIndex, bounds: bounds)
+        }
+        return (index, levelParts)
     }
 
-    /// The bigger mesh, its parts set, in place of the last one. On failure the next frame tries
-    /// again (and the last one shows nothing meanwhile).
-    private func adopt(_ next: LowLevelMesh) {
-        let resource: MeshResource
-        do { resource = try MeshResource(from: next) } catch {
-            Self.report("the level's mesh resource failed: \(error)")
-            return
+    /// The level mesh just filled, its parts set, on screen: false when it can't be, and the level
+    /// is hidden for the frame rather than showing an older one. A new mesh's resource is made now
+    /// that it has its parts; with none yet (every part waiting for its texture), it waits.
+    private func show(_ index: Int, hasParts: Bool) -> Bool {
+        guard var level = levelMeshes[index] else { return false }
+        if level.resource == nil {
+            guard hasParts else { return false }
+            do { level.resource = try MeshResource(from: level.mesh) } catch {
+                Self.report("the level's mesh resource failed: \(error)")
+                return false
+            }
+            levelMeshes[index] = level
         }
-        mesh = (next, resource)
-        nextMesh = nil
-        if entity.model == nil {
-            entity.model = ModelComponent(mesh: resource, materials: modelMaterials)
-        } else {
-            entity.model?.mesh = resource
+        guard let resource = level.resource else { return false }
+        if resource !== shownResource {
+            if entity.model == nil {
+                entity.model = ModelComponent(mesh: resource, materials: modelMaterials)
+            } else {
+                entity.model?.mesh = resource
+            }
+            shownResource = resource
         }
+        shownMesh = index
+        return true
     }
 
     /// TPVR_TEST_MIRROR_ADD_RED: the vertex at `vertex` gets mul 0, add opaque red.
@@ -412,7 +484,9 @@ final class MirrorScene {
                 if Self.addRed { Self.paintRed(at) }
             }
         }
+        // Empty triangles after the part's own (its count changes; see LevelMesh).
         mesh.replaceUnsafeMutableIndices { raw in
+            raw.initializeMemory(as: UInt8.self, repeating: 0)
             local.withUnsafeBytes { raw.copyMemory(from: $0) }
         }
         mesh.parts.replaceAll([LowLevelMesh.Part(indexOffset: 0, indexCount: count, topology: .triangle,
@@ -821,7 +895,8 @@ final class MirrorScene {
             textureBytes += descriptor.mipmapLevelCount > 1 ? level * 4 / 3 : level
         }
         let waitingBytes = pendingTextures.reduce(0) { $0 + $1.pixels.count }
-        let vertices = mesh?.mesh.vertexCapacity ?? 0, indices = mesh?.mesh.indexCapacity ?? 0
+        let shown = levelMeshes[shownMesh]?.mesh
+        let vertices = shown?.vertexCapacity ?? 0, indices = shown?.indexCapacity ?? 0
         return "\(lastReport); last frame \(last.vertices) vertices, \(last.indices) indices, \(last.parts) parts "
             + "(\(last.blended) blended, in \(blendSlots.count) slots); "
             + "\(lowLevelTextures.count) textures (~\(textureBytes >> 20) MB, \(parked.count) of them parked; \(counts.texturesMade) made, "
