@@ -160,8 +160,11 @@ Square X, Triangle Y, L2 L (targeting), and the D-pad on L1 (up, item ring), Cre
 L3 (down, item ring) and R3 (right, map). Look at the game window to give it your controller, since visionOS hands a controller
 to whichever window you're looking at. Close the window to quit.
 
-The port's own options live in the game's settings: **VR › Vision Pro › Anti-Aliasing** and
-**VR › Performance › VR Render Resolution**.
+The game's settings (Dusklight's menu) open with a gamepad's View / Create button. With Sense
+controllers in Full and Progressive, hold Create and R2 together for a second; with bare hands, hold
+a left little-finger pinch and a right index pinch together for a second; in the Window view, press
+R2 and Options together. The port's own options live there: **VR › Vision Pro › Anti-Aliasing**
+and **VR › Performance › VR Render Resolution**.
 
 ## If something goes sideways
 

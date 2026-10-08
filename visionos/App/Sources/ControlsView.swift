@@ -300,13 +300,13 @@ struct ControlsView: View {
         case (.hands, _) where guide.gestures == .moving:
             "Hands play in Full and Progressive. A Sense controller takes over the hand holding it. The sword hand is the game's VR setting."
         case (.hands, _):
-            "Calling Midna needs a controller: no gesture stands in for a stick click."
+            "Dusklight's menu: hold a left little-finger pinch and a right index pinch together for a second. Calling Midna needs a controller: no gesture stands in for a stick click."
         case (.sense, false):
-            "Your sword follows your sword hand, the right unless you change it in the game's VR settings (VR › Combat › Sword Hand), and the shield your other hand."
+            "Dusklight's menu: hold Create and R2 together for a second. Your sword follows your sword hand, the right unless you change it there (VR › Combat › Sword Hand), and the shield your other hand."
         case (.gamepad, false):
             "In Full and Progressive a gamepad plays the original game's buttons while you look around Hyrule. Sense controllers or your hands swing the sword for real."
         case (.sense, true):
-            "The Window view plays like the original game, and your Sense controllers act as one gamepad. Look at the window to give it your controller."
+            "The Window view plays like the original game, and your Sense controllers act as one gamepad: R2 and Options together open Dusklight's menu. Look at the window to give it your controller."
         case (.gamepad, true):
             "The Window view plays like the original game, and it needs a controller: visionOS gives apps no hand tracking outside Full and Progressive. Look at the window to give it your controller."
         }
