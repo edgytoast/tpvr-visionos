@@ -525,6 +525,11 @@ final class MirrorScene {
                 for (index, key) in materialList.enumerated() where failedGone.contains(key.texture) {
                     materialReady[index] = false
                 }
+                // A blended part's slot forgets it too: back under the same key, it takes the new
+                // material (fillBlend sets one only when the slot's key changes).
+                for slot in blendSlots where slot.material.map({ failedGone.contains($0.texture) }) == true {
+                    slot.material = nil
+                }
             }
             pendingTextures.removeAll { gone.contains($0.id) }
             dropParked(beyond: Self.parkedBudget)
