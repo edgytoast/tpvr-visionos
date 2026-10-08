@@ -154,7 +154,14 @@ The app takes a few environment variables for headless runs (pass each as
   `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
   `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
   parts, textures) into Documents/mirror-dump, which
-  `visionos/scripts/render-mirror-dump.py` renders from the game camera.
+  `visionos/scripts/render-mirror-dump.py` renders from the game camera (clear the
+  folder between runs: textures from earlier ones stay in it).
+- `TPVR_TEST_COMMANDS="<seconds>:<command>;..."` (Simulator builds only, Window
+  mode) runs Dusklight's console commands that many seconds after the game's first
+  frame, their output in the log: `list` and `pos` find things, `tp x y z [angle]`
+  moves Link, `camera tp x y z h v` (from about 40 s on, once there's a camera)
+  holds the camera there, `time <0-360>` sets the hour (15 an hour). Link's house
+  is `--stage F_SP103,1,1,-1` (`F_SP103` on its own is the ranch).
 
 ## Layout
 

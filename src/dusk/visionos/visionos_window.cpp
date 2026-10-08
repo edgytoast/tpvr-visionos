@@ -18,6 +18,7 @@
 
 #include "dusk/visionos/visionos_window.hpp"
 
+#include "dusk/commands.hpp"
 #include "dusk/visionos/visionos_host.h"
 #include "dusk/visionos/visionos_sense_pad.hpp"
 #include "dusk/ui/ui.hpp"
@@ -34,16 +35,22 @@
 
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOSurface/IOSurfaceRef.h>
+#include <TargetConditionals.h>
 #include <dispatch/dispatch.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cstddef>
 #include <mutex>
+#include <sstream>
+#include <string>
+#include <utility>
 #include <vector>
 
 #define WINDOW_LOG(...) std::fprintf(stderr, "[dusk::visionos::window] " __VA_ARGS__)
@@ -483,6 +490,37 @@ int ClaimSlot() {
     return -1;
 }
 
+#if TARGET_OS_SIMULATOR
+// Test runs: TPVR_TEST_COMMANDS="<seconds>:<command>;..." runs Dusklight console commands at those
+// times after the first frame, their output in the log, e.g. to find an actor and look at it:
+//   SIMCTL_CHILD_TPVR_TEST_COMMANDS="40:list;42:camera tp 100 200 300 16384 -2000"
+void RunTestCommands() {
+    using Clock = std::chrono::steady_clock;
+    static const Clock::time_point started = Clock::now();
+    static std::vector<std::pair<double, std::string>> pending = [] {
+        std::vector<std::pair<double, std::string>> list;
+        const char* value = std::getenv("TPVR_TEST_COMMANDS");
+        std::istringstream entries(value != nullptr ? value : "");
+        for (std::string entry; std::getline(entries, entry, ';');) {
+            const size_t colon = entry.find(':');
+            if (colon != std::string::npos) {
+                list.emplace_back(std::strtod(entry.substr(0, colon).c_str(), nullptr), entry.substr(colon + 1));
+            }
+        }
+        std::stable_sort(list.begin(), list.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        return list;
+    }();
+    static dusk::CommandState state;
+    const double seconds = std::chrono::duration<double>(Clock::now() - started).count();
+    while (!pending.empty() && pending.front().first <= seconds) {
+        WINDOW_LOG("test command at %.1f s: %s\n", seconds, pending.front().second.c_str());
+        dusk::runCommand(pending.front().second, state,
+                         [](std::string line) { WINDOW_LOG("  %s\n", line.c_str()); });
+        pending.erase(pending.begin());
+    }
+}
+#endif
+
 }  // namespace
 
 void set_enabled(bool enabled) {
@@ -517,6 +555,9 @@ void begin_frame() {
     g_gameFrame = (g_gameFrame + 1) & 0xFFFFFFu;
     // The Sense controllers, if any, as a gamepad (no controller tracking outside a Full Space).
     sense_pad::update();
+#if TARGET_OS_SIMULATOR
+    RunTestCommands();
+#endif
     // The scene mirror records the frame's draws from here to before_hud().
     if (aurora::mirror::enabled()) {
         GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, static_cast<float>(g_gameFrame));
