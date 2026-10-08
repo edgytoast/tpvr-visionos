@@ -7,7 +7,7 @@
 //
 //   right half  Cross A, Circle B, R2 R (analog), R1 Z, Options Start, stick C-stick
 //   left half   Square X, Triangle Y, L2 L (analog, targeting), stick the main stick
-//   D-pad       L1 up (Midna), Create left (map), L3 down, R3 right
+//   D-pad       L1 up (item ring), Create left (map), L3 down, R3 right
 //
 // It takes player 1 unless a real gamepad already has it.
 

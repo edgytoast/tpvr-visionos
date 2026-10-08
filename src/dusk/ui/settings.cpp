@@ -1191,8 +1191,8 @@ SettingsWindow::SettingsWindow(bool prelaunch) : mPrelaunch(prelaunch) {
         leftPane.add_section("Combat");
         // Dominant hand. Stored as vrSwapSwordShieldHands (true = sword in the right
         // hand), so a value saved under the old "Swap Sword/Shield Hands" toggle carries
-        // over. The buttons don't move: attack and the sword swing share the right
-        // controller, raise-shield and the shield bash the left.
+        // over. The buttons don't move (attack on the right controller, raise-shield on the
+        // left); the sword swing and the shield bash follow the hands holding them.
         leftPane.register_control(
             leftPane.add_select_button({
                 .key = "Sword Hand",
