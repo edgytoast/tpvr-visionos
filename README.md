@@ -39,8 +39,8 @@ bring the game, you build the app, Hyrule does the rest. It's listed in the
   - **Progressive**: a portal into Hyrule that the Digital Crown widens and narrows.
   - **Window**: the GameCube game in third person, in a window beside your other apps. The game's
     own 3D scene is rebuilt behind the glass every frame and rendered from wherever your eyes
-    actually are, so you can lean in and look around. The HUD sits on the glass, and the game's
-    bloom, mist and fades are laid over the scene.
+    actually are, so you can lean in and look around. The HUD sits on the glass, with the game's
+    fades and letterbox bars; its bloom and mist aren't drawn in this view.
 - **Your hands are Link's hands.** PS VR2 Sense controllers put the sword and shield where yours
   are. No controller? In Full and Progressive, play with your bare hands. A DualSense, Xbox or
   other gamepad works too.
@@ -61,8 +61,7 @@ bring the game, you build the app, Hyrule does the rest. It's listed in the
 
 ## What you'll need
 
-- **A headset:** Apple Vision Pro. It's tested on visionOS 27; Sense controllers and Progressive
-  need visionOS 26 or later.
+- **A headset:** Apple Vision Pro with visionOS 26 or later. It's tested on visionOS 27.
 - **A Mac** with Apple silicon and Xcode at `/Applications/Xcode.app` (a path with a space in it
   trips up CMake), with its visionOS platform installed. Built and tested with Xcode 27 on macOS 27.
 - **Some tools:** [Homebrew](https://brew.sh), then:

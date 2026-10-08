@@ -22,8 +22,8 @@ yourself with Xcode and install it on your own headset.
 - **Xcode with the visionOS SDK**, installed at `/Applications/Xcode.app` (the path must not contain
   a space). Built and tested with Xcode 27 on macOS 27.
 - **Homebrew**, from https://brew.sh.
-- **Apple Vision Pro** with Developer Mode on, paired with your Mac (below). Tested on visionOS 27;
-  Sense controllers and Progressive need visionOS 26 or later.
+- **Apple Vision Pro** with visionOS 26 or later, Developer Mode on, paired with your Mac (below).
+  Tested on visionOS 27.
 - **An Apple ID signed in to Xcode** (Xcode > Settings > Accounts). The app asks for the
   increased-memory-limit entitlement. It has been built with a paid Apple Developer Program team;
   whether a free personal team can sign it is untested.
@@ -122,7 +122,7 @@ the saves out to keep your own backup; deleting the app deletes them.
 ### Known issues
 
 - Window mode is newer than the immersive modes: characters look a little flatter and darker
-  than in the game, and strong bloom can wash them out.
+  than in the game, and the game's bloom and mist aren't drawn in it.
 - The first build takes up to an hour (it compiles Dawn); later builds take minutes.
 
 ## Troubleshooting
