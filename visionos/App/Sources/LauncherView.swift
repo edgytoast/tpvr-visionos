@@ -635,7 +635,7 @@ struct LauncherView: View {
             .init("Dawn, SDL, nod and SMAA", "Do a lot of the heavy lifting."),
         ],
         notices: [
-            .init("This repository: CC0", "Trevorbilt's code for the port, Dusklight, the decompilation and TPVR are dedicated to the public domain. The exceptions are GPL-3.0-or-later: the OpenXR provider, and three files adapted from WiiCompiled Vision (build-dawn-visionos.sh, visionos_host.mm and GameModel.swift), each marked at its top.",
+            .init("This repository: CC0", "Trevorbilt's code for the port, Dusklight, the decompilation and TPVR are dedicated to the public domain. The exceptions are GPL-3.0-or-later: the OpenXR provider, and five files adapted from WiiCompiled Vision (build-dawn-visionos.sh, visionos_host.h, visionos_host.mm, GameModel.swift and ImmersiveGame.swift), each marked at its top.",
                   URL(string: "https://github.com/\(repository)/blob/visionos/LICENSE.md")),
             .init("This app: GPL-3.0", BuildInfo.current.dirty
                   ? "It links the visionOS OpenXR provider, which is GPL-3.0-or-later, so the app is GPL-3.0. This is a development build: its source is the copy it was built from, and the repository has the released ones."

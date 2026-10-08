@@ -255,9 +255,10 @@ the port's other changes) are dedicated to the public domain. The exceptions are
 
 - the vendored OpenXR provider, Trevorbilt's changes to it included
   ([visionos/openxr-provider/](visionos/openxr-provider/README.md));
-- three files adapted from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR), each
-  marked at its top: `visionos/scripts/build-dawn-visionos.sh`, `src/dusk/visionos/visionos_host.mm`
-  and `visionos/App/Sources/GameModel.swift`.
+- five files adapted from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR), each
+  marked at its top: `visionos/scripts/build-dawn-visionos.sh`, `src/dusk/visionos/visionos_host.h`,
+  `src/dusk/visionos/visionos_host.mm`, `visionos/App/Sources/GameModel.swift` and
+  `visionos/App/Sources/ImmersiveGame.swift`.
 
 The app links the provider, so the built app is GPL-3.0. None of that covers:
 

@@ -163,5 +163,5 @@ More detail on the design, the test hooks and what has been verified is in
 - The visionOS OpenXR provider from [WiiCompiled Vision](https://github.com/iChris4/Wiicompiled_VR)
   (GPL-3.0-or-later), so the built app is GPL-3.0.
 
-Twilight Princess is Nintendo's. This project isn't affiliated with or endorsed by Nintendo. The app
-includes nothing from the game, and the repository only screenshots of it.
+Twilight Princess is Nintendo's. This project isn't affiliated with or endorsed by Nintendo. None of
+the game's files are in the app or the repository, which has only screenshots of it.

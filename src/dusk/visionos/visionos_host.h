@@ -1,5 +1,11 @@
 #pragma once
 
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Adapted from WiiCompiled Vision's runtime/include/platform/visionos/visionos_host.h
+// (iChris4/Wiicompiled_VR, branch vision-pro), GPL-3.0-or-later. Modified by Trevorbilt, 2026,
+// for Twilight Princess VR.
+
 // The bridge between the Apple Vision Pro app (visionos/App) and the game.
 //
 // On visionOS the game is a framework (DusklightGame.framework) the SwiftUI app

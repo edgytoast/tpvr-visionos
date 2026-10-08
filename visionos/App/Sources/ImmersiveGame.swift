@@ -1,3 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Adapted from WiiCompiled Vision's visionos/App/ImmersiveGameView.swift (iChris4/Wiicompiled_VR,
+// branch vision-pro), GPL-3.0-or-later. Modified by Trevorbilt, 2026, for Twilight Princess VR.
+
 import CompositorServices
 import SwiftUI
 
