@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- TPVR's icon: Midna's helmet, drawn for this port (flat, in the visionOS app icon's style). -->
+  <defs>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9aa0ab"/>
+      <stop offset="1" stop-color="#5d636e"/>
+    </linearGradient>
+    <linearGradient id="horn" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a9a4e6"/>
+      <stop offset="1" stop-color="#5a55a3"/>
+    </linearGradient>
+    <linearGradient id="flame" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#f08a24"/>
+      <stop offset="0.65" stop-color="#f7cf3c"/>
+      <stop offset="1" stop-color="#ee6aa6"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#eef0f4"/>
+      <stop offset="1" stop-color="#b8bfca"/>
+    </linearGradient>
+  </defs>
+  <g stroke-linejoin="round" stroke-linecap="round">
+    <!-- horns, outline then fill -->
+    <g fill="none" stroke="#141018" stroke-width="96">
+      <path d="M392 360 C 300 300, 250 230, 268 150 C 280 100, 340 92, 352 132 C 362 168, 320 178, 312 156"/>
+      <path d="M632 360 C 724 300, 774 230, 756 150 C 744 100, 684 92, 672 132 C 662 168, 704 178, 712 156"/>
+    </g>
+    <g fill="none" stroke="url(#horn)" stroke-width="66">
+      <path d="M392 360 C 300 300, 250 230, 268 150 C 280 100, 340 92, 352 132 C 362 168, 320 178, 312 156"/>
+      <path d="M632 360 C 724 300, 774 230, 756 150 C 744 100, 684 92, 672 132 C 662 168, 704 178, 712 156"/>
+    </g>
+    <!-- the crest -->
+    <g stroke="#141018" stroke-width="12" fill="url(#flame)">
+      <path d="M512 330 C 470 270, 486 200, 512 160 C 538 200, 554 270, 512 330 Z"/>
+      <path d="M470 338 C 410 300, 400 236, 414 196 C 452 222, 488 276, 470 338 Z"/>
+      <path d="M554 338 C 614 300, 624 236, 610 196 C 572 222, 536 276, 554 338 Z"/>
+      <path d="M432 350 C 372 330, 344 280, 344 244 C 388 256, 428 296, 432 350 Z"/>
+      <path d="M592 350 C 652 330, 680 280, 680 244 C 636 256, 596 296, 592 350 Z"/>
+    </g>
+    <!-- side fins -->
+    <g stroke="#141018" stroke-width="12">
+      <path d="M262 690 C 200 676, 150 640, 128 596 C 196 588, 252 610, 300 650 Z" fill="#141018"/>
+      <path d="M762 690 C 824 676, 874 640, 896 596 C 828 588, 772 610, 724 650 Z" fill="#141018"/>
+    </g>
+    <g fill="none" stroke="#f39a1e" stroke-width="7">
+      <path d="M270 672 C 220 656, 180 632, 158 606 M262 672 C 230 640, 214 626, 196 604 M268 676 C 238 676, 196 664, 168 640"/>
+      <path d="M754 672 C 804 656, 844 632, 866 606 M762 672 C 794 640, 810 626, 828 604 M756 676 C 786 676, 828 664, 856 640"/>
+    </g>
+    <!-- the face under the helmet -->
+    <path d="M300 640 C 300 760, 400 850, 512 850 C 624 850, 724 760, 724 640 Z" fill="url(#face)" stroke="#141018" stroke-width="16"/>
+    <path d="M430 748 C 470 782, 556 786, 600 744" fill="none" stroke="#141018" stroke-width="14"/>
+    <path d="M574 762 L 590 802 L 604 756 Z" fill="#ffffff" stroke="#141018" stroke-width="7"/>
+    <!-- the helmet -->
+    <path d="M512 318 C 650 318, 760 410, 760 540 C 760 610, 740 660, 712 690 L 312 690 C 284 660, 264 610, 264 540 C 264 410, 374 318, 512 318 Z"
+          fill="url(#stone)" stroke="#141018" stroke-width="16"/>
+    <!-- its gold band and spiral -->
+    <path d="M520 336 C 640 360, 716 470, 690 600 C 676 650, 640 682, 612 690 C 650 620, 652 520, 600 450 C 570 410, 532 392, 504 390 Z"
+          fill="#f2a12a" stroke="#141018" stroke-width="10"/>
+    <path d="M626 458 C 666 470, 676 520, 646 540 C 620 556, 594 536, 604 512 C 612 494, 634 500, 630 514"
+          fill="none" stroke="#3b3f47" stroke-width="10"/>
+    <path d="M320 470 C 360 440, 410 446, 440 470 M300 560 C 340 540, 380 548, 400 566" fill="none" stroke="#4a4f58" stroke-width="9"/>
+    <!-- the shadow over her eye, and the eye -->
+    <path d="M360 520 C 360 470, 420 448, 470 470 C 520 450, 560 500, 540 540 C 570 580, 540 640, 488 630 C 450 668, 380 650, 382 604 C 344 590, 340 540, 360 520 Z"
+          fill="#141018"/>
+    <circle cx="560" cy="460" r="13" fill="#141018"/>
+    <circle cx="336" cy="610" r="11" fill="#141018"/>
+    <circle cx="578" cy="604" r="9" fill="#141018"/>
+    <ellipse cx="456" cy="552" rx="54" ry="40" fill="#fff4cf" stroke="#141018" stroke-width="8"/>
+    <circle cx="456" cy="552" r="30" fill="#f6b52e"/>
+    <circle cx="456" cy="552" r="15" fill="#c2185b"/>
+    <circle cx="446" cy="542" r="6" fill="#ffffff"/>
+  </g>
+</svg>
