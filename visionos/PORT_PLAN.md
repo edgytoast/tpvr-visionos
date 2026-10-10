@@ -182,6 +182,34 @@ owns the swapchain images and Dawn imports them.
       Ordon Ranch with a goat beside the camera). `minViewTangent` (0.7) doesn't come into it: TP's
       gameplay cameras are 0.72 wide (0.71 indoors), and it squashes depth linearly, which bends
       nothing.
+- [x] The window's lighting as the game's (2026-10-10, Trevor: "the lighting is clearly much
+      better in the actual 2D game... like shaders/RTX turned off"). Three gaps, against the
+      game's own frames from the same game frame (TPVR_TEST_DUMP_AT):
+      - The game's screen effects, above all its bloom (Link's house: a golden haze, the hearth and
+        the rug's edges glowing), had been left out since their layer ghosted (ab572f40eb). Now
+        the mirror's materials take them where each surface is in the camera's picture: a 512x384
+        layer (WindowGlow, from the pictures before and after the effects, as the old layer was;
+        reaching 25% past the view and fading out there), read through the surface's own position
+        (ShaderGraph Position, object space = the mirror's view space) and the view's tangents
+        (a 1x1 Constants texture). Nothing floats off the surfaces, so from the side a glow stays
+        on what it lit. Where a channel was already white the glow can't be seen in it; such a
+        channel takes the next one's glow, or the floor beside a red-saturated rug went green
+        from the side. The fade moved into this layer with them.
+      - TP's terrain multiplies its sunlit texture by a cloud-shadow texture projected from the
+        vertices' positions (texmtx 33), times four. As its average the ground was evenly lit and
+        greener; it's now read at each vertex (filtered to 32 texels a side, so each vertex reads
+        the area around it).
+      - The TEV's clamps were fitted as the line through T = 0 and 1; a stage that saturates
+        partway (the terrain's, times four) came out a fifth short in red. Now the line through
+        the clamped values a standard deviation either side of the texture's average.
+      Simulator, straight on (the window's mean colour against the game's frame): Ordon Ranch by
+      day (97, 84, 50) -> (114, 83, 49) against (114, 82, 51); the ranch at 18:00 a little warmer;
+      Link's house glows as the game's does. Offline, the ranch's ground against the game's picture
+      before its effects: red at 0.75-0.9 of the game's and green 1.1-1.24, now 0.99-1.03 in all
+      three. Cost: decoding up to ~6% more CPU on its workers (the per-vertex reads), finishing and
+      RealityKit's update unchanged, vertices unchanged; on the GPU a 512x384 compute pass a frame
+      and two more texture reads a pixel. Test switches: TPVR_TEST_WINDOW_GLOW=0,
+      AURORA_MIRROR_LOOKUPS=0, AURORA_MIRROR_CLAMP_ENDS=1.
 - [ ] Link comes out flatter and a little darker than the game draws him (his one-texture
       material is 4 (C1 + K0 (1 - ras) + T ras), ras lit by eight lights): the mirror lights per
       vertex, aurora can light per pixel. Strong bloom (the Lost Woods) then washes him out.

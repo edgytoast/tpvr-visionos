@@ -13,6 +13,15 @@
 #   colour  = rgb * (ColourBase + ColourAlpha * a)
 #   opacity = OpacityBase + OpacityAlpha * a + OpacityLuma * luma(rgb)
 #
+# Then the game's screen effects (bloom, its colour tints, a fade) at the surface's place in the
+# game camera's picture: Glow holds them as a premultiplied layer over that picture (WindowGlow,
+# GameWindowView), read where the surface's position (the mirror's view space, the mesh's own)
+# falls in the camera's view, whose half-view tangents Constants holds (times the layer's reach
+# past the view, as 1 / that, in r and g):
+#   colour = min(colour * (1 - glow.a) + glow.rgb, 1)     (a blend: + glow.rgb * opacity)
+# Straight on, the window matches the game's finished picture; from the side, each glow stays on
+# the surface the camera saw it on.
+#
 #   visionos/scripts/gen-mirror-materials.py
 import pathlib
 
@@ -85,11 +94,57 @@ def material(kind, wrapS, wrapT):
         node("Alpha", "ND_clamp_float", [
             f"float inputs:in.connect = {c('AlphaSum')}", "float inputs:low = 0", "float inputs:high = 1"],
             "float outputs:out"),
+        # Where the surface is in the game camera's picture: its view-space position over its depth,
+        # over the view's half-tangents, from -1..1 to the glow layer's 0..1 (v up from its bottom
+        # row, as RealityKit reads it; its top row is the picture's top).
+        node("Position", "ND_position_vector3", ['uniform string inputs:space = "object"'], "float3 outputs:out"),
+        node("PositionSplit", "ND_separate3_vector3", [f"float3 inputs:in.connect = {c('Position')}"],
+             "float outputs:outx\n            float outputs:outy\n            float outputs:outz"),
+        node("Depth", "ND_subtract_float", ["float inputs:in1 = 0", f"float inputs:in2.connect = {c('PositionSplit', 'outz')}"],
+             "float outputs:out"),
+        node("Constants", "ND_RealityKitTexture2D_vector4", [
+            f"asset inputs:file.connect = {i('Constants')}", "float2 inputs:texcoord = (0.5, 0.5)"], "float4 outputs:out"),
+        node("ConstantsSplit", "ND_separate4_vector4", [f"float4 inputs:in.connect = {c('Constants')}"], SPLIT4),
+        node("ScreenX", "ND_divide_float", [
+            f"float inputs:in1.connect = {c('PositionSplit', 'outx')}", f"float inputs:in2.connect = {c('Depth')}"],
+            "float outputs:out"),
+        node("ScreenY", "ND_divide_float", [
+            f"float inputs:in1.connect = {c('PositionSplit', 'outy')}", f"float inputs:in2.connect = {c('Depth')}"],
+            "float outputs:out"),
+        node("ViewX", "ND_multiply_float", [
+            f"float inputs:in1.connect = {c('ScreenX')}", f"float inputs:in2.connect = {c('ConstantsSplit', 'outx')}"],
+            "float outputs:out"),
+        node("ViewY", "ND_multiply_float", [
+            f"float inputs:in1.connect = {c('ScreenY')}", f"float inputs:in2.connect = {c('ConstantsSplit', 'outy')}"],
+            "float outputs:out"),
+        node("GlowUV", "ND_combine2_vector2", [
+            f"float inputs:in1.connect = {c('ViewX')}", f"float inputs:in2.connect = {c('ViewY')}"], "float2 outputs:out"),
+        node("GlowUVHalf", "ND_multiply_vector2FA", [
+            f"float2 inputs:in1.connect = {c('GlowUV')}", "float inputs:in2 = 0.5"], "float2 outputs:out"),
+        node("GlowTexcoord", "ND_add_vector2FA", [
+            f"float2 inputs:in1.connect = {c('GlowUVHalf')}", "float inputs:in2 = 0.5"], "float2 outputs:out"),
+        node("Glow", "ND_RealityKitTexture2D_vector4", [
+            f"asset inputs:file.connect = {i('Glow')}", f"float2 inputs:texcoord.connect = {c('GlowTexcoord')}",
+            "uniform bool inputs:no_flip_v = 1",
+            'string inputs:u_wrap_mode = "clamp_to_edge"', 'string inputs:v_wrap_mode = "clamp_to_edge"'],
+            "float4 outputs:out"),
+        node("GlowSplit", "ND_separate4_vector4", [f"float4 inputs:in.connect = {c('Glow')}"], SPLIT4),
+        combine3("GlowRGB", c("GlowSplit", "outx"), c("GlowSplit", "outy"), c("GlowSplit", "outz")),
+        node("GlowKeep", "ND_subtract_float", ["float inputs:in1 = 1", f"float inputs:in2.connect = {c('GlowSplit', 'outw')}"],
+             "float outputs:out"),
+        node("Kept", "ND_multiply_vector3FA", [
+            f"float3 inputs:in1.connect = {c('Linear')}", f"float inputs:in2.connect = {c('GlowKeep')}"], "float3 outputs:out"),
+        node("GlowAdded", "ND_add_vector3", [
+            f"float3 inputs:in1.connect = {c('Kept')}", f"float3 inputs:in2.connect = {c('GlowRGB')}"], "float3 outputs:out"),
+        # (The game's picture stops at white; past it, the window's would glare.)
+        node("Glowing", "ND_clamp_vector3FA", [
+            f"float3 inputs:in.connect = {c('GlowAdded')}", "float inputs:low = 0", "float inputs:high = 1"],
+            "float3 outputs:out"),
     ]
-    inputs = ["        asset inputs:Frame"]
+    inputs = ["        asset inputs:Frame", "        asset inputs:Glow", "        asset inputs:Constants"]
     surface = ["bool inputs:applyPostProcessToneMap = 0"]
     if kind == "Opaque":
-        nodes.append(node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Linear')}"], "color3f outputs:out"))
+        nodes.append(node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Glowing')}"], "color3f outputs:out"))
         surface.append(f"color3f inputs:color.connect = {c('RGB')}")
     elif kind == "Cutout":
         # An alpha test, as GX's: discarded below Cutoff, fully opaque at or above it. Passed straight
@@ -97,7 +152,7 @@ def material(kind, wrapS, wrapT):
         # carry alpha that isn't transparency): opacity is made 0 or 1 first.
         inputs.append("        float inputs:Cutoff = 0.5")
         nodes += [
-            node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Linear')}"], "color3f outputs:out"),
+            node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Glowing')}"], "color3f outputs:out"),
             node("AboveCutoff", "ND_subtract_float", [
                 f"float inputs:in1.connect = {c('Alpha')}", f"float inputs:in2.connect = {i('Cutoff')}"], "float outputs:out"),
             node("Sharpened", "ND_multiply_float", [
@@ -127,7 +182,17 @@ def material(kind, wrapS, wrapT):
             node("Weighted", "ND_multiply_vector3FA", [
                 f"float3 inputs:in1.connect = {c('Linear')}", f"float inputs:in2.connect = {c('ColourWeight')}"],
                 "float3 outputs:out"),
-            node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('Weighted')}"], "color3f outputs:out"),
+            # Over what's behind, the glow is in proportion to how much of it this layer hides.
+            node("WeightedKept", "ND_multiply_vector3FA", [
+                f"float3 inputs:in1.connect = {c('Weighted')}", f"float inputs:in2.connect = {c('GlowKeep')}"],
+                "float3 outputs:out"),
+            node("GlowCovered", "ND_multiply_vector3FA", [
+                f"float3 inputs:in1.connect = {c('GlowRGB')}", f"float inputs:in2.connect = {c('Opacity')}"],
+                "float3 outputs:out"),
+            node("WeightedGlowing", "ND_add_vector3", [
+                f"float3 inputs:in1.connect = {c('WeightedKept')}", f"float3 inputs:in2.connect = {c('GlowCovered')}"],
+                "float3 outputs:out"),
+            node("RGB", "ND_convert_vector3_color3", [f"float3 inputs:in.connect = {c('WeightedGlowing')}"], "color3f outputs:out"),
             node("OpacityFromAlpha", "ND_multiply_float", [
                 f"float inputs:in1.connect = {c('Alpha')}", f"float inputs:in2.connect = {i('OpacityAlpha')}"],
                 "float outputs:out"),

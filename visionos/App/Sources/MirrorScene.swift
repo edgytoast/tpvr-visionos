@@ -93,6 +93,16 @@ final class MirrorScene {
     private var parkedSet: Set<UInt64> = []
     private static let parkedBudget = 48 << 20
     private var white: TextureResource?
+    // The game's screen effects over its picture (bloom, its tints, a fade), as a premultiplied layer
+    // every material reads where its surface is in the camera's view (gen-mirror-materials.py), and
+    // that view's half-tangents times glowReach (as 1 / that, in r and g): the layer reaches that far
+    // past the view. GameScreen writes it each frame (Pipelines.glow); a fixed size, so the
+    // materials keep it whatever the game's resolution.
+    private let glow: (texture: LowLevelTexture, resource: TextureResource)
+    private let constants: (texture: LowLevelTexture, resource: TextureResource)
+    private var constantsValue = SIMD2<Float>(-1, -1)
+    static let glowSize = SIMD2(512, 384)
+    static let glowReach: Float = 1.25
     private var materials: [MaterialKey: ShaderGraphMaterial] = [:]
     // The entity's material list, which the parts index; it grows as materials appear, and is set
     // again only then (setting it may cost RealityKit's renderer a frame).
@@ -156,6 +166,12 @@ final class MirrorScene {
             print("[TPVR] mirror: clamped and mirrored texture materials failed to load, so they repeat: \(error)")
         }
         white = Self.makeTexture(queue: queue, pixels: [255, 255, 255, 255], width: 1, height: 1)
+        let glowTexture = try LowLevelTexture(descriptor: .init(pixelFormat: .bgra8Unorm_srgb, width: Self.glowSize.x,
+                                                                height: Self.glowSize.y, textureUsage: [.shaderRead, .shaderWrite]))
+        glow = (glowTexture, try await TextureResource(from: glowTexture))
+        let constantsTexture = try LowLevelTexture(descriptor: .init(pixelFormat: .rgba16Float, width: 1, height: 1,
+                                                                     textureUsage: [.shaderRead, .shaderWrite]))
+        constants = (constantsTexture, try await TextureResource(from: constantsTexture))
         entity.isEnabled = false
         root.addChild(entity)
         backdrop.isEnabled = false
@@ -294,12 +310,32 @@ final class MirrorScene {
         self.plane = plane
         self.depthScale = depthScale
         let scale = 1 / (2 * plane * tan)
+        // The glow layer reaches past the view by glowReach (Pipelines' GlowReach).
+        setConstants(SIMD2(1 / tan, 1 / max(frame.tan_half_y, 1e-3)) / Self.glowReach)
         root.scale = SIMD3(scale, scale, scale * depthScale)
         root.position = [0, 0, scale * depthScale * plane]
         let far = max(-frame.bounds_min.2, plane) * 1.05
         let wide = 2 * far * max(tan, ReliefParams.minViewTangent) * 8
         backdrop.position = [0, 0, -far]
         backdrop.scale = [wide, wide, 1]
+    }
+
+    /// The layer GameScreen writes the game's screen effects into this frame (Pipelines.glow).
+    func glowTarget(using commands: MTLCommandBuffer) -> MTLTexture {
+        glow.texture.replace(using: commands)
+    }
+
+    /// The camera view's half-tangents for the materials (as 1 / tan), when they change.
+    private func setConstants(_ value: SIMD2<Float>) {
+        guard value != constantsValue, let commands = queue.makeCommandBuffer(),
+              let staging = queue.device.makeBuffer(bytes: [Float16(value.x), Float16(value.y), 0, 0], length: 8),
+              let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: staging, sourceOffset: 0, sourceBytesPerRow: 8, sourceBytesPerImage: 8,
+                  sourceSize: MTLSize(width: 1, height: 1, depth: 1), to: constants.texture.replace(using: commands),
+                  destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin())
+        blit.endEncoding()
+        commands.commit()
+        constantsValue = value
     }
 
     // MARK: - The mesh
@@ -588,6 +624,8 @@ final class MirrorScene {
         let kind = key.kind == DUSK_MIRROR_PART_CUTOUT ? "Cutout" : key.kind == DUSK_MIRROR_PART_BLEND ? "Blend" : "Opaque"
         guard var made = templates[kind + key.wrap] ?? templates[kind + "RR"] else { return nil }
         try? made.setParameter(name: "Frame", value: .textureResource(texture))
+        try? made.setParameter(name: "Glow", value: .textureResource(glow.resource))
+        try? made.setParameter(name: "Constants", value: .textureResource(constants.resource))
         switch key.kind {
         case DUSK_MIRROR_PART_CUTOUT:
             try? made.setParameter(name: "Cutoff", value: .float(Float(max(key.cutoff, 1)) / 255))

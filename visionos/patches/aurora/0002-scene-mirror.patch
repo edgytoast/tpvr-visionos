@@ -276,10 +276,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..79a96af
+index 0000000..829abb7
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,3101 @@
+@@ -0,0 +1,3303 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -435,6 +435,7 @@ index 0000000..79a96af
 +
 +struct TevContext {
 +  std::array<float, 4> primaryAverage{0.5f, 0.5f, 0.5f, 1.f};
++  std::array<float, 4> primarySpread{0.25f, 0.25f, 0.25f, 0.25f}; // its texels' standard deviation
 +};
 +
 +// What's behind a surface, on average.
@@ -481,10 +482,30 @@ index 0000000..79a96af
 +  }
 +  return scaled(a, average_of(ctx, b));
 +}
-+// Clamped over the unknowns from 0 to 1: the line through the clamped ends.
-+Sym clamped(Sym a, float low, float high) {
++// Clamped, as a line again. With T alone unknown, the line through the clamped values a spread
++// either side of T's average, where most of its texels are: a stage that saturates partway along
++// T (TP's terrain, four times its lit texture, clamped) is then right for the texels it shows
++// most. Through the clamped ends (T 0 and 1) instead, the saturated half pulled the whole line
++// down, and the ranch's sunlit ground came out a fifth short of its red. With B, through the ends.
++// Test runs: AURORA_MIRROR_CLAMP_ENDS=1 takes every line through the ends again.
++const bool kClampEnds = [] {
++  const char* value = std::getenv("AURORA_MIRROR_CLAMP_ENDS");
++  return value != nullptr && std::strcmp(value, "1") == 0;
++}();
++Sym clamped(const TevContext& ctx, Sym a, float low, float high) {
 +  if (is_constant(a)) {
 +    return constant(std::clamp(a.c, low, high));
++  }
++  if (a.sel >= 0 && a.bsel < 0 && !kClampEnds) {
++    const float mean = ctx.primaryAverage[a.sel], spread = std::clamp(ctx.primarySpread[a.sel], 0.05f, 0.5f);
++    const float t0 = std::max(0.f, mean - spread), t1 = std::min(1.f, mean + spread);
++    if (t1 - t0 > 1e-3f) {
++      const float at0 = std::clamp(a.c + a.k * t0, low, high), at1 = std::clamp(a.c + a.k * t1, low, high);
++      const float k = (at1 - at0) / (t1 - t0);
++      a.c = at0 - k * t0;
++      a.k = k;
++      return a;
++    }
 +  }
 +  const float k = a.sel >= 0 ? a.k : 0.f, kb = a.bsel >= 0 ? a.kb : 0.f, total = k + kb;
 +  const float at0 = std::clamp(a.c, low, high), at1 = std::clamp(a.c + total, low, high);
@@ -527,7 +548,7 @@ index 0000000..79a96af
 +    result.c += tev_bias(op.bias);
 +    result = scaled(result, tev_scale(op.scale));
 +  }
-+  return op.clamp ? clamped(result, 0.f, 1.f) : clamped(result, -4.f, 4.f);
++  return op.clamp ? clamped(ctx, result, 0.f, 1.f) : clamped(ctx, result, -4.f, 4.f);
 +}
 +
 +float konst_colour(GXTevKColorSel sel, int channel) {
@@ -647,6 +668,7 @@ index 0000000..79a96af
 +  bool ok = false; // decoded: otherwise drawn white
 +  bool captured = false; // a framebuffer copy read back from the GPU each frame (capture_entry)
 +  std::array<float, 4> average{0.5f, 0.5f, 0.5f, 1.f};
++  std::array<float, 4> spread{0.25f, 0.25f, 0.25f, 0.25f}; // per channel, the texels' standard deviation
 +  bool cutout = false;
 +  bool mipmapped = false;
 +  uint32_t lastFrame = 0;
@@ -874,15 +896,18 @@ index 0000000..79a96af
 +    if (entry.id == 0) {
 +      entry.id = g_nextTextureId++;
 +    }
-+    double sum[4] = {0, 0, 0, 0};
++    double sum[4] = {0, 0, 0, 0}, squares[4] = {0, 0, 0, 0};
 +    for (size_t i = 0; i < rgba.size(); i += 4) {
 +      for (int c = 0; c < 4; ++c) {
 +        sum[c] += rgba[i + c];
++        squares[c] += static_cast<double>(rgba[i + c]) * rgba[i + c];
 +      }
 +    }
 +    const double texels = static_cast<double>(rgba.size() / 4);
 +    for (int c = 0; c < 4; ++c) {
-+      entry.average[c] = static_cast<float>(sum[c] / texels / 255.0);
++      const double mean = sum[c] / texels;
++      entry.average[c] = static_cast<float>(mean / 255.0);
++      entry.spread[c] = static_cast<float>(std::sqrt(std::max(0.0, squares[c] / texels - mean * mean)) / 255.0);
 +    }
 +    entry.cutout = binary_alpha(rgba);
 +    g_newTextures.push_back({entry.id, std::move(rgba), obj.width(), obj.height(), entry.mipmapped, entry.cutout});
@@ -934,7 +959,22 @@ index 0000000..79a96af
 +  return id;
 +}
 +
++// Textures read at each vertex: a second texture a draw projects onto the scene from the vertices'
++// positions (TP's cloud shadows drifting over the ground, a level's light maps). As its average, the
++// ground was evenly lit everywhere: the shadows' darker patches and the warmer colour they give the
++// ground (TP's terrain mixes its sunlit colour and its shade colour by that texture, times four)
++// were gone. Read at each vertex it comes back at the scale of the level's triangles: so it's
++// filtered down first (to at most kLookupSize texels a side), each vertex reading the area around
++// it rather than one texel of a pattern finer than the triangles. By texture id, decoded once.
++struct LookupPixels {
++  std::vector<float> rgba; // 0..1
++  uint32_t width = 0, height = 0;
++};
++std::unordered_map<uint64_t, std::shared_ptr<const LookupPixels>> g_lookupPixels; // FIFO thread
++constexpr uint32_t kLookupMaxTexels = 256 * 256, kLookupSize = 32;
++
 +void forget_textures() {
++  g_lookupPixels.clear();
 +  g_textures.clear();
 +  g_copySlots.clear();
 +  g_variants.clear();
@@ -970,11 +1010,89 @@ index 0000000..79a96af
 +          return true;
 +        });
 +      }
++      g_lookupPixels.erase(it->second.id);
 +      it = g_textures.erase(it);
 +    } else {
 +      ++it;
 +    }
 +  }
++}
++
++// A projected texture's pixels, filtered down (LookupPixels), or null for one too big to read here.
++std::shared_ptr<const LookupPixels> lookup_pixels(const TexEntry& entry, const GXTexObj_& obj) {
++  if (!entry.ok || entry.captured || obj.width() * obj.height() > kLookupMaxTexels) {
++    return nullptr;
++  }
++  if (auto found = g_lookupPixels.find(entry.id); found != g_lookupPixels.end()) {
++    return found->second;
++  }
++  const std::vector<uint8_t> rgba = decode(obj, palette_of(obj));
++  const uint32_t width = obj.width(), height = obj.height();
++  if (width == 0 || height == 0 || rgba.size() < static_cast<size_t>(width) * height * 4) {
++    return nullptr;
++  }
++  auto pixels = std::make_shared<LookupPixels>();
++  const uint32_t stepX = std::max(1u, width / kLookupSize), stepY = std::max(1u, height / kLookupSize);
++  pixels->width = width / stepX;
++  pixels->height = height / stepY;
++  pixels->rgba.assign(static_cast<size_t>(pixels->width) * pixels->height * 4, 0.f);
++  const float weight = 1.f / (255.f * static_cast<float>(stepX * stepY));
++  for (uint32_t y = 0; y < pixels->height * stepY; ++y) {
++    for (uint32_t x = 0; x < pixels->width * stepX; ++x) {
++      const uint8_t* texel = &rgba[(static_cast<size_t>(y) * width + x) * 4];
++      float* out = &pixels->rgba[(static_cast<size_t>(y / stepY) * pixels->width + x / stepX) * 4];
++      for (int c = 0; c < 4; ++c) {
++        out[c] += weight * static_cast<float>(texel[c]);
++      }
++    }
++  }
++  if (g_lookupPixels.size() >= 512) {
++    g_lookupPixels.clear(); // (draws in flight hold their own references)
++  }
++  g_lookupPixels.emplace(entry.id, pixels);
++  return pixels;
++}
++
++// GX's wrap of texel index i in n texels.
++int wrap_texel(int i, int n, int mode) {
++  if (mode == GX_REPEAT) {
++    i %= n;
++    return i < 0 ? i + n : i;
++  }
++  if (mode == GX_MIRROR) {
++    const int period = 2 * n;
++    i %= period;
++    if (i < 0) {
++      i += period;
++    }
++    return i < n ? i : period - 1 - i;
++  }
++  return std::clamp(i, 0, n - 1);
++}
++
++// The filtered texture at (u, v), bilinearly, 0..1 per channel.
++std::array<float, 4> sample_lookup(const LookupPixels& p, float u, float v, int wrapS, int wrapT) {
++  if (!std::isfinite(u) || !std::isfinite(v)) {
++    return {0.5f, 0.5f, 0.5f, 1.f};
++  }
++  const float x = std::clamp(u, -1e6f, 1e6f) * static_cast<float>(p.width) - 0.5f;
++  const float y = std::clamp(v, -1e6f, 1e6f) * static_cast<float>(p.height) - 0.5f;
++  const float fx0 = std::floor(x), fy0 = std::floor(y), fx = x - fx0, fy = y - fy0;
++  const int x0 = static_cast<int>(fx0), y0 = static_cast<int>(fy0);
++  const int w = static_cast<int>(p.width), h = static_cast<int>(p.height);
++  const int xs[2] = {wrap_texel(x0, w, wrapS), wrap_texel(x0 + 1, w, wrapS)};
++  const int ys[2] = {wrap_texel(y0, h, wrapT), wrap_texel(y0 + 1, h, wrapT)};
++  const float wx[2] = {1.f - fx, fx}, wy[2] = {1.f - fy, fy};
++  std::array<float, 4> out{0.f, 0.f, 0.f, 0.f};
++  for (int j = 0; j < 2; ++j) {
++    for (int i = 0; i < 2; ++i) {
++      const float* texel = &p.rgba[(static_cast<size_t>(ys[j]) * p.width + xs[i]) * 4];
++      for (int c = 0; c < 4; ++c) {
++        out[c] += wx[i] * wy[j] * texel[c];
++      }
++    }
++  }
++  return out;
 +}
 +
 +// --- Vertices.
@@ -1242,6 +1360,7 @@ index 0000000..79a96af
 +    entry.ok = true;
 +    entry.captured = true;
 +    entry.average = {0.f, 0.f, 0.f, 0.5f};
++    entry.spread = {0.5f, 0.5f, 0.5f, 0.5f}; // a mask: all or nothing
 +    slot.variants.emplace_back();
 +  }
 +  *handle = copy->second.handle;
@@ -1508,7 +1627,21 @@ index 0000000..79a96af
 +  TevContext ctx;
 +  // Per stage: its konst colour and alpha.
 +  std::array<std::array<float, 4>, MaxTevStages> konst{};
++  // Textures read at each vertex (LookupPixels), by map: the coordinate each is read with, its wraps.
++  struct Lookup {
++    std::shared_ptr<const LookupPixels> pixels;
++    int coord = -1;
++    int wrapS = 0, wrapT = 0;
++  };
++  std::array<Lookup, MaxTextures> lookups{};
++  bool anyLookup = false;
 +};
++
++// Test runs: AURORA_MIRROR_LOOKUPS=0 averages the projected textures again (LookupPixels).
++const bool kLookups = [] {
++  const char* value = std::getenv("AURORA_MIRROR_LOOKUPS");
++  return value == nullptr || std::strcmp(value, "0") != 0;
++}();
 +
 +// Which texture the mirror keeps, the others' averages, and a framebuffer copy it samples.
 +// How much a texture shows of what a draw looks like, to pick the one the mirror keeps: a colour
@@ -1581,6 +1714,33 @@ index 0000000..79a96af
 +  }
 +  if (plan.primary != nullptr) {
 +    plan.ctx.primaryAverage = plan.primary->average;
++    plan.ctx.primarySpread = plan.primary->spread;
++  }
++  // The other textures projected from the vertices' positions are read at each vertex.
++  for (u32 i = 0; i < config.tevStageCount && kLookups; ++i) {
++    const TevStage& stage = config.tevStages[i];
++    if (!samples_texture(stage) || stage.texMapId >= MaxTextures ||
++        static_cast<int>(stage.texMapId) == plan.primaryMap || stage.texCoordId >= MaxTexCoord ||
++        config.tcgs[stage.texCoordId].src != GX_TG_POS) {
++      continue;
++    }
++    auto& lookup = plan.lookups[stage.texMapId];
++    if (lookup.pixels) {
++      continue;
++    }
++    const auto& obj = g_gxState.loadedTextures[stage.texMapId];
++    const TexEntry* entry = texture_entry(obj);
++    if (entry == nullptr || !entry->ok) {
++      continue;
++    }
++    lookup.pixels = lookup_pixels(*entry, obj);
++    if (!lookup.pixels) {
++      continue;
++    }
++    lookup.coord = stage.texCoordId;
++    lookup.wrapS = static_cast<int>(obj.wrap_s());
++    lookup.wrapT = static_cast<int>(obj.wrap_t());
++    plan.anyLookup = true;
 +  }
 +  for (u32 i = 0; i < std::min<u32>(config.tevStageCount, MaxTevStages); ++i) {
 +    const TevStage& stage = config.tevStages[i];
@@ -1921,8 +2081,9 @@ index 0000000..79a96af
 +  }
 +}
 +
-+// The TEV stages with T (and B) unknown, from a vertex's colour channels.
-+std::array<Sym, 4> run_tev(const DrawJob& job, const F4 raster[2]) {
++// The TEV stages with T (and B) unknown, from a vertex's colour channels and (`lookups`, by map, or
++// null for their averages) its samples of the textures read at each vertex.
++std::array<Sym, 4> run_tev(const DrawJob& job, const F4 raster[2], const F4* lookups = nullptr) {
 +  const auto& config = job.config;
 +  const auto& plan = job.plan;
 +  const auto& stages = config.tevStages;
@@ -1950,6 +2111,10 @@ index 0000000..79a96af
 +      const int from = texChannel[channel];
 +      if (primaryStage) {
 +        return {static_cast<int8_t>(from), -1, 1.f, 0.f, 0.f};
++      }
++      if (lookups != nullptr && stage.texMapId < MaxTextures && plan.lookups[stage.texMapId].pixels &&
++          plan.lookups[stage.texMapId].coord == static_cast<int>(stage.texCoordId)) {
++        return constant(lookups[stage.texMapId][from]);
 +      }
 +      if (behindStage) {
 +        return {-1, static_cast<int8_t>(from), 0.f, 1.f, 0.f};
@@ -2060,7 +2225,20 @@ index 0000000..79a96af
 +  if (job.perVertex) {
 +    F4 raster[2];
 +    light(job, colours, view, normal, raster);
-+    result = run_tev(job, raster);
++    // Each texture read at each vertex, where this vertex's coordinate for it falls.
++    F4 lookups[MaxTextures];
++    if (plan.anyLookup) {
++      for (u32 m = 0; m < MaxTextures; ++m) {
++        const auto& lookup = plan.lookups[m];
++        if (lookup.pixels) {
++          const auto uv = tex_coord(st, decoder, config, lookup.coord, v, position,
++                                    F3{rawNormal[0], rawNormal[1], rawNormal[2]}, colours);
++          const auto texel = sample_lookup(*lookup.pixels, uv[0], uv[1], lookup.wrapS, lookup.wrapT);
++          lookups[m] = {{texel[0], texel[1], texel[2], texel[3]}};
++        }
++      }
++    }
++    result = run_tev(job, raster, plan.anyLookup ? lookups : nullptr);
 +  }
 +  const float fog = fog_at(st, view);
 +
@@ -2451,6 +2629,28 @@ index 0000000..79a96af
 +                          static_cast<int>(config.tcgs[i].src), static_cast<int>(config.tcgs[i].mtx),
 +                          static_cast<int>(config.tcgs[i].postMtx), config.tcgs[i].normalize ? " n" : "");
 +    }
++  }
++  // (=3 also: the channels' lighting, the lights, the konst and C0 colours and the fog.)
++  if (level >= 3) {
++    for (int c = 0; c < 2; ++c) {
++      const auto& cc = st.colorChannelConfig[c];
++      const auto& cs = st.colorChannelState[c];
++      text += fmt::format(" | ch{} attn{} diff{} amb {:.2f},{:.2f},{:.2f} mat {:.2f},{:.2f},{:.2f}", c,
++                          static_cast<int>(cc.attnFn), static_cast<int>(cc.diffFn), cs.ambColor[0], cs.ambColor[1],
++                          cs.ambColor[2], cs.matColor[0], cs.matColor[1], cs.matColor[2]);
++    }
++    for (u32 l = 0; l < GX::MaxLights; ++l) {
++      const auto& light = st.lights[l];
++      text += fmt::format(" | L{} pos {:.0f},{:.0f},{:.0f} dir {:.2f},{:.2f},{:.2f} col {:.2f},{:.2f},{:.2f} cos {:.3g},{:.3g},"
++                          "{:.3g} dist {:.3g},{:.3g},{:.3g}",
++                          l, light.pos[0], light.pos[1], light.pos[2], light.dir[0], light.dir[1], light.dir[2],
++                          light.color[0], light.color[1], light.color[2], light.cosAtt[0], light.cosAtt[1],
++                          light.cosAtt[2], light.distAtt[0], light.distAtt[1], light.distAtt[2]);
++    }
++    text += fmt::format(" | K0 {:.2f},{:.2f},{:.2f} K1 {:.2f},{:.2f},{:.2f} C0 {:.2f},{:.2f},{:.2f} fog {} {:.2f},{:.2f},{:.2f}",
++                        st.kcolors[0][0], st.kcolors[0][1], st.kcolors[0][2], st.kcolors[1][0], st.kcolors[1][1],
++                        st.kcolors[1][2], st.colorRegs[1][0], st.colorRegs[1][1], st.colorRegs[1][2],
++                        static_cast<int>(st.fog.type), st.fog.color[0], st.fog.color[1], st.fog.color[2]);
 +  }
 +  const uint64_t key = xxh3_hash_s(text.data(), text.size());
 +  if (seen.emplace(key, true).second) {
@@ -3204,8 +3404,10 @@ index 0000000..79a96af
 +  job.nearClip = std::max(1.f, std::fabs(1.f - proj.m2[2]) > 1e-9f ? -proj.m2[2] * far / (1.f - proj.m2[2]) : 1.f);
 +  job.kx = kClipMargin / proj.m0[0];
 +  job.ky = kClipMargin / proj.m1[1];
-+  // Without vertex colours or lighting, every vertex's TEV result is the same: run it once.
-+  job.perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE;
++  // Without vertex colours, lighting or textures read at each vertex, every vertex's TEV result is
++  // the same: run it once.
++  job.perVertex = config.attrs[GX_VA_CLR0].attrType != GX_NONE || config.attrs[GX_VA_CLR1].attrType != GX_NONE ||
++                  plan.anyLookup;
 +  for (int c = 0; c < 2; ++c) {
 +    job.perVertex = job.perVertex || (plan.rasterUsed[c] && (st.colorChannelConfig[c].lightingEnabled ||
 +                                                             st.colorChannelConfig[c + GX_ALPHA0].lightingEnabled));

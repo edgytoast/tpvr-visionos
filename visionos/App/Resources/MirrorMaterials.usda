@@ -12,6 +12,8 @@ def Xform "Root"
     def Material "MirrorOpaque_RR"
     {
         asset inputs:Frame
+        asset inputs:Glow
+        asset inputs:Constants
         token outputs:mtlx:surface.connect = </Root/MirrorOpaque_RR/Surface.outputs:out>
         token outputs:realitykit:vertex
 
@@ -220,10 +222,171 @@ def Xform "Root"
             float outputs:out
         }
 
+        def Shader "Position"
+        {
+            uniform token info:id = "ND_position_vector3"
+            uniform string inputs:space = "object"
+            float3 outputs:out
+        }
+
+        def Shader "PositionSplit"
+        {
+            uniform token info:id = "ND_separate3_vector3"
+            float3 inputs:in.connect = </Root/MirrorOpaque_RR/Position.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+        }
+
+        def Shader "Depth"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 0
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/PositionSplit.outputs:outz>
+            float outputs:out
+        }
+
+        def Shader "Constants"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorOpaque_RR.inputs:Constants>
+            float2 inputs:texcoord = (0.5, 0.5)
+            float4 outputs:out
+        }
+
+        def Shader "ConstantsSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorOpaque_RR/Constants.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "ScreenX"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/PositionSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ScreenY"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/PositionSplit.outputs:outy>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ViewX"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/ScreenX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/ConstantsSplit.outputs:outx>
+            float outputs:out
+        }
+
+        def Shader "ViewY"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/ScreenY.outputs:out>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/ConstantsSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "GlowUV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/ViewX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/ViewY.outputs:out>
+            float2 outputs:out
+        }
+
+        def Shader "GlowUVHalf"
+        {
+            uniform token info:id = "ND_multiply_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorOpaque_RR/GlowUV.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "GlowTexcoord"
+        {
+            uniform token info:id = "ND_add_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorOpaque_RR/GlowUVHalf.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "Glow"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorOpaque_RR.inputs:Glow>
+            float2 inputs:texcoord.connect = </Root/MirrorOpaque_RR/GlowTexcoord.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            string inputs:u_wrap_mode = "clamp_to_edge"
+            string inputs:v_wrap_mode = "clamp_to_edge"
+            float4 outputs:out
+        }
+
+        def Shader "GlowSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorOpaque_RR/Glow.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "GlowRGB"
+        {
+            uniform token info:id = "ND_combine3_vector3"
+            float inputs:in1.connect = </Root/MirrorOpaque_RR/GlowSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/GlowSplit.outputs:outy>
+            float inputs:in3.connect = </Root/MirrorOpaque_RR/GlowSplit.outputs:outz>
+            float3 outputs:out
+        }
+
+        def Shader "GlowKeep"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/GlowSplit.outputs:outw>
+            float outputs:out
+        }
+
+        def Shader "Kept"
+        {
+            uniform token info:id = "ND_multiply_vector3FA"
+            float3 inputs:in1.connect = </Root/MirrorOpaque_RR/Linear.outputs:out>
+            float inputs:in2.connect = </Root/MirrorOpaque_RR/GlowKeep.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "GlowAdded"
+        {
+            uniform token info:id = "ND_add_vector3"
+            float3 inputs:in1.connect = </Root/MirrorOpaque_RR/Kept.outputs:out>
+            float3 inputs:in2.connect = </Root/MirrorOpaque_RR/GlowRGB.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "Glowing"
+        {
+            uniform token info:id = "ND_clamp_vector3FA"
+            float3 inputs:in.connect = </Root/MirrorOpaque_RR/GlowAdded.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float3 outputs:out
+        }
+
         def Shader "RGB"
         {
             uniform token info:id = "ND_convert_vector3_color3"
-            float3 inputs:in.connect = </Root/MirrorOpaque_RR/Linear.outputs:out>
+            float3 inputs:in.connect = </Root/MirrorOpaque_RR/Glowing.outputs:out>
             color3f outputs:out
         }
     }
@@ -231,6 +394,8 @@ def Xform "Root"
     def Material "MirrorCutout_RR"
     {
         asset inputs:Frame
+        asset inputs:Glow
+        asset inputs:Constants
         float inputs:Cutoff = 0.5
         token outputs:mtlx:surface.connect = </Root/MirrorCutout_RR/Surface.outputs:out>
         token outputs:realitykit:vertex
@@ -442,10 +607,171 @@ def Xform "Root"
             float outputs:out
         }
 
+        def Shader "Position"
+        {
+            uniform token info:id = "ND_position_vector3"
+            uniform string inputs:space = "object"
+            float3 outputs:out
+        }
+
+        def Shader "PositionSplit"
+        {
+            uniform token info:id = "ND_separate3_vector3"
+            float3 inputs:in.connect = </Root/MirrorCutout_RR/Position.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+        }
+
+        def Shader "Depth"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 0
+            float inputs:in2.connect = </Root/MirrorCutout_RR/PositionSplit.outputs:outz>
+            float outputs:out
+        }
+
+        def Shader "Constants"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorCutout_RR.inputs:Constants>
+            float2 inputs:texcoord = (0.5, 0.5)
+            float4 outputs:out
+        }
+
+        def Shader "ConstantsSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorCutout_RR/Constants.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "ScreenX"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/PositionSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ScreenY"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/PositionSplit.outputs:outy>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ViewX"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/ScreenX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/ConstantsSplit.outputs:outx>
+            float outputs:out
+        }
+
+        def Shader "ViewY"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/ScreenY.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/ConstantsSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "GlowUV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/ViewX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/ViewY.outputs:out>
+            float2 outputs:out
+        }
+
+        def Shader "GlowUVHalf"
+        {
+            uniform token info:id = "ND_multiply_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorCutout_RR/GlowUV.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "GlowTexcoord"
+        {
+            uniform token info:id = "ND_add_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorCutout_RR/GlowUVHalf.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "Glow"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorCutout_RR.inputs:Glow>
+            float2 inputs:texcoord.connect = </Root/MirrorCutout_RR/GlowTexcoord.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            string inputs:u_wrap_mode = "clamp_to_edge"
+            string inputs:v_wrap_mode = "clamp_to_edge"
+            float4 outputs:out
+        }
+
+        def Shader "GlowSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorCutout_RR/Glow.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "GlowRGB"
+        {
+            uniform token info:id = "ND_combine3_vector3"
+            float inputs:in1.connect = </Root/MirrorCutout_RR/GlowSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/GlowSplit.outputs:outy>
+            float inputs:in3.connect = </Root/MirrorCutout_RR/GlowSplit.outputs:outz>
+            float3 outputs:out
+        }
+
+        def Shader "GlowKeep"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorCutout_RR/GlowSplit.outputs:outw>
+            float outputs:out
+        }
+
+        def Shader "Kept"
+        {
+            uniform token info:id = "ND_multiply_vector3FA"
+            float3 inputs:in1.connect = </Root/MirrorCutout_RR/Linear.outputs:out>
+            float inputs:in2.connect = </Root/MirrorCutout_RR/GlowKeep.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "GlowAdded"
+        {
+            uniform token info:id = "ND_add_vector3"
+            float3 inputs:in1.connect = </Root/MirrorCutout_RR/Kept.outputs:out>
+            float3 inputs:in2.connect = </Root/MirrorCutout_RR/GlowRGB.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "Glowing"
+        {
+            uniform token info:id = "ND_clamp_vector3FA"
+            float3 inputs:in.connect = </Root/MirrorCutout_RR/GlowAdded.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float3 outputs:out
+        }
+
         def Shader "RGB"
         {
             uniform token info:id = "ND_convert_vector3_color3"
-            float3 inputs:in.connect = </Root/MirrorCutout_RR/Linear.outputs:out>
+            float3 inputs:in.connect = </Root/MirrorCutout_RR/Glowing.outputs:out>
             color3f outputs:out
         }
 
@@ -486,6 +812,8 @@ def Xform "Root"
     def Material "MirrorBlend_RR"
     {
         asset inputs:Frame
+        asset inputs:Glow
+        asset inputs:Constants
         float inputs:ColourBase = 0
         float inputs:ColourAlpha = 1
         float inputs:OpacityBase = 0
@@ -701,6 +1029,167 @@ def Xform "Root"
             float outputs:out
         }
 
+        def Shader "Position"
+        {
+            uniform token info:id = "ND_position_vector3"
+            uniform string inputs:space = "object"
+            float3 outputs:out
+        }
+
+        def Shader "PositionSplit"
+        {
+            uniform token info:id = "ND_separate3_vector3"
+            float3 inputs:in.connect = </Root/MirrorBlend_RR/Position.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+        }
+
+        def Shader "Depth"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 0
+            float inputs:in2.connect = </Root/MirrorBlend_RR/PositionSplit.outputs:outz>
+            float outputs:out
+        }
+
+        def Shader "Constants"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorBlend_RR.inputs:Constants>
+            float2 inputs:texcoord = (0.5, 0.5)
+            float4 outputs:out
+        }
+
+        def Shader "ConstantsSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorBlend_RR/Constants.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "ScreenX"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/PositionSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ScreenY"
+        {
+            uniform token info:id = "ND_divide_float"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/PositionSplit.outputs:outy>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/Depth.outputs:out>
+            float outputs:out
+        }
+
+        def Shader "ViewX"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/ScreenX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/ConstantsSplit.outputs:outx>
+            float outputs:out
+        }
+
+        def Shader "ViewY"
+        {
+            uniform token info:id = "ND_multiply_float"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/ScreenY.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/ConstantsSplit.outputs:outy>
+            float outputs:out
+        }
+
+        def Shader "GlowUV"
+        {
+            uniform token info:id = "ND_combine2_vector2"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/ViewX.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/ViewY.outputs:out>
+            float2 outputs:out
+        }
+
+        def Shader "GlowUVHalf"
+        {
+            uniform token info:id = "ND_multiply_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorBlend_RR/GlowUV.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "GlowTexcoord"
+        {
+            uniform token info:id = "ND_add_vector2FA"
+            float2 inputs:in1.connect = </Root/MirrorBlend_RR/GlowUVHalf.outputs:out>
+            float inputs:in2 = 0.5
+            float2 outputs:out
+        }
+
+        def Shader "Glow"
+        {
+            uniform token info:id = "ND_RealityKitTexture2D_vector4"
+            asset inputs:file.connect = </Root/MirrorBlend_RR.inputs:Glow>
+            float2 inputs:texcoord.connect = </Root/MirrorBlend_RR/GlowTexcoord.outputs:out>
+            uniform bool inputs:no_flip_v = 1
+            string inputs:u_wrap_mode = "clamp_to_edge"
+            string inputs:v_wrap_mode = "clamp_to_edge"
+            float4 outputs:out
+        }
+
+        def Shader "GlowSplit"
+        {
+            uniform token info:id = "ND_separate4_vector4"
+            float4 inputs:in.connect = </Root/MirrorBlend_RR/Glow.outputs:out>
+            float outputs:outx
+            float outputs:outy
+            float outputs:outz
+            float outputs:outw
+        }
+
+        def Shader "GlowRGB"
+        {
+            uniform token info:id = "ND_combine3_vector3"
+            float inputs:in1.connect = </Root/MirrorBlend_RR/GlowSplit.outputs:outx>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/GlowSplit.outputs:outy>
+            float inputs:in3.connect = </Root/MirrorBlend_RR/GlowSplit.outputs:outz>
+            float3 outputs:out
+        }
+
+        def Shader "GlowKeep"
+        {
+            uniform token info:id = "ND_subtract_float"
+            float inputs:in1 = 1
+            float inputs:in2.connect = </Root/MirrorBlend_RR/GlowSplit.outputs:outw>
+            float outputs:out
+        }
+
+        def Shader "Kept"
+        {
+            uniform token info:id = "ND_multiply_vector3FA"
+            float3 inputs:in1.connect = </Root/MirrorBlend_RR/Linear.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/GlowKeep.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "GlowAdded"
+        {
+            uniform token info:id = "ND_add_vector3"
+            float3 inputs:in1.connect = </Root/MirrorBlend_RR/Kept.outputs:out>
+            float3 inputs:in2.connect = </Root/MirrorBlend_RR/GlowRGB.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "Glowing"
+        {
+            uniform token info:id = "ND_clamp_vector3FA"
+            float3 inputs:in.connect = </Root/MirrorBlend_RR/GlowAdded.outputs:out>
+            float inputs:low = 0
+            float inputs:high = 1
+            float3 outputs:out
+        }
+
         def Shader "Luma"
         {
             uniform token info:id = "ND_dotproduct_vector3"
@@ -733,10 +1222,34 @@ def Xform "Root"
             float3 outputs:out
         }
 
+        def Shader "WeightedKept"
+        {
+            uniform token info:id = "ND_multiply_vector3FA"
+            float3 inputs:in1.connect = </Root/MirrorBlend_RR/Weighted.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/GlowKeep.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "GlowCovered"
+        {
+            uniform token info:id = "ND_multiply_vector3FA"
+            float3 inputs:in1.connect = </Root/MirrorBlend_RR/GlowRGB.outputs:out>
+            float inputs:in2.connect = </Root/MirrorBlend_RR/Opacity.outputs:out>
+            float3 outputs:out
+        }
+
+        def Shader "WeightedGlowing"
+        {
+            uniform token info:id = "ND_add_vector3"
+            float3 inputs:in1.connect = </Root/MirrorBlend_RR/WeightedKept.outputs:out>
+            float3 inputs:in2.connect = </Root/MirrorBlend_RR/GlowCovered.outputs:out>
+            float3 outputs:out
+        }
+
         def Shader "RGB"
         {
             uniform token info:id = "ND_convert_vector3_color3"
-            float3 inputs:in.connect = </Root/MirrorBlend_RR/Weighted.outputs:out>
+            float3 inputs:in.connect = </Root/MirrorBlend_RR/WeightedGlowing.outputs:out>
             color3f outputs:out
         }
 

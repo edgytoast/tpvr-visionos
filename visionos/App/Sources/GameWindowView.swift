@@ -353,8 +353,13 @@ final class GameScreen {
                 pipelines.effectsGrid(commands, distance: distance, params: &params,
                                       positions: effectsMesh.replace(bufferIndex: 0, using: commands))
             }
+            // The screen effects on the surfaces themselves (the mirror's materials read them where
+            // each surface is in the camera's picture), unless their test layer is on. The game's
+            // fade is in them then, so the glass doesn't lay it again.
+            let glowing = Self.glowEffects && layer == nil && base != nil
+            pipelines.glow(commands, scene: scene, base: glowing ? base : nil, glow: mirror.glowTarget(using: commands))
             pipelines.hud(commands, final: final, scene: scene, base: base, ui: ui, hud: hud, effects: layer,
-                          fade: Self.fadeCover(frame), ghost: Self.ghostEffects)
+                          fade: glowing ? .zero : Self.fadeCover(frame), ghost: Self.ghostEffects)
             pipelines.mipmaps(commands, hud)
             effects.isEnabled = layer != nil
             primary?.isEnabled = false
@@ -404,6 +409,12 @@ final class GameScreen {
     // game's own picture in it at half opacity (one Link if it lines up, two if not).
     private static let showEffects = ["1", "ghost"].contains(ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] ?? "")
     private static let ghostEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] == "ghost"
+    // The screen effects (bloom and its tints above all: TP's warm glow, Link's house's golden haze)
+    // on the mirror's surfaces, each where the camera saw it (Pipelines.glow): without them the
+    // window looked like the game with its lighting turned down ("like shaders turned off",
+    // Trevor). Unlike the layer above, nothing floats off the surfaces: from the side a glow stays
+    // on what it lit. Test runs: TPVR_TEST_WINDOW_GLOW=0 leaves them out, as before.
+    private static let glowEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_GLOW"] != "0"
 
     // Test runs: TPVR_TEST_WINDOW_DUMP=<frame> writes that frame's scene, finished frame and (with
     // the mirror) pre-effects scene (BGRA8) and distances (RGBA16F) raw into Documents, named with
@@ -706,7 +717,7 @@ private struct HudFlags {
 /// The window's Metal kernels (adapted from the SHAR port's visionos_window.mm).
 @MainActor
 private struct Pipelines {
-    let relief, cut, hud, flat, effectsGrid: MTLComputePipelineState
+    let relief, cut, hud, flat, effectsGrid, glow: MTLComputePipelineState
 
     init(device: MTLDevice) throws {
         let library = try device.makeLibrary(source: Self.source, options: nil)
@@ -719,6 +730,7 @@ private struct Pipelines {
         hud = try make("WindowHud")
         flat = try make("WindowFlat")
         effectsGrid = try make("WindowEffectsGrid")
+        glow = try make("WindowGlow")
     }
 
     func relief(_ commands: MTLCommandBuffer, distance: MTLTexture, params: inout ReliefParams,
@@ -772,6 +784,22 @@ private struct Pipelines {
         guard texture.mipmapLevelCount > 1, let blit = commands.makeBlitCommandEncoder() else { return }
         blit.generateMipmaps(for: texture)
         blit.endEncoding()
+    }
+
+    /// The screen effects (what turned `base` into `scene`) as a premultiplied layer, at the glow
+    /// texture's size, for the mirror's materials; empty without a `base`. What turned black (bars,
+    /// a fade's end) is left to the glass, as the HUD pass does.
+    func glow(_ commands: MTLCommandBuffer, scene: MTLTexture, base: MTLTexture?, glow: MTLTexture) {
+        guard let compute = commands.makeComputeCommandEncoder() else { return }
+        var hasBase: UInt32 = base != nil ? 1 : 0
+        compute.setComputePipelineState(self.glow)
+        compute.setTexture(scene, index: 0)
+        compute.setTexture(base ?? scene, index: 1)
+        compute.setTexture(glow, index: 2)
+        compute.setBytes(&hasBase, length: 4, index: 0)
+        compute.dispatchThreads(MTLSize(width: glow.width, height: glow.height, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+        compute.endEncoding()
     }
 
     func effectsGrid(_ commands: MTLCommandBuffer, distance: MTLTexture, params: inout EffectsGridParams,
@@ -986,6 +1014,47 @@ private struct Pipelines {
     }
 
     struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; float4 fade; };
+
+    // The screen effects for the mirror's materials (gen-mirror-materials.py): each texel of the
+    // layer from the pictures before and after them, filtered where it falls. The layer reaches
+    // past the camera's view by GlowReach (each side), for surfaces seen only from the side, and
+    // fades out there: what the effects did depends on the colour under them (TP's bloom brightens
+    // dark colours more than light ones), so laid on what the camera never saw, the edge's (or the
+    // picture's average) tinted it (Link's house's floor went green at the window's edge). Clamped
+    // to the edge before that, it streaked. Empty without `base`; what turned black is the glass's
+    // (WindowHud).
+    constant float GlowReach = 1.25;
+
+    kernel void WindowGlow(texture2d<float, access::sample> scene [[texture(0)]],
+                           texture2d<float, access::sample> base [[texture(1)]],
+                           texture2d<float, access::write> glow [[texture(2)]],
+                           constant uint& hasBase [[buffer(0)]],
+                           uint2 id [[thread_position_in_grid]])
+    {
+        if (id.x >= glow.get_width() || id.y >= glow.get_height()) return;
+        float4 effect = float4(0);
+        if (hasBase != 0)
+        {
+            // In the camera's view, -1..1 across, +1 at the top; the picture's own 0..1, top down.
+            const float2 view = ((float2(id) + 0.5) / float2(glow.get_width(), glow.get_height()) * 2.0 - 1.0)
+                                * float2(GlowReach, -GlowReach);
+            const float2 at = saturate(float2(0.5 + 0.5 * view.x, 0.5 - 0.5 * view.y));
+            constexpr sampler linear(filter::linear, address::clamp_to_edge);
+            const float3 before = base.sample(linear, at).rgb;
+            effect = Effects(scene.sample(linear, at).rgb, before);
+            if (effect.a > 0.999 && all(effect.rgb < 0.0005)) effect = float4(0);
+            // Where a channel was already at white, the glow can't show in it: TP's warm bloom over
+            // a red-saturated rug added only green and blue, and laid on the floor a side view shows
+            // beside it, that turned it green. Such a channel takes at least the next one's glow
+            // (red at least green's, green at least blue's): on the white channel itself it changes
+            // nothing.
+            const bool3 white = before > 0.85;
+            if (white.r) effect.r = max(effect.r, effect.g);
+            if (white.g) effect.g = max(effect.g, effect.b);
+            effect *= 1.0 - saturate((max(abs(view.x), abs(view.y)) - 1.0) / (GlowReach - 1.0));
+        }
+        glow.write(effect, id);
+    }
 
     struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; float depthScale; };
 

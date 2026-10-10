@@ -88,9 +88,11 @@ its camera and the glass comes out in front of the window, shallower than it is
 (visionOS cuts a window's content off about half a metre out), straight lines
 kept straight; what's right beside the game's camera is cut off, as a camera's
 near plane cuts it. The HUD and Dusklight's
-menus sit on the glass. Characters cast their shadows. Fades and cutscene bars
-are on the glass too; bloom, mist and light shafts are left out of the window,
-since laid over the 3D scene they ghosted and streaked from off to the side. Close the window to quit (progress is
+menus sit on the glass. Characters cast their shadows. The game's screen effects
+(its bloom and colour tints, fades) are on the surfaces they fall on, each where
+the game's camera saw it, so straight on the window matches the game's own
+picture and from the side a glow stays on what it lights; cutscene bars and a
+fade's black are on the glass. Close the window to quit (progress is
 kept up to the last autosave or save); the game pauses while the window is in
 the background. In the window the game renders at no more than 3x its native
 resolution, whatever Settings › Graphics says: a window shows no more, and at
@@ -147,7 +149,8 @@ The app takes a few environment variables for headless runs (pass each as
   for comparison, and `TPVR_TEST_WINDOW_DUMP=<frame>` writes that frame's scene,
   distances, final image and (with the mirror) the scene before its screen effects
   raw into Documents. `TPVR_TEST_WINDOW_EFFECTS=1` brings back the screen effects'
-  layer (off by default: it ghosted and streaked off-axis), and `=ghost` shows
+  layer (off by default: it ghosted and streaked off-axis; the effects are on the
+  mirror's surfaces instead, which `TPVR_TEST_WINDOW_GLOW=0` turns off), and `=ghost` shows
   the game's own picture in that layer at half opacity (one Link if the layer
   lines up with the mirror, two if not); `AURORA_MIRROR_BAND=1` clips the portal
   at the glass and squashes what's nearer into a band behind it, as before (the
@@ -155,7 +158,11 @@ The app takes a few environment variables for headless runs (pass each as
   the window that much larger (what's in front of the glass is compressed more,
   in a wider window); `AURORA_MIRROR_NEAR=raw` leaves what the mirror has nearer
   than the glass as it is (no compression, no near cut: the window's foot shows
-  the sky, as before the strip fix); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
+  the sky, as before the strip fix); `AURORA_MIRROR_LOOKUPS=0` averages the
+  textures a draw projects onto the scene (TP's cloud shadows) instead of reading
+  them at each vertex; `AURORA_MIRROR_CLAMP_ENDS=1` fits the TEV's clamps through
+  T 0 and 1 again (the ranch's ground lost a fifth of its red); `AURORA_MIRROR_LOG=3`
+  logs every kept material once, its lights, konst colours and fog included; `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
   the level's one mesh, as before each got an entity of its own in the game's
   order (RealityKit ordered them by distance and they flickered);
   `AURORA_MIRROR_TEST_SWEEP=<frames>` lets go of every texture that often, as if

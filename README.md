@@ -39,8 +39,8 @@ bring the game, you build the app, Hyrule does the rest. It's listed in the
   - **Progressive**: a portal into Hyrule that the Digital Crown widens and narrows.
   - **Window**: the GameCube game in third person, in a window beside your other apps. The game's
     own 3D scene is rebuilt behind the glass every frame and rendered from wherever your eyes
-    actually are, so you can lean in and look around. The HUD sits on the glass, with the game's
-    fades and letterbox bars; its bloom and mist aren't drawn in this view.
+    actually are, so you can lean in and look around. The HUD sits on the glass, and the game's
+    bloom and colour tints glow on what they light.
 - **Your hands are Link's hands.** PS VR2 Sense controllers put the sword and shield where yours
   are. No controller? In Full and Progressive, play with your bare hands. A DualSense, Xbox or
   other gamepad works too.
