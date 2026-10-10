@@ -89,10 +89,10 @@ its camera and the glass comes out in front of the window, shallower than it is
 kept straight; what's right beside the game's camera is cut off, as a camera's
 near plane cuts it. The HUD and Dusklight's
 menus sit on the glass. Characters cast their shadows. The game's screen effects
-(its bloom and colour tints, fades) are on the surfaces they fall on, each where
-the game's camera saw it, so straight on the window matches the game's own
-picture and from the side a glow stays on what it lights; cutscene bars and a
-fade's black are on the glass. Close the window to quit (progress is
+(its bloom and colour tints) are on the surfaces they fall on, each where the
+game's camera saw it, so straight on the window matches the game's own picture
+and from the side a glow stays on what it lights; cutscene bars and the game's
+fades are on the glass. Close the window to quit (progress is
 kept up to the last autosave or save); the game pauses while the window is in
 the background. In the window the game renders at no more than 3x its native
 resolution, whatever Settings › Graphics says: a window shows no more, and at

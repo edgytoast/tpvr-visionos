@@ -93,7 +93,7 @@ final class MirrorScene {
     private var parkedSet: Set<UInt64> = []
     private static let parkedBudget = 48 << 20
     private var white: TextureResource?
-    // The game's screen effects over its picture (bloom, its tints, a fade), as a premultiplied layer
+    // The game's screen effects over its picture (bloom, its tints), as a premultiplied layer
     // every material reads where its surface is in the camera's view (gen-mirror-materials.py), and
     // that view's half-tangents times glowReach (as 1 / that, in r and g): the layer reaches that far
     // past the view. GameScreen writes it each frame (Pipelines.glow); a fixed size, so the

@@ -13,7 +13,7 @@
 #   colour  = rgb * (ColourBase + ColourAlpha * a)
 #   opacity = OpacityBase + OpacityAlpha * a + OpacityLuma * luma(rgb)
 #
-# Then the game's screen effects (bloom, its colour tints, a fade) at the surface's place in the
+# Then the game's screen effects (bloom, its colour tints) at the surface's place in the
 # game camera's picture: Glow holds them as a premultiplied layer over that picture (WindowGlow,
 # GameWindowView), read where the surface's position (the mirror's view space, the mesh's own)
 # falls in the camera's view, whose half-view tangents Constants holds (times the layer's reach
