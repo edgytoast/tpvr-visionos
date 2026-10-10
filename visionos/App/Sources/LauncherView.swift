@@ -502,7 +502,12 @@ struct LauncherView: View {
     private func showGuide() {
         let guide = ControlsGuide.shared
         guide.windowView = model.playsWindow
-        guide.input = inputs.anySense ? .sense : inputs.gamepad != nil || model.playsWindow ? .gamepad : .hands
+        // In the window a gamepad that's on plays, ahead of the Sense controllers (sense_pad::tidy_ports).
+        if model.playsWindow && inputs.gamepad != nil {
+            guide.input = .gamepad
+        } else {
+            guide.input = inputs.anySense ? .sense : inputs.gamepad != nil || model.playsWindow ? .gamepad : .hands
+        }
     }
 
     private func importDisc(_ url: URL) {
