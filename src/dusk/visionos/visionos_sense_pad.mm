@@ -20,12 +20,17 @@ namespace {
 
 SDL_JoystickID g_pad = 0;
 
+// The joined pad's own name. Never rename it: SDL's GUID for a virtual pad includes a CRC of its
+// name, so a choice of it saved in Settings › Input would stop matching.
+constexpr char kPadName[] = "PS VR2 Sense Controllers";
+
 // SDL names each Sense half after its GameController vendorName, "… Sense Controller (L)" or
 // "(R)". A plain "Sense" also matched "DualSense Wireless Controller": a DualSense was ignored
 // and lost player 1 every frame, so its Start (and every other button) never reached the game.
+// The joined pad isn't a half either: its removal, after g_pad is cleared, must reach the game.
 bool IsSenseHalf(const char* name) {
     return name != nullptr && std::strstr(name, "Sense Controller") != nullptr &&
-           std::strstr(name, "DualSense") == nullptr;
+           std::strstr(name, "DualSense") == nullptr && std::strcmp(name, kPadName) != 0;
 }
 
 // One half's state.
@@ -75,7 +80,7 @@ bool Attach() {
     SDL_VirtualJoystickDesc desc;
     SDL_INIT_INTERFACE(&desc);
     desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-    desc.name = "PS VR2 Sense Controllers";
+    desc.name = kPadName;
     // Every standard button and axis: with gaps, SDL compacts the indices and writes land on the
     // wrong ones (vr_menu_gamepad.hpp found this the hard way).
     desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
@@ -215,7 +220,9 @@ void tidy_ports() {
         // The VR mod's menu gamepad keeps player 2 (vr_menu_gamepad.hpp).
         if (name != nullptr && std::strcmp(name, "Dusklight VR Menu Controller") == 0) continue;
         if (player == 0) {
-            taken = true;
+            // A real gamepad keeps player 1. The joined pad gives it up to one that arrives: in the
+            // window a gamepad plays whenever one is on, whichever was connected first.
+            if (gamepads[i] != g_pad) taken = true;
             continue;
         }
         const bool arrived = std::find(s_seen.begin(), s_seen.end(), gamepads[i]) == s_seen.end();

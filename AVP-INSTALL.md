@@ -130,7 +130,7 @@ the saves out to keep your own backup; deleting the app deletes them.
 - **Bare hands:** index pinch is the trigger, middle pinch A/X, ring pinch B/Y, left little-finger
   pinch the menu, a fist the grip. Hold the left thumb-middle pinch and move your hand to walk; hold
   the right thumb-little pinch and move it sideways to turn.
-- **Window mode:** a gamepad, or both Sense controllers held as one pad: right half Cross A,
+- **Window mode:** a gamepad (whenever one is on, it plays), or both Sense controllers held as one pad: right half Cross A,
   Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half Square X, Triangle Y, L2 L
   (targeting); D-pad on L1 (up, item ring), Create (left, map), L3 (down, item ring) and R3
   (right, map). Close the window to quit.

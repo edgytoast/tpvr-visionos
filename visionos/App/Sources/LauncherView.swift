@@ -455,15 +455,16 @@ struct LauncherView: View {
 
     /// Which inputs the selected way of playing takes, and whether they're here.
     private var verdict: InputVerdict {
-        // Two Sense controllers make one gamepad in the window; a gamepad works anywhere.
+        // In the window a gamepad plays whenever one is on (sense_pad::tidy_ports gives it player 1);
+        // otherwise two Sense controllers make one gamepad. A gamepad works anywhere.
         if model.playsWindow {
+            if inputs.gamepad != nil { return InputVerdict("Ready to play with your gamepad.", ready: true) }
             if inputs.senseLeft != nil && inputs.senseRight != nil {
                 return InputVerdict("Ready to play with your Sense controllers, as a gamepad.", ready: true)
             }
             if inputs.anySense {
-                return InputVerdict("Only one Sense controller is connected. Turn on the other, or turn this one off to play with a gamepad.", ready: false)
+                return InputVerdict("Only one Sense controller is connected. Turn on the other, or connect a gamepad.", ready: false)
             }
-            if inputs.gamepad != nil { return InputVerdict("Ready to play with your gamepad.", ready: true) }
             return InputVerdict("The Window view plays with a controller. Connect your Sense controllers or a gamepad.", ready: false)
         }
         // Full and Progressive: each hand is a Sense controller if one's in it, else the bare hand

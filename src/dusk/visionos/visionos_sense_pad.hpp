@@ -9,7 +9,8 @@
 //   left half   Square X, Triangle Y, L2 L (analog, targeting), stick the main stick
 //   D-pad       L1 up (item ring), Create left (map), L3 down, R3 right
 //
-// It takes player 1 unless a real gamepad already has it.
+// It takes player 1 unless a real gamepad has it, and gives player 1 up to a gamepad that arrives:
+// in the window a gamepad plays whenever one is on.
 
 union SDL_Event;
 

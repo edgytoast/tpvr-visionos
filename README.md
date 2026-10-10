@@ -153,8 +153,8 @@ Combat › Sword Hand) and the shield your other hand.
 | Left thumb + middle, held and moved | walk (a quick tap is still X) |
 | Right thumb + little, held and moved sideways | turn |
 
-**The Window view** plays like the original game, so it takes a gamepad, or both Sense controllers
-held as one: right half Cross A, Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half
+**The Window view** plays like the original game, so it takes a gamepad (whenever one is on, it plays), or both Sense
+controllers held as one: right half Cross A, Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half
 Square X, Triangle Y, L2 L (targeting), and the D-pad on L1 (up, item ring), Create (left, map),
 L3 (down, item ring) and R3 (right, map). Look at the game window to give it your controller, since visionOS hands a controller
 to whichever window you're looking at. Close the window to quit.
