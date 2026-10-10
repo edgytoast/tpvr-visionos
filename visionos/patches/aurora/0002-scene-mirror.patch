@@ -278,10 +278,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..e7253dc
+index 0000000..eb99516
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,3342 @@
+@@ -0,0 +1,3356 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -3023,11 +3023,25 @@ index 0000000..e7253dc
 +    // below could keep him whole (its start no nearer than a tenth of the glass's distance beyond
 +    // the allowance's limit): a camera pushed in close behind him, a lock-on with its focus far
 +    // beyond him. The picture from the camera is the same; he keeps his shape, and what's beyond
-+    // goes deeper. Not for a player nearer than a quarter of the glass's distance: the camera in or
-+    // at him (a first-person view, a frame of a teleport) would have the glass leap to the camera.
-+    if (job.subject > 0.25f * out.plane && window > 0.f && !s_band) {
-+      const float floor = 1.f - allowance / camera + 0.1f;
-+      out.plane = std::clamp(std::min(out.plane, 0.95f * job.subject / floor), 50.f, 20000.f);
++    // goes deeper. Fully from a quarter of the glass's distance, and eased in from 0.15 of it (the
++    // camera in or at him, a first-person view or a teleport's frame, is left alone: the glass
++    // leapt to the camera for a frame), and by at most a tenth a frame unless the camera cut (its
++    // focus jumped), so the window's depths don't jump as he crosses those.
++    {
++      static float s_share = 1.f, s_focus = 0.f; // (the one finishing worker's)
++      float share = 1.f;
++      if (job.subject > 0.15f * out.plane && window > 0.f && !s_band) {
++        const float floor = 1.f - allowance / camera + 0.1f;
++        const float whole = std::min(1.f, 0.95f * job.subject / (floor * out.plane));
++        const float ease = std::clamp((job.subject - 0.15f * out.plane) / (0.1f * out.plane), 0.f, 1.f);
++        share = 1.f + (whole - 1.f) * ease;
++      }
++      if (s_focus > 0.f && std::fabs(job.focus - s_focus) < 0.3f * s_focus) {
++        share = std::clamp(share, s_share * 0.9f, s_share / 0.9f);
++      }
++      s_share = std::min(share, 1.f);
++      s_focus = job.focus;
++      out.plane = std::clamp(out.plane * s_share, 50.f, 20000.f);
 +    }
 +    const float onPlane = out.plane * 1.0005f, band = 0.03f, bandEnd = onPlane * (1.f + band);
 +    // In window widths in front of the glass, at depth d: k (plane - d) (MirrorScene.place); the
