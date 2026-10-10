@@ -256,7 +256,12 @@ final class GameScreen {
             root.isEnabled = true
         }
         Self.framesInFlight.add(1, ordering: .relaxed)
+        // A test dump reads the frame once the GPU is done with it (the game's work on it included:
+        // the slot is handed over when submitted, not finished), before it goes back.
+        let dumping = dumpThisFrame
+        dumpThisFrame = false
         commands.addCompletedHandler { _ in
+            if dumping { Self.dump(frame) }
             dusk_visionos_window_release(serial)
             Self.framesInFlight.subtract(1, ordering: .relaxed)
         }
@@ -355,18 +360,21 @@ final class GameScreen {
             }
             // The screen effects on the surfaces themselves (the mirror's materials read them where
             // each surface is in the camera's picture), unless their test layer is on. The game's
-            // fade is in them then, so the glass doesn't lay it again.
+            // fade stays on the glass (it covers what the camera never saw too: past its view, the
+            // window's foot): the glow is worked out from the scene with the fade taken out.
             let glowing = Self.glowEffects && layer == nil && base != nil
-            pipelines.glow(commands, scene: scene, base: glowing ? base : nil, glow: mirror.glowTarget(using: commands))
+            let fade = SIMD4(frame.fade_r, frame.fade_g, frame.fade_b, frame.fade_a)
+            pipelines.glow(commands, scene: scene, base: glowing ? base : nil, fade: fade,
+                           glow: mirror.glowTarget(using: commands))
             pipelines.hud(commands, final: final, scene: scene, base: base, ui: ui, hud: hud, effects: layer,
-                          fade: glowing ? .zero : Self.fadeCover(frame), ghost: Self.ghostEffects)
+                          fade: Self.fadeCover(frame), ghost: Self.ghostEffects)
             pipelines.mipmaps(commands, hud)
             effects.isEnabled = layer != nil
             primary?.isEnabled = false
             backstop?.isEnabled = false
             if Self.dumpFrame == frames || dumpingNow {
                 dumpingNow = false
-                Self.dump(frame)
+                dumpThisFrame = true
             }
             return true
         }
@@ -390,7 +398,7 @@ final class GameScreen {
         primary?.isEnabled = Self.shownLayers.contains("p")
         backstop?.isEnabled = Self.shownLayers.contains("b")
         if Self.dumpFrame == frames {
-            Self.dump(frame)
+            dumpThisFrame = true
         }
         return true
     }
@@ -422,9 +430,9 @@ final class GameScreen {
     private static let dumpFrame = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_DUMP"].flatMap(Int.init) ?? -1
     private static let dumpAt = ProcessInfo.processInfo.environment["TPVR_TEST_DUMP_AT"].flatMap(Double.init)
     private let opened = CACurrentMediaTime()
-    private var dumpedAt = false, dumpingNow = false
+    private var dumpedAt = false, dumpingNow = false, dumpThisFrame = false
 
-    private static func dump(_ frame: dusk_visionos_window_frame) {
+    nonisolated private static func dump(_ frame: dusk_visionos_window_frame) {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         for (name, pointer) in [("scene", frame.scene), ("distance", frame.distance), ("final", frame.final),
                                 ("base", frame.base)] {
@@ -706,6 +714,11 @@ private struct EffectsGridParams {
     var depthScale: Float
 }
 
+private struct GlowFlags {
+    var fade: SIMD4<Float>
+    var hasBase: UInt32
+}
+
 private struct HudFlags {
     var hasUi: UInt32
     var hasBase: UInt32
@@ -786,17 +799,18 @@ private struct Pipelines {
         blit.endEncoding()
     }
 
-    /// The screen effects (what turned `base` into `scene`) as a premultiplied layer, at the glow
-    /// texture's size, for the mirror's materials; empty without a `base`. What turned black (bars,
-    /// a fade's end) is left to the glass, as the HUD pass does.
-    func glow(_ commands: MTLCommandBuffer, scene: MTLTexture, base: MTLTexture?, glow: MTLTexture) {
+    /// The screen effects (what turned `base` into `scene`, the game's `fade` aside: sRGB colour and
+    /// cover) as a premultiplied layer, at the glow texture's size, for the mirror's materials; empty
+    /// without a `base`. The fade and what turned black (bars) are left to the glass, as the HUD pass
+    /// lays them.
+    func glow(_ commands: MTLCommandBuffer, scene: MTLTexture, base: MTLTexture?, fade: SIMD4<Float>, glow: MTLTexture) {
         guard let compute = commands.makeComputeCommandEncoder() else { return }
-        var hasBase: UInt32 = base != nil ? 1 : 0
+        var flags = GlowFlags(fade: fade, hasBase: base != nil ? 1 : 0)
         compute.setComputePipelineState(self.glow)
         compute.setTexture(scene, index: 0)
         compute.setTexture(base ?? scene, index: 1)
         compute.setTexture(glow, index: 2)
-        compute.setBytes(&hasBase, length: 4, index: 0)
+        compute.setBytes(&flags, length: MemoryLayout<GlowFlags>.stride, index: 0)
         compute.dispatchThreads(MTLSize(width: glow.width, height: glow.height, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
         compute.endEncoding()
@@ -1025,15 +1039,20 @@ private struct Pipelines {
     // (WindowHud).
     constant float GlowReach = 1.25;
 
+    struct GlowFlags { float4 fade; uint hasBase; };
+
+    static float3 Encoded(float3 c) { return select(1.055 * pow(c, 1.0 / 2.4) - 0.055, c * 12.92, c <= 0.0031308); }
+    static float3 Decoded(float3 c) { return select(pow((c + 0.055) / 1.055, 2.4), c / 12.92, c <= 0.04045); }
+
     kernel void WindowGlow(texture2d<float, access::sample> scene [[texture(0)]],
                            texture2d<float, access::sample> base [[texture(1)]],
                            texture2d<float, access::write> glow [[texture(2)]],
-                           constant uint& hasBase [[buffer(0)]],
+                           constant GlowFlags& flags [[buffer(0)]],
                            uint2 id [[thread_position_in_grid]])
     {
         if (id.x >= glow.get_width() || id.y >= glow.get_height()) return;
         float4 effect = float4(0);
-        if (hasBase != 0)
+        if (flags.hasBase != 0 && flags.fade.a < 0.995)
         {
             // In the camera's view, -1..1 across, +1 at the top; the picture's own 0..1, top down.
             const float2 view = ((float2(id) + 0.5) / float2(glow.get_width(), glow.get_height()) * 2.0 - 1.0)
@@ -1041,14 +1060,17 @@ private struct Pipelines {
             const float2 at = saturate(float2(0.5 + 0.5 * view.x, 0.5 - 0.5 * view.y));
             constexpr sampler linear(filter::linear, address::clamp_to_edge);
             const float3 before = base.sample(linear, at).rgb;
-            effect = Effects(scene.sample(linear, at).rgb, before);
+            // The scene without the game's fade, which it blends on the encoded values (fadeCover).
+            const float3 faded = Encoded(saturate(scene.sample(linear, at).rgb));
+            const float3 after = Decoded(saturate((faded - flags.fade.rgb * flags.fade.a) / (1.0 - flags.fade.a)));
+            effect = Effects(after, before);
             if (effect.a > 0.999 && all(effect.rgb < 0.0005)) effect = float4(0);
-            // Where a channel was already at white, the glow can't show in it: TP's warm bloom over
-            // a red-saturated rug added only green and blue, and laid on the floor a side view shows
+            // Where a channel came out white, the glow can't show in it: TP's warm bloom over a
+            // red-saturated rug added only green and blue, and laid on the floor a side view shows
             // beside it, that turned it green. Such a channel takes at least the next one's glow
-            // (red at least green's, green at least blue's): on the white channel itself it changes
+            // (red at least green's, green at least blue's): on that white channel itself it changes
             // nothing.
-            const bool3 white = before > 0.85;
+            const bool3 white = after > 0.99;
             if (white.r) effect.r = max(effect.r, effect.g);
             if (white.g) effect.g = max(effect.g, effect.b);
             effect *= 1.0 - saturate((max(abs(view.x), abs(view.y)) - 1.0) / (GlowReach - 1.0));

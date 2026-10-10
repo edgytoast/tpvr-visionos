@@ -140,7 +140,9 @@ the saves out to keep your own backup; deleting the app deletes them.
 ### Known issues
 
 - Window mode is newer than the immersive modes: characters look a little flatter and darker
-  than in the game, and the game's bloom and mist aren't drawn in it.
+  than in the game, and what's right beside the game's camera is cut off, as a near plane cuts
+  it. The game's bloom is drawn on the surfaces it lights; seen from far to the side, a glow can
+  sit a little off.
 - The first build takes up to an hour (it compiles Dawn); later builds take minutes.
 
 ## Troubleshooting

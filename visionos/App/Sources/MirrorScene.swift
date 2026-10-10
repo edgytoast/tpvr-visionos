@@ -172,6 +172,19 @@ final class MirrorScene {
         let constantsTexture = try LowLevelTexture(descriptor: .init(pixelFormat: .rgba16Float, width: 1, height: 1,
                                                                      textureUsage: [.shaderRead, .shaderWrite]))
         constants = (constantsTexture, try await TextureResource(from: constantsTexture))
+        // Neither starts out clear: no glow, and a 90-degree view, until the first frame's.
+        if let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder(),
+           let zeros = queue.device.makeBuffer(bytes: [UInt8](repeating: 0, count: Self.glowSize.x * Self.glowSize.y * 4),
+                                               length: Self.glowSize.x * Self.glowSize.y * 4) {
+            blit.copy(from: zeros, sourceOffset: 0, sourceBytesPerRow: Self.glowSize.x * 4,
+                      sourceBytesPerImage: Self.glowSize.x * Self.glowSize.y * 4,
+                      sourceSize: MTLSize(width: Self.glowSize.x, height: Self.glowSize.y, depth: 1),
+                      to: glowTexture.replace(using: commands), destinationSlice: 0, destinationLevel: 0,
+                      destinationOrigin: MTLOrigin())
+            blit.endEncoding()
+            commands.commit()
+        }
+        setConstants(SIMD2(1, 1))
         entity.isEnabled = false
         root.addChild(entity)
         backdrop.isEnabled = false

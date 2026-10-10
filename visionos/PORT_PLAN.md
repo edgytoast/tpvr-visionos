@@ -197,7 +197,8 @@ owns the swapchain images and Dawn imports them.
         (a 1x1 Constants texture). Nothing floats off the surfaces, so from the side a glow stays
         on what it lit. Where a channel was already white the glow can't be seen in it; such a
         channel takes the next one's glow, or the floor beside a red-saturated rug went green
-        from the side. The fade moved into this layer with them.
+        from the side. The game's fade stays on the glass (it covers what the camera never saw
+        too); the layer is worked out from the scene with the fade taken out.
       - TP's terrain multiplies its sunlit texture by a cloud-shadow texture projected from the
         vertices' positions (texmtx 33), times four. As its average the ground was evenly lit and
         greener; it's now read at each vertex (filtered to 32 texels a side, so each vertex reads
