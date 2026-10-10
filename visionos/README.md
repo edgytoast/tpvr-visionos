@@ -155,8 +155,8 @@ The app takes a few environment variables for headless runs (pass each as
   lines up with the mirror, two if not); `AURORA_MIRROR_BAND=1` clips the portal
   at the glass and squashes what's nearer into a band behind it, as before (the
   band bent the ground near the camera); `TPVR_TEST_WINDOW_SIZE=<factor>` opens
-  the window that much larger (what's in front of the glass is compressed more,
-  in a wider window); `AURORA_MIRROR_NEAR=raw` leaves what the mirror has nearer
+  the window that much larger (past about 1.28 m wide, the near cut moves towards
+  the glass); `AURORA_MIRROR_NEAR=raw` leaves what the mirror has nearer
   than the glass as it is (no compression, no near cut: the window's foot shows
   the sky, as before the strip fix); `AURORA_MIRROR_LOOKUPS=0` averages the
   textures a draw projects onto the scene (TP's cloud shadows) instead of reading

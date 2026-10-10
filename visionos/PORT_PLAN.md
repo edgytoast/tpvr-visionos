@@ -176,7 +176,10 @@ owns the swapchain images and Dawn imports them.
       about the camera: straight lines stay straight, flat faces flat, triangles stay triangles,
       so decals need no extra splitting), what's just in front of the glass keeps 40% of its depth,
       and what's nearer than where that reaches the allowance (a third of the glass's distance in
-      a small window, more in a large one) is cut off, as a camera's near plane cuts. The foot
+      a small window, more in a large one) is cut off, as a camera's near plane cuts. The game
+      sends the player's nearest view depth (AURORA_MIRROR_MARK_SUBJECT): with him nearer than the
+      glass (indoors) the compression starts just short of him, so he keeps his shape, and the cut
+      never comes past him (a lock-on or a talk shot with the focus far beyond him). The foot
       stays covered (no sky strip), the picture from the camera is the same but for what's cut,
       and the frame is a few percent lighter (Simulator: 79.7k vertices a frame against 84.1k, at
       Ordon Ranch with a goat beside the camera). `minViewTangent` (0.7) doesn't come into it: TP's

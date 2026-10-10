@@ -83,6 +83,7 @@ enum class SlotState { Free, Writing, Ready, Reading };
 
 struct CameraInfo {
     float tanHalfX = 0, tanHalfY = 0, focus = 0, nearZ = 0, farZ = 0;
+    float subject = 0;  // the player's nearest view depth (0: none), for the mirror (AURORA_MIRROR_MARK_SUBJECT)
 };
 
 // A frame on its way to the app. While Writing it belongs to the game thread (which fills the
@@ -604,6 +605,20 @@ void note_scene(const view_class* view) {
     g_camera.focus = std::sqrt(dx * dx + dy * dy + dz * dz);
     g_camera.nearZ = view->near_;
     g_camera.farZ = view->far_;
+    // How near the camera the player comes (his feet, middle and head, less his girth): the mirror
+    // keeps what's that near (a lock-on or a talk shot can put him well short of the camera's
+    // focus, where the window cuts off what's nearest the camera).
+    g_camera.subject = 0;
+    if (const fopAc_ac_c* player = dComIfGp_getPlayer(0)) {
+        const auto& m = view->viewMtx;
+        const cXyz& at = player->current.pos;
+        float nearest = INFINITY;
+        for (const float rise : {0.f, 80.f, 160.f}) {
+            const float depth = -(m[2][0] * at.x + m[2][1] * (at.y + rise) + m[2][2] * at.z + m[2][3]);
+            nearest = std::min(nearest, depth);
+        }
+        g_camera.subject = std::isfinite(nearest) ? std::max(nearest - 50.f, 0.f) : 0.f;
+    }
 }
 
 bool mirroring() {
@@ -619,6 +634,9 @@ void scene_drawn() {
     struct CloseMirror {
         ~CloseMirror() {
             g_mirrorBegun = false;
+            if (g_sceneThisFrame) {
+                GXAuroraMirrorMark(AURORA_MIRROR_MARK_SUBJECT, g_camera.subject);
+            }
             GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
                                g_camera.focus);
         }
@@ -650,6 +668,9 @@ void before_hud() {
         ~CloseMirror() {
             if (g_mirrorBegun) {
                 g_mirrorBegun = false;
+                if (g_sceneThisFrame) {
+                    GXAuroraMirrorMark(AURORA_MIRROR_MARK_SUBJECT, g_camera.subject);
+                }
                 GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
                                    g_camera.focus);
             }
