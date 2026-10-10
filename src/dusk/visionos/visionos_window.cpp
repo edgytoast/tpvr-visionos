@@ -605,19 +605,26 @@ void note_scene(const view_class* view) {
     g_camera.focus = std::sqrt(dx * dx + dy * dy + dz * dz);
     g_camera.nearZ = view->near_;
     g_camera.farZ = view->far_;
-    // How near the camera the player comes (his feet, middle and head, less his girth): the mirror
-    // keeps what's that near (a lock-on or a talk shot can put him well short of the camera's
-    // focus, where the window cuts off what's nearest the camera).
+    // How near the camera the player comes (his feet, middle and head, less his girth), when he's
+    // in the picture (or just outside it): the mirror keeps him whole (a lock-on or a camera
+    // pushed in behind him can put him well short of the camera's focus, where the window
+    // compresses and cuts off what's nearest the camera). Off the picture he's no one's subject.
     g_camera.subject = 0;
     if (const fopAc_ac_c* player = dComIfGp_getPlayer(0)) {
         const auto& m = view->viewMtx;
         const cXyz& at = player->current.pos;
         float nearest = INFINITY;
+        bool seen = false;
         for (const float rise : {0.f, 80.f, 160.f}) {
-            const float depth = -(m[2][0] * at.x + m[2][1] * (at.y + rise) + m[2][2] * at.z + m[2][3]);
+            const float y = at.y + rise;
+            const float depth = -(m[2][0] * at.x + m[2][1] * y + m[2][2] * at.z + m[2][3]);
+            const float across = m[0][0] * at.x + m[0][1] * y + m[0][2] * at.z + m[0][3];
+            const float up = m[1][0] * at.x + m[1][1] * y + m[1][2] * at.z + m[1][3];
             nearest = std::min(nearest, depth);
+            seen = seen || (depth > 0.f && std::fabs(across) <= 1.25f * g_camera.tanHalfX * depth &&
+                            std::fabs(up) <= 1.25f * g_camera.tanHalfY * depth);
         }
-        g_camera.subject = std::isfinite(nearest) ? std::max(nearest - 50.f, 0.f) : 0.f;
+        g_camera.subject = seen && std::isfinite(nearest) ? std::max(nearest - 50.f, 0.f) : 0.f;
     }
 }
 

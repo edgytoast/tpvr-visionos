@@ -278,10 +278,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..cddba01
+index 0000000..e7253dc
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,3329 @@
+@@ -0,0 +1,3342 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -3014,12 +3014,25 @@ index 0000000..cddba01
 +      const char* band = std::getenv("AURORA_MIRROR_BAND");
 +      return band != nullptr && std::strcmp(band, "1") == 0;
 +    }();
++    const float window = g_frontAllowance.load(std::memory_order_relaxed);
++    // The camera's distance in front of the glass, and the allowance, in window widths: the same
++    // whatever the glass's distance.
++    const float camera = 1.f / (2.f * std::max(out.tanHalfX, g_minViewTangent.load(std::memory_order_relaxed)));
++    const float allowance = std::min(window, 0.9f * camera * (1.f - 1.f / kClipMargin));
++    // The glass comes nearer, to the player, when he's nearer the camera than the compression
++    // below could keep him whole (its start no nearer than a tenth of the glass's distance beyond
++    // the allowance's limit): a camera pushed in close behind him, a lock-on with its focus far
++    // beyond him. The picture from the camera is the same; he keeps his shape, and what's beyond
++    // goes deeper. Not for a player nearer than a quarter of the glass's distance: the camera in or
++    // at him (a first-person view, a frame of a teleport) would have the glass leap to the camera.
++    if (job.subject > 0.25f * out.plane && window > 0.f && !s_band) {
++      const float floor = 1.f - allowance / camera + 0.1f;
++      out.plane = std::clamp(std::min(out.plane, 0.95f * job.subject / floor), 50.f, 20000.f);
++    }
 +    const float onPlane = out.plane * 1.0005f, band = 0.03f, bandEnd = onPlane * (1.f + band);
 +    // In window widths in front of the glass, at depth d: k (plane - d) (MirrorScene.place); the
 +    // camera is k plane in front of it.
-+    const float k = 1.f / (2.f * out.plane * std::max(out.tanHalfX, g_minViewTangent.load(std::memory_order_relaxed)));
-+    const float window = g_frontAllowance.load(std::memory_order_relaxed);
-+    const float allowance = std::min(window, 0.9f * k * out.plane * (1.f - 1.f / kClipMargin));
++    const float k = camera / out.plane;
 +    // The compression's slope (in 1 / depth): what's just in front of where it starts keeps this
 +    // much of its depth. It starts at the glass, or just short of the player when he's nearer (a
 +    // camera close behind him indoors), so he keeps his shape; though never so near the allowance's
