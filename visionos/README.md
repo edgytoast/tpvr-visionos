@@ -83,7 +83,11 @@ D-pad is L1 up and L3 down (item ring), Create left and R3 right (map). The
 launcher's Controls tab draws all of it. The picture isn't
 flat: behind the window's glass, the game's own 3D scene is rebuilt every frame
 (its models, textures and lighting, mirrored into RealityKit), so Hyrule has real
-depth and holds up from any angle as you look and lean. The HUD and Dusklight's
+depth and holds up from any angle as you look and lean. What the game has between
+its camera and the glass comes out in front of the window, shallower than it is
+(visionOS cuts a window's content off about half a metre out), straight lines
+kept straight; what's right beside the game's camera is cut off, as a camera's
+near plane cuts it. The HUD and Dusklight's
 menus sit on the glass. Characters cast their shadows. Fades and cutscene bars
 are on the glass too; bloom, mist and light shafts are left out of the window,
 since laid over the 3D scene they ghosted and streaked from off to the side. Close the window to quit (progress is
@@ -148,8 +152,10 @@ The app takes a few environment variables for headless runs (pass each as
   lines up with the mirror, two if not); `AURORA_MIRROR_BAND=1` clips the portal
   at the glass and squashes what's nearer into a band behind it, as before (the
   band bent the ground near the camera); `TPVR_TEST_WINDOW_SIZE=<factor>` opens
-  the window that much larger (the nearest ground eases in more, in a wider
-  window); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
+  the window that much larger (what's in front of the glass is compressed more,
+  in a wider window); `AURORA_MIRROR_NEAR=raw` leaves what the mirror has nearer
+  than the glass as it is (no compression, no near cut: the window's foot shows
+  the sky, as before the strip fix); `TPVR_TEST_MIRROR_ONE_MESH=1` keeps the mirror's translucent parts in
   the level's one mesh, as before each got an entity of its own in the game's
   order (RealityKit ordered them by distance and they flickered);
   `AURORA_MIRROR_TEST_SWEEP=<frames>` lets go of every texture that often, as if
@@ -165,7 +171,10 @@ The app takes a few environment variables for headless runs (pass each as
   `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
   parts, textures) into Documents/mirror-dump, which
   `visionos/scripts/render-mirror-dump.py` renders from the game camera (clear the
-  folder between runs: textures from earlier ones stay in it).
+  folder between runs: textures from earlier ones stay in it);
+  `TPVR_TEST_DUMP_AT=<seconds>` writes both, the mirror frame and the window frame
+  shown with it (the same game frame), the first time the mirror shows a frame
+  that long after the window opened.
 - `TPVR_TEST_COMMANDS="<seconds>:<command>;..."` (Simulator builds only, Window
   mode) runs Dusklight's console commands that many seconds after the game's first
   frame, their output in the log: `list` and `pos` find things, `tp x y z [angle]`

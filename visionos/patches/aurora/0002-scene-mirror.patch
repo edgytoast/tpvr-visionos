@@ -12,10 +12,10 @@ index 02a96af..9fcbde8 100644
          lib/gx/shader.cpp
 diff --git a/include/aurora/mirror.h b/include/aurora/mirror.h
 new file mode 100644
-index 0000000..2d60ec8
+index 0000000..b1328cd
 --- /dev/null
 +++ b/include/aurora/mirror.h
-@@ -0,0 +1,114 @@
+@@ -0,0 +1,115 @@
 +#pragma once
 +
 +// The scene mirror: a frame's 3D draws, decoded on the CPU into plain triangles, textures and
@@ -103,8 +103,9 @@ index 0000000..2d60ec8
 +  float tanHalfX, tanHalfY; // the scene projection's half-view tangents
 +  float focus;              // the camera's distance to what it looks at (view units)
 +  // Where a window showing the frame should put its glass (view units): a little short of the
-+  // focus. What's nearer comes out in front of it, eased into the window's allowance
-+  // (set_front_allowance) along its own line of sight, so the picture from the camera is unchanged.
++  // focus. What's nearer comes out in front of it, compressed into the window's allowance
++  // (set_front_allowance) along its own line of sight, straight lines kept straight, so the picture
++  // from the camera is unchanged but for what's nearest it, cut off as by a near plane.
 +  float plane;
 +  // Textures new since the last acquire, and ones no longer used. A texture whose id was sent
 +  // before is new pixels for it (a shadow, read back from the GPU each frame): replace it in place.
@@ -121,7 +122,7 @@ index 0000000..2d60ec8
 +// How far in front of its glass the window showing the frames lets them come out, in window widths
 +// (any thread; 0, the default: no limit), and the narrowest half-view tangent it shows as is (a
 +// narrower view's depths are compressed to the picture seen from that tangent, which the window's
-+// scale of depth has to match). Nearer geometry eases into the allowance from half of it.
++// scale of depth has to match). What's nearer than the glass is compressed into the allowance.
 +void set_front_allowance(float widths, float minViewTangent) noexcept;
 +
 +// The newest recorded frame whose tag is no later than `upTo` (the game frame the caller shows
@@ -275,10 +276,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..31b3c58
+index 0000000..79a96af
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,3008 @@
+@@ -0,0 +1,3101 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -2226,7 +2227,7 @@ index 0000000..31b3c58
 +constexpr float kDecalLift = 3.f;
 +// How far past the view's sides the draws are kept (times the view's half-width), for a viewer
 +// leaning to look past the window's edges, or farther from the window than the camera, who sees in
-+// front of the glass more widely than the camera did (finish's easing counts on it). 1.4 left the
++// front of the glass more widely than the camera did (finish's compression counts on it). 1.4 left the
 +// ground beneath the camera out, and the window's foot showed sky.
 +constexpr float kClipMargin = 2.f;
 +
@@ -2505,40 +2506,119 @@ index 0000000..31b3c58
 +  g_offscreen = 0;
 +}
 +
-+// finish's easing of what's nearer than the glass into the window's allowance: a point at view
-+// depth d < end moves along its line of sight to depth P - eased(k (P - d)) / k.
-+struct Easing {
-+  float plane, k, knee, rest, end;
-+  // How much a point at `depth` is scaled (about the camera), and how much the easing shortens a
-+  // small step in depth there (its slope).
++// finish's compression of what's nearer than the glass into the window's allowance. Along each
++// line of sight from the camera, 1 / depth is mapped linearly: 1/d' = 1/P + slope (1/d - 1/P),
++// from the glass (P) in to `cut`, where it reaches the allowance's limit. A map of that form (a
++// central projection about the camera) keeps straight lines straight and flat faces flat, so the
++// nearest geometry keeps its shape, only foreshortened in depth; a fence rail running past the
++// camera stays a straight rail. (The exponential easing before it bent every straight thing that
++// crossed it into an arc, and flattened what was nearest the camera into a sheet magnified many
++// times: a log beside the camera ballooned out of the window.) What's nearer than `cut` is cut off
++// at it, as a camera's near plane cuts: compressed too, it was that magnified sheet.
++struct NearCompression {
++  float plane = 0, cut = 0, slope = 1;
++  // How much a point at `depth` is scaled about the camera. (Well nearer than the cut, a vertex is
++  // one no triangle uses any more: left where it is, it doesn't fling the frame's bounds outwards.)
 +  float scale(float depth) const {
-+    if (!(depth > 1e-3f && depth < end)) {
++    if (!(depth > 1e-3f && depth < plane) || depth < cut * 0.999f) {
 +      return 1.f;
 +    }
-+    const float front = k * (plane - depth);
-+    const float eased = knee + rest * (1.f - std::exp(-(front - knee) / rest));
-+    return (plane - eased / k) / depth;
-+  }
-+  // How far behind the eased curve (eased depth) the eased edge between points at depths a and b
-+  // lies, where it crosses the line of sight through the edge's middle: there the chord is at the
-+  // harmonic mean of the ends' scales. (Never in front of the curve: the easing bows towards the
-+  // camera.)
-+  float behind(float a, float b) const {
-+    const float sa = scale(a), sb = scale(b), middle = (a + b) * 0.5f;
-+    return middle * (2.f / (1.f / sa + 1.f / sb) - scale(middle));
++    const float d = std::max(depth, cut);
++    const float inverse = 1.f / plane + slope * (1.f / d - 1.f / plane);
++    return 1.f / (inverse * depth);
 +  }
 +};
 +
++// Cuts every group's triangles at view depth `cut`, keeping what's beyond it, as a camera's near
++// plane cuts them. An edge crossing it gets one new vertex on it (shared by the two triangles on
++// the edge: no cracks), its attributes and mark (`marks`) taken along the edge.
++void cut_near(std::vector<MirrorVertex>& vertices, std::vector<Group>& groups, float cut,
++              std::vector<uint8_t>& marks) {
++  std::unordered_map<uint64_t, uint32_t> crossings;
++  const auto depth = [&](uint32_t i) { return -vertices[i].position[2]; };
++  const auto crossing = [&](uint32_t i, uint32_t j) {
++    const uint64_t key = static_cast<uint64_t>(std::min(i, j)) << 32 | std::max(i, j);
++    if (auto found = crossings.find(key); found != crossings.end()) {
++      return found->second;
++    }
++    // From the lower index, so both triangles on the edge get the same vertex.
++    const uint32_t from = std::min(i, j), to = std::max(i, j);
++    const MirrorVertex a = vertices[from], b = vertices[to];
++    const float da = depth(from), db = depth(to);
++    const float t = std::clamp((cut - da) / (db - da), 0.f, 1.f);
++    MirrorVertex m{};
++    for (int c = 0; c < 3; ++c) {
++      m.position[c] = a.position[c] + (b.position[c] - a.position[c]) * t;
++    }
++    for (int c = 0; c < 2; ++c) {
++      m.uv[c] = a.uv[c] + (b.uv[c] - a.uv[c]) * t;
++    }
++    for (int c = 0; c < 4; ++c) {
++      const float ma = from_half(a.mul[c]), mb = from_half(b.mul[c]);
++      const float aa = from_half(a.add[c]), ab = from_half(b.add[c]);
++      m.mul[c] = half(ma + (mb - ma) * t);
++      m.add[c] = half(aa + (ab - aa) * t);
++    }
++    vertices.push_back(m);
++    marks.push_back(marks[from] & marks[to]);
++    const auto index = static_cast<uint32_t>(vertices.size() - 1);
++    crossings.emplace(key, index);
++    return index;
++  };
++  std::vector<uint32_t> out;
++  for (Group& group : groups) {
++    bool near = false;
++    for (uint32_t i : group.indices) {
++      if (depth(i) < cut) {
++        near = true;
++        break;
++      }
++    }
++    if (!near) {
++      continue;
++    }
++    out.clear();
++    for (size_t t = 0; t + 2 < group.indices.size(); t += 3) {
++      const uint32_t corners[3] = {group.indices[t], group.indices[t + 1], group.indices[t + 2]};
++      int inside = 0;
++      for (uint32_t i : corners) {
++        inside += depth(i) >= cut;
++      }
++      if (inside == 3) {
++        out.insert(out.end(), corners, corners + 3);
++        continue;
++      }
++      if (inside == 0) {
++        continue;
++      }
++      // The polygon beyond the cut, in the triangle's winding (a triangle or a quad).
++      uint32_t polygon[4];
++      int count = 0;
++      for (int c = 0; c < 3; ++c) {
++        const uint32_t i = corners[c], j = corners[(c + 1) % 3];
++        const bool in = depth(i) >= cut;
++        if (in) {
++          polygon[count++] = i;
++        }
++        if (in != (depth(j) >= cut)) {
++          polygon[count++] = crossing(i, j);
++        }
++      }
++      for (int c = 1; c + 1 < count; ++c) {
++        out.insert(out.end(), {polygon[0], polygon[c], polygon[c + 1]});
++      }
++    }
++    group.indices.swap(out);
++  }
++}
++
 +// Splits every group's triangles that reach in front of `plane` wherever an edge's far end is more
 +// than 40% deeper than its near end, edge midpoints shared. A midpoint is marked (`marks`, one per
-+// vertex) when both its ends are. With an easing, a marked (decal) edge is also split while, eased,
-+// it lies behind the eased curve by more than half a decal's lift: a decal (a path, a stain, a
-+// shadow) whose triangles aren't the ground's has chords of its own, and lying farther behind the
-+// curve than its lift, it went under the ground in patches. The ground's chords are never in front
-+// of the curve, so only the decals' need it, which keeps it to their triangles (all of them split
-+// so, the frame grew to 470,000 vertices).
++// vertex) when both its ends are. (Moving vertices along their lines of sight by different amounts
++// keeps a triangle flat but spreads its texture differently across it, which streaked the ground
++// nearest the camera; small triangles keep that small.)
 +void subdivide_near(std::vector<MirrorVertex>& vertices, std::vector<Group>& groups, float plane,
-+                    std::vector<uint8_t>& marks, const Easing* easing = nullptr) {
++                    std::vector<uint8_t>& marks) {
 +  const size_t budget = vertices.size() + 400000;
 +  std::unordered_map<uint64_t, uint32_t> midpoints;
 +  const auto depth = [&](uint32_t i) { return -vertices[i].position[2]; };
@@ -2546,12 +2626,6 @@ index 0000000..31b3c58
 +    const float a = depth(i), b = depth(j), near = std::min(a, b), far = std::max(a, b);
 +    if (near >= plane || vertices.size() >= budget) {
 +      return false;
-+    }
-+    if (easing != nullptr && marks[i] != 0 && marks[j] != 0 && near > 1e-3f) {
-+      const float lift = std::min(kDecalLift, 4e-3f * easing->scale(near) * near);
-+      if (easing->behind(a, b) > 0.5f * lift) {
-+        return true;
-+      }
 +    }
 +    if (far <= near * 1.4f) {
 +      return false;
@@ -2674,6 +2748,7 @@ index 0000000..31b3c58
 +// goes), and the narrowest view it shows as is (set_front_allowance).
 +std::atomic<float> g_frontAllowance{0}, g_minViewTangent{0};
 +std::atomic<float> g_lastAllowance{0}; // the last frame's, the lesser limit (finish)
++std::atomic<float> g_lastCut{0};       // the last frame's near cut, as a share of the glass's distance
 +
 +void finish(Job& job) {
 +  Built& out = job.built;
@@ -2722,10 +2797,12 @@ index 0000000..31b3c58
 +    // still meets the ground if it comes out no farther than where that line leaves the kept
 +    // draws, which, from however far away, is (1 - 1 / kClipMargin) of the way to the camera.
 +    // And visionOS cuts a window's content off about half a metre in front of it (the window's
-+    // allowance, set_front_allowance). So beyond half the lesser of the two, what's nearer eases
-+    // into the rest along its own line of sight: the picture from the camera stays the same, and
-+    // the ground keeps its shape to below Link's feet. Easing changes triangles' shapes, so the
-+    // ones reaching that near are subdivided first, as for the band.
++    // allowance, set_front_allowance). So what's nearer than the glass is compressed into the
++    // lesser of the two along its own line of sight (NearCompression): the picture from the camera
++    // stays the same but for what's nearest it, cut off as by a near plane, and every line of sight
++    // through the window's foot still meets the ground. Moving vertices along their lines of sight
++    // changes how textures spread across triangles, so the ones reaching in front of the glass are
++    // subdivided first, as for the band.
 +    static const bool s_band = [] {
 +      const char* band = std::getenv("AURORA_MIRROR_BAND");
 +      return band != nullptr && std::strcmp(band, "1") == 0;
@@ -2736,10 +2813,24 @@ index 0000000..31b3c58
 +    const float k = 1.f / (2.f * out.plane * std::max(out.tanHalfX, g_minViewTangent.load(std::memory_order_relaxed)));
 +    const float window = g_frontAllowance.load(std::memory_order_relaxed);
 +    const float allowance = std::min(window, 0.9f * k * out.plane * (1.f - 1.f / kClipMargin));
-+    // C1 at the knee (it starts at slope 1), then nearing the allowance without reaching it.
-+    const float knee = allowance * 0.5f;
-+    const Easing easing{out.plane, k, knee, allowance - knee, out.plane - knee / k};
-+    const bool ease = !s_band && window > 0.f && easing.end > 0.f;
++    // The compression's slope (in 1 / depth): what's just in front of the glass keeps this much of
++    // its depth. The cut follows from it, where the compressed depth reaches the allowance's limit:
++    // a third of the way to the glass in a small window, nearer the glass in a large one (whose
++    // allowance is fewer window widths).
++    constexpr float kNearSlope = 0.4f;
++    NearCompression near;
++    near.plane = out.plane;
++    near.slope = kNearSlope;
++    const float nearest = out.plane - allowance / k; // the nearest compressed depth
++    if (nearest > 0.f) {
++      near.cut = 1.f / (1.f / out.plane + (1.f / nearest - 1.f / out.plane) / kNearSlope);
++    }
++    // Test runs: AURORA_MIRROR_NEAR=raw leaves what's nearer than the glass as it is.
++    static const bool s_raw = [] {
++      const char* value = std::getenv("AURORA_MIRROR_NEAR");
++      return value != nullptr && std::strcmp(value, "raw") == 0;
++    }();
++    const bool compress = !s_band && !s_raw && window > 0.f && nearest > 0.f && near.cut > 0.f;
 +    std::vector<uint8_t> decal(out.vertices.size(), 0);
 +    for (const auto& [first, end] : job.decalRanges) {
 +      std::fill(decal.begin() + first, decal.begin() + std::min<size_t>(end, decal.size()), uint8_t{1});
@@ -2747,8 +2838,9 @@ index 0000000..31b3c58
 +    size_t moved = 0;
 +    if (s_band) {
 +      subdivide_near(out.vertices, job.groups, bandEnd, decal);
-+    } else if (ease) {
-+      subdivide_near(out.vertices, job.groups, easing.end, decal, &easing);
++    } else if (compress) {
++      cut_near(out.vertices, job.groups, near.cut, decal);
++      subdivide_near(out.vertices, job.groups, out.plane, decal);
 +    }
 +    for (size_t v = 0; v < out.vertices.size(); ++v) {
 +      float* p = out.vertices[v].position;
@@ -2757,12 +2849,12 @@ index 0000000..31b3c58
 +      if (s_band && depth > 1e-3f && depth < bandEnd) {
 +        scale = (onPlane + band * onPlane * depth / bandEnd) / depth;
 +        ++moved;
-+      } else if (ease && depth > 1e-3f && depth < easing.end) {
-+        scale = easing.scale(depth);
++      } else if (compress && depth > 1e-3f && depth < out.plane) {
++        scale = near.scale(depth);
 +        ++moved;
 +      }
 +      // A decal (a path, a stain, a shadow: drawn on what's under it) lifted towards the camera
-+      // once depths are final (lifted first, the easing shortened the lift): by 0.4% of its
++      // once depths are final (lifted first, the compression shortened the lift): by 0.4% of its
 +      // distance, at most kDecalLift.
 +      if (decal[v] != 0) {
 +        const float distance = std::sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]) * scale;
@@ -2776,7 +2868,8 @@ index 0000000..31b3c58
 +    }
 +    g_lastPlane = out.plane;
 +    g_lastFocus = out.focus;
-+    g_lastAllowance = ease ? allowance : 0.f;
++    g_lastAllowance = compress ? allowance : 0.f;
++    g_lastCut = compress ? near.cut / out.plane : 0.f;
 +    g_lastBandShare = out.vertices.empty() ? 0.f : static_cast<float>(moved) / static_cast<float>(out.vertices.size());
 +    float low[3] = {INFINITY, INFINITY, INFINITY}, high[3] = {-INFINITY, -INFINITY, -INFINITY};
 +    for (const MirrorVertex& vertex : out.vertices) {
@@ -2914,8 +3007,9 @@ index 0000000..31b3c58
 +             static_cast<double>(g_finishNanos.exchange(0)) / finished / 1e6, g_dropped.exchange(0), g_textures.size());
 +    log_tally(f);
 +    Log.info("mirror: glass at {:.0f} (focus {:.0f}), {:.1f}% of vertices moved nearer it (into its band, or "
-+             "easing into {:.2f} window widths in front; clipped ones counted too)",
-+             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f, g_lastAllowance.load());
++             "compressed into {:.2f} window widths in front, cut at {:.2f} of the glass's distance)",
++             g_lastPlane.load(), g_lastFocus.load(), g_lastBandShare.load() * 100.f, g_lastAllowance.load(),
++             g_lastCut.load());
 +    g_stats = {};
 +  }
 +}

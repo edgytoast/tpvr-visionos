@@ -230,6 +230,14 @@ final class GameScreen {
         // (its frames are ready a little sooner): drawn from different frames, they slid apart.
         mirrorShowing = mirror?.update(upTo: shownGameFrame) ?? false
         guard fresh else { return }
+        // Test runs: TPVR_TEST_DUMP_AT=<seconds> writes the mirror's frame and the window frame shown
+        // with it (the same game frame), the first time the mirror shows one that long after the
+        // window opened.
+        if let at = Self.dumpAt, !dumpedAt, mirrorShowing, let mirror, CACurrentMediaTime() - opened >= at {
+            dumpedAt = true
+            dumpingNow = true
+            mirror.dumpShown()
+        }
         let serial = frame.serial
         guard let commands = queue.makeCommandBuffer() else {
             dusk_visionos_window_release(serial)
@@ -351,7 +359,8 @@ final class GameScreen {
             effects.isEnabled = layer != nil
             primary?.isEnabled = false
             backstop?.isEnabled = false
-            if Self.dumpFrame == frames {
+            if Self.dumpFrame == frames || dumpingNow {
+                dumpingNow = false
                 Self.dump(frame)
             }
             return true
@@ -400,6 +409,9 @@ final class GameScreen {
     // the mirror) pre-effects scene (BGRA8) and distances (RGBA16F) raw into Documents, named with
     // their sizes.
     private static let dumpFrame = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_DUMP"].flatMap(Int.init) ?? -1
+    private static let dumpAt = ProcessInfo.processInfo.environment["TPVR_TEST_DUMP_AT"].flatMap(Double.init)
+    private let opened = CACurrentMediaTime()
+    private var dumpedAt = false, dumpingNow = false
 
     private static func dump(_ frame: dusk_visionos_window_frame) {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -445,9 +457,10 @@ final class GameScreen {
         portal = ModelEntity(mesh: .generatePlane(width: 1, height: height), materials: [PortalMaterial()])
         // Not clipped at the glass, as in the SHAR port: what the mirror has nearer than the glass
         // (TP's pitched-down ground towards the camera) comes out in front of it, inside the
-        // window's opening, as the shape it is (only the nearest of it eased in, within
-        // frontAllowance). Clipped there, it had to be squashed into a band behind the glass, which
-        // bent the ground. Test runs: AURORA_MIRROR_BAND=1 clips again (and brings back the band).
+        // window's opening, its straight lines straight (compressed in depth to stay within
+        // frontAllowance, the nearest cut off). Clipped there, it had to be squashed into a band
+        // behind the glass, which bent the ground. Test runs: AURORA_MIRROR_BAND=1 clips again (and
+        // brings back the band).
         if ProcessInfo.processInfo.environment["AURORA_MIRROR_BAND"] == "1" {
             portal.components.set(PortalComponent(target: world,
                                                   clippingMode: .plane(.init(position: .zero, normal: [0, 0, 1])),

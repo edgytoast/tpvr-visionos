@@ -167,6 +167,21 @@ owns the swapchain images and Dawn imports them.
       parts that use U), and the wider symbolic values doubled decoding. Kept from it: the
       hardware half-float conversion, AURORA_MIRROR_LOG=3 (every material, lighting included).
       The attempt is in the session's notes, not the tree.
+- [x] What's nearer than the glass keeps its shape (2026-10-10, Trevor on the headset: "a straight
+      log... bows like crazy... entities, the floor, seemingly everything"). The easing that kept it
+      within the window's front allowance (a4fbe68d0a) was exponential in depth along each line of
+      sight, which bent every straight line crossing it into an arc and flattened what was nearest
+      the camera into a sheet magnified many times (a log beside the camera ballooned out of the
+      window's face). Now 1 / depth is mapped linearly from the glass inwards (a central projection
+      about the camera: straight lines stay straight, flat faces flat, triangles stay triangles,
+      so decals need no extra splitting), what's just in front of the glass keeps 40% of its depth,
+      and what's nearer than where that reaches the allowance (a third of the glass's distance in
+      a small window, more in a large one) is cut off, as a camera's near plane cuts. The foot
+      stays covered (no sky strip), the picture from the camera is the same but for what's cut,
+      and the frame is a few percent lighter (Simulator: 79.7k vertices a frame against 84.1k, at
+      Ordon Ranch with a goat beside the camera). `minViewTangent` (0.7) doesn't come into it: TP's
+      gameplay cameras are 0.72 wide (0.71 indoors), and it squashes depth linearly, which bends
+      nothing.
 - [ ] Link comes out flatter and a little darker than the game draws him (his one-texture
       material is 4 (C1 + K0 (1 - ras) + T ras), ras lit by eight lights): the mirror lights per
       vertex, aurora can light per pixel. Strong bloom (the Lost Woods) then washes him out.

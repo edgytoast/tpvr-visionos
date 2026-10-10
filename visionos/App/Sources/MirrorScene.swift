@@ -185,6 +185,7 @@ final class MirrorScene {
         takeTextures(frame, start: start)
         guard frame.serial != serial else { return hasScene }
         serial = frame.serial
+        shown = frame
         timing.frames += 1
         timing.total += 1
         guard frame.scene, frame.index_count > 0, frame.part_count > 0, frame.tan_half_x > 0,
@@ -676,7 +677,7 @@ final class MirrorScene {
         var made = 0
         while !pendingTextures.isEmpty && (made == 0 || CACurrentMediaTime() - start < 0.004) {
             let pending = pendingTextures.removeFirst()
-            if Self.dumpFrame >= 0 {
+            if Self.dumpFrame >= 0 || Self.dumpsLater {
                 dumpTextures[pending.id] = pending
             }
             // Read back again before its first was made: into the texture already there.
@@ -896,6 +897,16 @@ final class MirrorScene {
     // textures made so far (tex-<id>-<w>x<h>.rgba).
     private static let dumpFrame = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_DUMP"].flatMap(Int.init) ?? -1
     private var dumpTextures: [UInt64: PendingTexture] = [:]
+    /// GameScreen dumps the frame shown at a set time (TPVR_TEST_DUMP_AT): textures are kept for it.
+    static let dumpsLater = ProcessInfo.processInfo.environment["TPVR_TEST_DUMP_AT"] != nil
+    /// The frame last taken in (its pointers last until the next update).
+    private var shown = dusk_visionos_mirror_frame()
+
+    /// Test runs: writes the frame last taken in, as TPVR_TEST_MIRROR_DUMP does.
+    func dumpShown() {
+        guard shown.serial != 0 else { return }
+        dump(shown)
+    }
 
     private func dump(_ frame: dusk_visionos_mirror_frame) {
         let folder = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
