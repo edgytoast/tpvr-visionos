@@ -20,6 +20,14 @@ namespace {
 
 SDL_JoystickID g_pad = 0;
 
+// SDL names each Sense half after its GameController vendorName, "… Sense Controller (L)" or
+// "(R)". A plain "Sense" also matched "DualSense Wireless Controller": a DualSense was ignored
+// and lost player 1 every frame, so its Start (and every other button) never reached the game.
+bool IsSenseHalf(const char* name) {
+    return name != nullptr && std::strstr(name, "Sense Controller") != nullptr &&
+           std::strstr(name, "DualSense") == nullptr;
+}
+
 // One half's state.
 struct Half {
     bool present = false;
@@ -95,7 +103,7 @@ void ClaimPort() {
         SDL_Gamepad* gamepad = SDL_GetGamepadFromID(id);
         if (gamepad == nullptr) continue;
         const char* name = SDL_GetGamepadName(gamepad);
-        if (name != nullptr && std::strstr(name, "Sense") != nullptr) {
+        if (IsSenseHalf(name)) {
             if (SDL_GetGamepadPlayerIndex(gamepad) != -1) SDL_SetGamepadPlayerIndex(gamepad, -1);
             continue;
         }
@@ -200,7 +208,7 @@ void tidy_ports() {
         seen.push_back(gamepads[i]);
         const char* name = SDL_GetGamepadName(gamepad);
         const int player = SDL_GetGamepadPlayerIndex(gamepad);
-        if (gamepads[i] != g_pad && name != nullptr && std::strstr(name, "Sense") != nullptr) {
+        if (gamepads[i] != g_pad && IsSenseHalf(name)) {
             if (player != -1) SDL_SetGamepadPlayerIndex(gamepad, -1);
             continue;
         }
@@ -257,7 +265,7 @@ bool ignores(const SDL_Event& event) {
     if (name == nullptr) {
         name = SDL_GetJoystickNameForID(which);
     }
-    return name != nullptr && std::strstr(name, "Sense") != nullptr;
+    return IsSenseHalf(name);
 }
 
 }  // namespace dusk::visionos::sense_pad
