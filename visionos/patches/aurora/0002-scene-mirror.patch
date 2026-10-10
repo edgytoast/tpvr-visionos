@@ -278,10 +278,10 @@ index d51516f..cf1ba3f 100644
      auto label = reader.read_string();
 diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
 new file mode 100644
-index 0000000..eb99516
+index 0000000..5910998
 --- /dev/null
 +++ b/lib/gx/mirror.cpp
-@@ -0,0 +1,3356 @@
+@@ -0,0 +1,3360 @@
 +// The scene mirror (aurora/mirror.h): every perspective draw of a frame's 3D scene, decoded on the
 +// CPU as the generated shaders (shader.cpp) would run it, so a host renderer can draw the level
 +// again from any viewpoint.
@@ -2967,8 +2967,13 @@ index 0000000..eb99516
 +  out.tanHalfY = job.tanHalfY;
 +  out.indices.clear();
 +  out.parts.clear();
++  // The glass's eased share (below) and the focus it was eased at, the one finishing worker's. A
++  // frame without a scene (a load, a film) ends the easing: the next scene is a cut.
++  static float s_share = 1.f, s_focus = 0.f;
 +  if (!out.scene) {
 +    out.vertices.clear();
++    s_share = 1.f;
++    s_focus = 0.f;
 +  } else {
 +    // The background behind everything else.
 +    if (!job.backgroundRanges.empty() && job.nearestBackground < INFINITY && job.farthest > 0) {
@@ -3028,7 +3033,6 @@ index 0000000..eb99516
 +    // leapt to the camera for a frame), and by at most a tenth a frame unless the camera cut (its
 +    // focus jumped), so the window's depths don't jump as he crosses those.
 +    {
-+      static float s_share = 1.f, s_focus = 0.f; // (the one finishing worker's)
 +      float share = 1.f;
 +      if (job.subject > 0.15f * out.plane && window > 0.f && !s_band) {
 +        const float floor = 1.f - allowance / camera + 0.1f;
