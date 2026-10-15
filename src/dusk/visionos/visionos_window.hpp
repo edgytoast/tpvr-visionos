@@ -39,6 +39,11 @@ void scene_drawn();
 // painter then makes its depth of field's copies but doesn't draw it.
 bool mirroring();
 
+// Whether the window shows the game's own frame (in 2D, or on the way to or from it;
+// dusk_visionos_set_window_game_frame): the painter then draws its depth of field even while
+// mirroring, so the frame doesn't sharpen or blur all at once as the mirror stops or starts.
+bool game_frame_shown();
+
 // mDoGph_drawHud2D's two stages: the scene and its depth before the HUD, then the finished frame.
 void before_hud();
 void after_hud();

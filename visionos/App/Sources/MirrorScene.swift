@@ -111,6 +111,16 @@ final class MirrorScene {
     private var materialReady: [Bool] = []
     private var serial: UInt64 = 0
     private(set) var hasScene = false
+    /// How far the scene is laid flat on the glass (WindowDepth.flatten): 0 at full depth, 1 flat,
+    /// each point moved along its own line of sight. Applied as the mesh is filled; a change refills
+    /// the frame shown.
+    var flatten: Float = 0
+    private var filledFlatten: Float = 0
+    // After resume(): no frame shows until one made since (a game frame after `resumedAfter`).
+    private var awaitingFresh = false
+    private var resumedAfter: UInt32 = 0
+    /// The frame last filled had no part left out waiting for its texture.
+    private(set) var whole = false
     /// The view distance the glass is at (game units), as last placed.
     private(set) var plane: Float = 1
     /// How much depths are compressed for a narrow view (1 for a normal one), as last placed.
@@ -212,24 +222,34 @@ final class MirrorScene {
         var frame = dusk_visionos_mirror_frame()
         guard dusk_visionos_mirror_acquire(&frame, upTo) else { return false }
         takeTextures(frame, start: start)
-        guard frame.serial != serial else { return hasScene }
-        serial = frame.serial
+        // The same frame again only to lay it flatter or deeper (WindowDepth's transition).
+        let fresh = frame.serial != serial
+        guard fresh || (hasScene && !awaitingFresh && flatten != filledFlatten) else { return hasScene && !awaitingFresh }
+        if fresh {
+            serial = frame.serial
+            // A frame finished before the mirror stopped may still be the newest: not that one.
+            if awaitingFresh && !Self.notAfter(frame.game_frame, resumedAfter) { awaitingFresh = false }
+            timing.frames += 1
+            timing.total += 1
+        }
+        guard !awaitingFresh else { return false }
+        filledFlatten = flatten
         shown = frame
-        timing.frames += 1
-        timing.total += 1
         guard frame.scene, frame.index_count > 0, frame.part_count > 0, frame.tan_half_x > 0,
               let vertices = frame.vertices, let indices = frame.indices, let parts = frame.parts else {
             entity.isEnabled = false
             backdrop.isEnabled = false
             for slot in blendSlots { slot.entity.isEnabled = false }
             hasScene = false
+            whole = false
             return false
         }
         last = (Int(frame.vertex_count), Int(frame.index_count), Int(frame.part_count), last.blended)
         let keys = (0..<Int(frame.part_count)).map { MaterialKey(parts[$0]) }
         updateMaterials(keys)
-        let low = SIMD3(frame.bounds_min.0, frame.bounds_min.1, frame.bounds_min.2)
-        let high = SIMD3(frame.bounds_max.0, frame.bounds_max.1, frame.bounds_max.2)
+        var low = SIMD3(frame.bounds_min.0, frame.bounds_min.1, frame.bounds_min.2)
+        var high = SIMD3(frame.bounds_max.0, frame.bounds_max.1, frame.bounds_max.2)
+        if flatten > 0 { (low, high) = Self.withGlass(low, high, frame) }
         let pad = (high - low) * 0.05 + 1
         let bounds = BoundingBox(min: low - pad, max: high + pad)
         // A part whose texture is still on its way waits: drawn white, it flashed.
@@ -249,9 +269,10 @@ final class MirrorScene {
             }
             solidParts.append((index, materialIndex))
         }
+        whole = wantedTextures.isEmpty
         let fillStart = CACurrentMediaTime()
         let filled = fill(vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices, parts: parts,
-                          keys: keys, solid: solidParts, bounds: bounds)
+                          keys: keys, solid: solidParts, bounds: bounds, plane: Self.glassPlane(frame))
         stages.fill += CACurrentMediaTime() - fillStart
         guard let (filledIndex, solid) = filled, let mesh = levelMeshes[filledIndex]?.mesh else { return hasScene }
         let partsStart = CACurrentMediaTime()
@@ -289,7 +310,7 @@ final class MirrorScene {
                 taken[s] = true
             }
             if fillBlend(blendSlots[s], order: k, part: parts[part.index], key: keys[part.index], material: part.material,
-                         vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices) {
+                         vertices: vertices, vertexCount: Int(frame.vertex_count), indices: indices, frame: frame) {
                 blended += 1
             } else {
                 blendSlots[s].entity.isEnabled = false
@@ -317,7 +338,7 @@ final class MirrorScene {
     /// its camera sat two window widths out and anyone nearer saw past the edges of what the game
     /// drew.
     private func place(_ frame: dusk_visionos_mirror_frame) {
-        let plane = max(frame.plane, 1)
+        let plane = Self.glassPlane(frame)
         let tan = frame.tan_half_x
         let depthScale = tan / max(tan, ReliefParams.minViewTangent)
         self.plane = plane
@@ -373,7 +394,7 @@ final class MirrorScene {
     private func fill(vertices: UnsafePointer<dusk_visionos_mirror_vertex>, vertexCount: Int,
                       indices: UnsafePointer<UInt32>, parts: UnsafePointer<dusk_visionos_mirror_part>,
                       keys: [MaterialKey], solid: [(index: Int, materialIndex: Int)],
-                      bounds: BoundingBox) -> (Int, [LowLevelMesh.Part])? {
+                      bounds: BoundingBox, plane framePlane: Float) -> (Int, [LowLevelMesh.Part])? {
         let index = Self.oneLevelMesh ? shownMesh : 1 - shownMesh
         // Each part's region: the one it had, or a new one after the rest when it has none or has
         // outgrown it (half as much again as it needs, so a part that grows a little stays put).
@@ -455,6 +476,9 @@ final class MirrorScene {
         // headset's renderer drew between the vertices and the indices).
         mesh.replaceUnsafeMutableBytes(bufferIndex: 0) { raw in
             raw.copyMemory(from: UnsafeRawBufferPointer(start: vertices, count: vertexCount * 36))
+            if flatten > 0 {
+                for index in 0..<vertexCount { Self.flatten(raw.baseAddress! + index * 36, plane: framePlane, by: flatten) }
+            }
             // Test runs: TPVR_TEST_MIRROR_ADD_RED=1 makes every vertex mul 0, add opaque red: the
             // window should be solid red where the mirror draws (it checks uv1/uv2 reach the materials).
             if Self.addRed {
@@ -513,6 +537,50 @@ final class MirrorScene {
         return true
     }
 
+    /// The view depth the glass is at (game units): the frame's plane, a unit at the least.
+    private static func glassPlane(_ frame: dusk_visionos_mirror_frame) -> Float { max(frame.plane, 1) }
+
+    /// The vertex at `vertex` moved `amount` of the way along its line of sight onto the glass, at
+    /// view depth `plane` (WindowDepth's flattening): from the game camera's place the picture is the
+    /// same at any amount (and with place()'s depth compression too: it scales depths about the
+    /// camera). Flat, it keeps its order in depth in a thin band about the glass (`flatBand` of the
+    /// glass's distance either side: what's nearer than the glass in front of it, the sky at the
+    /// back): laid on one plane, everything at one depth, the first part drawn hid the rest (the
+    /// Wind Waker port's sky took the whole picture).
+    private static func flatten(_ vertex: UnsafeMutableRawPointer, plane: Float, by amount: Float) {
+        let p = vertex.assumingMemoryBound(to: Float.self)
+        let depth = -p[2]
+        guard depth > 1e-3 else { return }
+        // -1 at the camera, 0 at the glass, 1 at infinity: the order kept, within the band.
+        let order = depth >= plane ? 1 - plane / depth : depth / plane - 1
+        let flat = plane * (1 + flatBand * order)
+        let scale = 1 + amount * (flat / depth - 1)
+        p[0] *= scale
+        p[1] *= scale
+        p[2] *= scale
+    }
+    private static let flatBand: Float = 0.05
+
+    /// Bounds taking in the glass's part of the view too (what's flattened lies there, in its band).
+    private static func withGlass(_ low: SIMD3<Float>, _ high: SIMD3<Float>,
+                                  _ frame: dusk_visionos_mirror_frame) -> (SIMD3<Float>, SIMD3<Float>) {
+        let plane = glassPlane(frame)
+        let back = plane * (1 + flatBand), front = plane * (1 - flatBand)
+        let half = SIMD2(back * frame.tan_half_x, back * max(frame.tan_half_y, 1e-3)) * 2
+        return (simd_min(low, [-half.x, -half.y, -back]), simd_max(high, [half.x, half.y, -front]))
+    }
+
+    /// No frame shows until one of a game frame after `gameFrame` (the window's, now): the mirror
+    /// runs again after stopping, and what it had, or had finished just before, is old.
+    func resume(after gameFrame: UInt32) {
+        awaitingFresh = true
+        resumedAfter = gameFrame
+        whole = false
+    }
+
+    /// Game frame numbers are 24 bits (aurora's not_after): whether `a` is `b` or before it.
+    private static func notAfter(_ a: UInt32, _ b: UInt32) -> Bool { (b &- a) & 0xFFFFFF < 0x800000 }
+
     /// TPVR_TEST_MIRROR_ADD_RED: the vertex at `vertex` gets mul 0, add opaque red.
     private static func paintRed(_ vertex: UnsafeMutableRawPointer) {
         let red: [UInt16] = [0, 0, 0, 0, 0x3C00, 0, 0, 0x3C00]  // half 1.0 = 0x3C00
@@ -523,7 +591,7 @@ final class MirrorScene {
     /// (most of the frame's are solid), its indices renumbered, one part. False: the slot shows nothing.
     private func fillBlend(_ slot: BlendSlot, order k: Int, part: dusk_visionos_mirror_part, key: MaterialKey,
                            material: ShaderGraphMaterial, vertices: UnsafePointer<dusk_visionos_mirror_vertex>,
-                           vertexCount: Int, indices: UnsafePointer<UInt32>) -> Bool {
+                           vertexCount: Int, indices: UnsafePointer<UInt32>, frame: dusk_visionos_mirror_frame) -> Bool {
         let first = Int(part.first_index), count = Int(part.index_count)
         guard count > 0 else { return false }
         if remap.count < vertexCount { remap = [Int32](repeating: -1, count: vertexCount) }
@@ -548,6 +616,7 @@ final class MirrorScene {
             low = simd_min(low, point)
             high = simd_max(high, point)
         }
+        if flatten > 0 { (low, high) = Self.withGlass(low, high, frame) }
         let pad = (high - low) * 0.05 + 1
         let bounds = BoundingBox(min: low - pad, max: high + pad)
         // A bigger mesh replaces the slot's only once its resource is made: kept on failure, the
@@ -570,6 +639,7 @@ final class MirrorScene {
             for (j, v) in used.enumerated() {
                 let at = raw.baseAddress! + j * 36
                 at.copyMemory(from: vertices + Int(v), byteCount: 36)
+                if flatten > 0 { Self.flatten(at, plane: Self.glassPlane(frame), by: flatten) }
                 if Self.addRed { Self.paintRed(at) }
             }
         }

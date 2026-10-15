@@ -11,7 +11,9 @@ import Synchronization
 /// viewer's real eyes, so Hyrule has true depth from any angle; the HUD and Dusklight's menus
 /// come from the game's frames (src/dusk/visionos/visionos_window.hpp) and sit flat on the
 /// window's glass. As the SHAR port's window does. The frames' relief (a grid displaced by the
-/// game's depth) is the fallback: TPVR_TEST_WINDOW_RELIEF=1, or until the mirror has a frame.
+/// game's depth) is the fallback: TPVR_TEST_WINDOW_RELIEF=1, or until the mirror has a frame. The
+/// button above the picture's corner (WindowDepthToggle.swift) shows the game flat instead, in 2D.
+/// (With 2D the kept choice, the relief hook needs TPVR_TEST_WINDOW_DEPTH=3d too.)
 struct GameWindowView: View {
     @EnvironmentObject private var model: GameModel
     @Environment(\.dismissWindow) private var dismissWindow
@@ -19,12 +21,29 @@ struct GameWindowView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var updates: EventSubscription?
     @State private var aspect: CGFloat = 16.0 / 9.0
+    // The window's size: the picture is fitted in it, at the game's aspect.
+    @State private var windowSize: CGSize = .zero
+    // 2D or 3D (WindowDepthToggle.swift, from the Wind Waker port), on a gamepad L1 + R3: View /
+    // Create opens Dusklight's menu here, and neither L1 nor a stick click is a game button in
+    // Dusklight's standard mapping. Test runs: TPVR_TEST_WINDOW_DEPTH=2d|3d[,2d@<s>,3d@<s>...]
+    // starts so (over the kept choice) and switches at those seconds after the launch.
+    @State private var depth = WindowDepth(initial: TestHooks.value("TPVR_TEST_WINDOW_DEPTH")?.split(separator: ",").first
+        .flatMap { WindowDepth.Mode(rawValue: String($0)) }, chord: .leftShoulderRightStick)
+
+    /// The picture's top-right corner in the window (unit coordinates): it's fitted at the game's
+    /// aspect, and the window can be wider or taller.
+    private var pictureTopTrailing: UnitPoint {
+        guard windowSize.width > 0, windowSize.height > 0, aspect > 0 else { return .topTrailing }
+        let width = min(windowSize.width, windowSize.height * aspect)
+        let height = min(windowSize.height, windowSize.width / aspect)
+        return UnitPoint(x: 0.5 + width / windowSize.width / 2, y: 0.5 - height / windowSize.height / 2)
+    }
 
     var body: some View {
         GeometryReader3D { geometry in
             RealityView { content in
                 let screen: GameScreen
-                do { screen = try await GameScreen() } catch {
+                do { screen = try await GameScreen(depth: depth) } catch {
                     print("[TPVR] the game window's materials failed to load: \(error)")
                     return
                 }
@@ -43,6 +62,19 @@ struct GameWindowView: View {
             // widget (the SHAR port found this on the headset). Nothing is done with them.
             .gesture(SpatialTapGesture().targetedToAnyEntity().onEnded { _ in })
         }
+        // 2D or 3D: a glass button just above the picture's top-right corner, clear of the window's
+        // bar and close button below (inside the picture, it covered the game's own HUD there: the
+        // Wind Waker port). The window can be wider or taller than the picture: the button moves in
+        // to the picture's corner.
+        .ornament(attachmentAnchor: .scene(pictureTopTrailing), contentAlignment: .bottomTrailing) {
+            if depth.available {
+                WindowDepthButton(depth: depth)
+                    .padding(.bottom, 4)
+                    // An ornament is hosted apart from the window's content: looking at the button,
+                    // a gamepad's A would otherwise press it (a pinch) and the game lose the A.
+                    .handlesGameControllerEvents(matching: .gamepad)
+            }
+        }
         // visionOS turns a game controller's buttons into pinches on whatever the player looks at,
         // unless the view says it reads the controller itself: with another window open the game
         // got nothing (SHAR). Looking at the game window gives it the controller.
@@ -54,7 +86,10 @@ struct GameWindowView: View {
         .frame(depth: 4)
         .aspectRatio(aspect, contentMode: .fit)
         .frame(minWidth: 640, idealWidth: 1280, maxWidth: 4096, minHeight: 300, idealHeight: 720, maxHeight: 2304)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { windowSize = $0 }
         .onAppear {
+            // The kept choice, before the game's first frame.
+            dusk_visionos_set_window_3d(depth.mirrorWanted)
             let openWindow = openWindow
             model.showLauncher = { openWindow(id: GameModel.launcherWindowID, value: GameModel.launcherWindowID) }
             model.gameWindowShowing = true
@@ -133,10 +168,32 @@ final class GameScreen {
     /// Window frames committed to the GPU and not yet done, for the memory log.
     nonisolated private static let framesInFlight = Atomic<Int>(0)
     private var shownGameFrame: UInt32 = 0
+    // 2D or 3D, and what the game was last told (dusk_visionos_set_window_3d).
+    private let depth: WindowDepth
+    private var told3D: Bool?
+    private var toldGameFrame: Bool?
+    // The last frame drew the mirror (the 3D path), for WindowDepth's return to 3D, and how flat
+    // (WindowDepth.flatFrame) it was drawn; and how flat the last one the GPU finished was (its
+    // Float's bits), for the way to 2D: the mirror stops only once a wholly flat frame is on the
+    // glass, not when one is only encoded (its command buffer waits for the game's).
+    private var drewMirror = false
+    private var drawnFlat: Float = 1
+    nonisolated private static let finishedFlat = Atomic<UInt32>(Float(1).bitPattern)
+    // TPVR_TEST_WINDOW_DEPTH's switches: (seconds after the launch, mode), in order. (From the
+    // launch, not the window's opening, so a script outside can time its screenshots by them.)
+    private var depthScript: [(TimeInterval, WindowDepth.Mode)] = (TestHooks.value("TPVR_TEST_WINDOW_DEPTH") ?? "")
+        .split(separator: ",").dropFirst().compactMap { item in
+            let pair = item.split(separator: "@")
+            guard pair.count == 2, let mode = WindowDepth.Mode(rawValue: String(pair[0])),
+                  let at = TimeInterval(pair[1]) else { return nil }
+            return (at, mode)
+        }
 
     private static let rows = 216
 
-    init() async throws {
+    init(depth: WindowDepth) async throws {
+        self.depth = depth
+        Self.finishedFlat.store(Float(1).bitPattern, ordering: .relaxed)
         var relief = try await ShaderGraphMaterial(named: "/Root/ReliefFrame", from: "WindowFrame.usda", in: .main)
         // Seen from the side, a stretch across a depth step can face away; it still hides what's behind.
         relief.faceCulling = .none
@@ -182,6 +239,8 @@ final class GameScreen {
                 dusk_visionos_set_mirror_enabled(false)
             }
         }
+        // No mirror: no button (the relief, or 2D if that was the choice).
+        if mirror == nil { depth.unavailable() }
     }
 
     /// Window units onto the window: its face is the back of the view's bounds, scaled to its width
@@ -221,6 +280,31 @@ final class GameScreen {
         case .none: break
         }
         dusk_visionos_window_tick()
+        // 2D or 3D: the transition's step, and the game and the mirror told when the mirror's
+        // wanted or not (in 2D neither does any of the 3D's work). Without a mirror the game keeps
+        // its scene for the relief, unless 2D was the choice.
+        if let (at, mode) = depthScript.first, TestHooks.secondsSinceLaunch() >= at {
+            depthScript.removeFirst()
+            depth.set(mode, persist: false)
+        }
+        depth.tick(mirrorShowing: drewMirror || mirror == nil, mirrorWhole: mirror?.whole ?? true,
+                   flatShown: Float(bitPattern: Self.finishedFlat.load(ordering: .relaxed)))
+        // While the game's own frame shows (in 2D, or on the way to or from it), the game draws its
+        // depth of field, which the mirror goes without: it doesn't then sharpen or blur all at once.
+        let gameFrame = depth.mode == .twoD || depth.flatFrame > 0
+        if toldGameFrame != gameFrame {
+            toldGameFrame = gameFrame
+            dusk_visionos_set_window_game_frame(gameFrame)
+        }
+        let wants3D = depth.mirrorWanted || (mirror == nil && depth.mode == .threeD)
+        if told3D != wants3D {
+            told3D = wants3D
+            dusk_visionos_set_window_3d(wants3D)
+            if depth.mirrorWanted { mirror?.resume(after: shownGameFrame) }
+            mirror?.root.isEnabled = depth.mirrorWanted
+            print(String(format: "[TPVR] window: %@ (%.2f s after the launch)", wants3D ? "3D" : "2D",
+                         TestHooks.secondsSinceLaunch()))
+        }
         var frame = dusk_visionos_window_frame()
         let fresh = dusk_visionos_window_acquire(&frame)
         if fresh {
@@ -228,7 +312,10 @@ final class GameScreen {
         }
         // The mirror's frame from the same game frame as the HUD and screen effects shown with it
         // (its frames are ready a little sooner): drawn from different frames, they slid apart.
-        mirrorShowing = mirror?.update(upTo: shownGameFrame) ?? false
+        // Test runs: TPVR_TEST_WINDOW_FLAT_MIRROR=1 lays the mirror flat on the glass in 3D, where
+        // it can be compared pixel for pixel with the game's own frame (TPVR_TEST_WINDOW_DEPTH=2d).
+        mirror?.flatten = Self.flatMirror ? 1 : depth.flatten
+        mirrorShowing = depth.mirrorWanted ? (mirror?.update(upTo: shownGameFrame) ?? false) : false
         guard fresh else { return }
         // Test runs: TPVR_TEST_DUMP_AT=<seconds> writes the mirror's frame and the window frame shown
         // with it (the same game frame), the first time the mirror shows one that long after the
@@ -260,7 +347,9 @@ final class GameScreen {
         // the slot is handed over when submitted, not finished), before it goes back.
         let dumping = dumpThisFrame
         dumpThisFrame = false
+        let flat = drawnFlat
         commands.addCompletedHandler { _ in
+            Self.finishedFlat.store(flat.bitPattern, ordering: .relaxed)
             if dumping { Self.dump(frame) }
             dusk_visionos_window_release(serial)
             Self.framesInFlight.subtract(1, ordering: .relaxed)
@@ -307,6 +396,7 @@ final class GameScreen {
     /// window shows the game's own picture, as it does before the mirror's first frame.
     private func dropMirror() {
         dusk_visionos_set_mirror_enabled(false)
+        depth.unavailable()
         mirror?.root.removeFromParent()
         mirror = nil
         mirrorShowing = false
@@ -335,15 +425,12 @@ final class GameScreen {
         guard let scene = texture(frame.scene, format: .bgra8Unorm_srgb),
               let distance = texture(frame.distance, format: .rgba16Float),
               frame.tan_half_x > 0, frame.tan_half_y > 0 else {
-            // No 3D scene (title, loading, films): the whole picture is flat on the glass.
-            pipelines.flat(commands, final: final, ui: ui, hud: hud)
-            pipelines.mipmaps(commands, hud)
-            primary?.isEnabled = false
-            backstop?.isEnabled = false
-            effects.isEnabled = false
-            return true
+            // No 3D scene (title, loading, films, or 2D): the whole picture is flat on the glass.
+            return encodeFlat(commands, final: final, ui: ui, hud: hud)
         }
         if mirrorShowing, let mirror {
+            drewMirror = true
+            drawnFlat = depth.flatFrame
             // The mirror draws the world; the HUD and the screen effects come from the frame.
             // The picture before the screen effects: what turned black (fades, letterbox bars) is
             // found from it and goes on the glass, with or without the effects' layer.
@@ -367,7 +454,7 @@ final class GameScreen {
             pipelines.glow(commands, scene: scene, base: glowing ? base : nil, fade: fade,
                            glow: mirror.glowTarget(using: commands))
             pipelines.hud(commands, final: final, scene: scene, base: base, ui: ui, hud: hud, effects: layer,
-                          fade: Self.fadeCover(frame), ghost: Self.ghostEffects)
+                          fade: Self.fadeCover(frame), ghost: Self.ghostEffects, flat: depth.flatFrame)
             pipelines.mipmaps(commands, hud)
             effects.isEnabled = layer != nil
             primary?.isEnabled = false
@@ -378,6 +465,13 @@ final class GameScreen {
             }
             return true
         }
+        // With a mirror, the relief only stands in for it in 3D before its first frame: on the way to
+        // or from 2D (the mirror stopped, or not showing yet), the game's own frame.
+        if mirror != nil && depth.flatFrame > 0 {
+            return encodeFlat(commands, final: final, ui: ui, hud: hud)
+        }
+        drewMirror = false
+        drawnFlat = 0
         let sceneSize = SIMD2(scene.width, scene.height)
         if sceneSize != colourSize || primaryMesh == nil, !makeRelief(size: sceneSize) { return false }
         guard let colour, let primaryMesh, let backstopMesh, let distances else { return false }
@@ -403,6 +497,18 @@ final class GameScreen {
         return true
     }
 
+    /// The game's whole frame (and Dusklight's menus), flat on the glass.
+    private func encodeFlat(_ commands: MTLCommandBuffer, final: MTLTexture, ui: MTLTexture?, hud: MTLTexture) -> Bool {
+        pipelines.flat(commands, final: final, ui: ui, hud: hud)
+        pipelines.mipmaps(commands, hud)
+        primary?.isEnabled = false
+        backstop?.isEnabled = false
+        effects.isEnabled = false
+        drewMirror = false
+        drawnFlat = 1
+        return true
+    }
+
     // Test runs: TPVR_TEST_WINDOW_LAYERS=p or =b shows only that layer of the relief.
     private static let shownLayers: String = {
         let shown = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_LAYERS"] ?? ""
@@ -415,6 +521,7 @@ final class GameScreen {
     // (the grid stretched along the view rays there). Fades and letterbox bars stay, on the glass
     // with the HUD. Test runs: TPVR_TEST_WINDOW_EFFECTS=1 brings the layer back; =ghost puts the
     // game's own picture in it at half opacity (one Link if it lines up, two if not).
+    private static let flatMirror = TestHooks.value("TPVR_TEST_WINDOW_FLAT_MIRROR") == "1"
     private static let showEffects = ["1", "ghost"].contains(ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] ?? "")
     private static let ghostEffects = ProcessInfo.processInfo.environment["TPVR_TEST_WINDOW_EFFECTS"] == "ghost"
     // The screen effects (bloom and its tints above all: TP's warm glow, Link's house's golden haze)
@@ -725,6 +832,7 @@ private struct HudFlags {
     var ghost: UInt32
     var writeEffects: UInt32
     var fade: SIMD4<Float>  // the game's fade on the glass: linear colour times cover, then cover
+    var flat: Float  // WindowDepth.flatFrame: how much of the game's own frame covers the mirror
 }
 
 /// The window's Metal kernels (adapted from the SHAR port's visionos_window.mm).
@@ -772,13 +880,13 @@ private struct Pipelines {
     /// The HUD over the scene, and (given `base`, the scene before the screen effects, and an
     /// `effects` target) what those effects did to it.
     func hud(_ commands: MTLCommandBuffer, final: MTLTexture, scene: MTLTexture, base: MTLTexture?, ui: MTLTexture?,
-             hud: MTLTexture, effects: MTLTexture?, fade: SIMD4<Float> = .zero, ghost: Bool = false) {
+             hud: MTLTexture, effects: MTLTexture?, fade: SIMD4<Float> = .zero, ghost: Bool = false, flat: Float = 0) {
         guard let compute = commands.makeComputeCommandEncoder() else { return }
         let writeEffects = base != nil && effects != nil
         // With the effects' layer on, the fade is in it.
         var flags = HudFlags(hasUi: ui != nil ? 1 : 0, hasBase: base != nil ? 1 : 0,
                              ghost: ghost ? 1 : 0, writeEffects: writeEffects ? 1 : 0,
-                             fade: writeEffects ? .zero : fade)
+                             fade: writeEffects ? .zero : fade, flat: flat)
         compute.setComputePipelineState(self.hud)
         compute.setTexture(final, index: 0)
         compute.setTexture(scene, index: 1)
@@ -1027,7 +1135,7 @@ private struct Pipelines {
         return float4(max(after - before * (1.0 - a), 0.0), a);
     }
 
-    struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; float4 fade; };
+    struct HudFlags { uint hasUi, hasBase, ghost, writeEffects; float4 fade; float flat; };
 
     // The screen effects for the mirror's materials (gen-mirror-materials.py): each texel of the
     // layer from the pictures before and after them, filtered where it falls. The layer reaches
@@ -1155,6 +1263,19 @@ private struct Pipelines {
             const uint2 at = uint2(float2(id) * float2(ui.get_width(), ui.get_height()) /
                                    float2(hud.get_width(), hud.get_height()));
             colour = Over(ui.read(at), colour);
+        }
+        // Going to or from 2D: the game's own frame (its scene and HUD, opaque) over the mirror by
+        // `flat` (premultiplied, so a straight mix).
+        if (flags.flat > 0.0)
+        {
+            float4 picture = float4(drawn.rgb, 1);
+            if (flags.hasUi != 0)
+            {
+                const uint2 at = uint2(float2(id) * float2(ui.get_width(), ui.get_height()) /
+                                       float2(hud.get_width(), hud.get_height()));
+                picture = Over(ui.read(at), picture);
+            }
+            colour = mix(colour, picture, flags.flat);
         }
         hud.write(colour, id);
     }

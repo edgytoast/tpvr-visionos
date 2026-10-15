@@ -157,7 +157,9 @@ Combat › Sword Hand) and the shield your other hand.
 controllers held as one: right half Cross A, Circle B, R2 R (shield), R1 Z (Midna), Options Start; left half
 Square X, Triangle Y, L2 L (targeting), and the D-pad on L1 (up, item ring), Create (left, map),
 L3 (down, item ring) and R3 (right, map). Look at the game window to give it your controller, since visionOS hands a controller
-to whichever window you're looking at. Close the window to quit.
+to whichever window you're looking at. Close the window to quit. The round button just above the window's
+top-right corner shows Hyrule in 3D or, as the original, flat in 2D (on a gamepad, L1 and R3 together);
+the choice is kept.
 
 The game's settings (Dusklight's menu) open with a gamepad's View / Create button. With Sense
 controllers in Full and Progressive, hold Create and R2 together for a second; with bare hands, hold

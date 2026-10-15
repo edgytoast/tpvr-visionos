@@ -173,8 +173,13 @@ The app takes a few environment variables for headless runs (pass each as
   mirror kept and skipped. The scene mirror is the default;
   `TPVR_TEST_WINDOW_HOLD=<from>-<to>` sends the window to the background and back that
   many seconds after it appears (the game should hold, silent, in between);
+  `TPVR_TEST_WINDOW_DEPTH=2d|3d[,2d@<s>,3d@<s>...]` starts the window in 2D or 3D (over
+  the kept choice) and switches at those seconds after the launch;
+  `TPVR_TEST_WINDOW_FLAT_MIRROR=1` lays the mirror flat on the glass in 3D, to compare it
+  with the game's own frame (2D);
   `TPVR_TEST_MIRROR_ONE_LEVEL_MESH=1` fills the level's mesh on screen instead of the
-  other of its two; `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead,
+  other of its two; `TPVR_TEST_WINDOW_RELIEF=1` shows the relief instead (in 3D:
+  with 2D the kept choice, add `TPVR_TEST_WINDOW_DEPTH=3d`),
   `TPVR_TEST_MIRROR_DUMP=<frame>` writes that mirror frame (vertices, indices,
   parts, textures) into Documents/mirror-dump, which
   `visionos/scripts/render-mirror-dump.py` renders from the game camera (clear the

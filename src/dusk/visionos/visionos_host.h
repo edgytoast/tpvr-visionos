@@ -205,6 +205,13 @@ void dusk_visionos_set_mirror_enabled(bool enabled);
 // How far in front of its glass the window lets the scene come out, in window widths, and the
 // narrowest half-view tangent it shows as is (aurora::mirror::set_front_allowance).
 void dusk_visionos_set_mirror_front_allowance(float widths, float min_view_tangent);
+// The window's 2D/3D choice (visionos/App/Sources/WindowDepthToggle.swift): in 2D (false) the game
+// hands over only its finished frame, with no scene for the mirror or the window. From the next frame.
+void dusk_visionos_set_window_3d(bool three_d);
+// Whether the window shows the game's own frame (in 2D, or on the way to or from it): the game then
+// draws its depth of field even while mirroring, so the frame doesn't change as the mirror stops or
+// starts. From the next frame.
+void dusk_visionos_set_window_game_frame(bool shown);
 // The newest frame no later than game frame `up_to` (the window frame shown with it: the two then
 // match); its pointers last until the next call (main thread). False before the first.
 bool dusk_visionos_mirror_acquire(dusk_visionos_mirror_frame* frame, uint32_t up_to);

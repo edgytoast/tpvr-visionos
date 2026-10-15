@@ -13,4 +13,15 @@ enum TestHooks {
         nil
         #endif
     }
+
+    /// Seconds since the process started (the kernel's start time), for scripted steps a test
+    /// harness outside times its screenshots by.
+    static func secondsSinceLaunch() -> TimeInterval {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0 else { return 0 }
+        let start = info.kp_proc.p_un.__p_starttime
+        return Date().timeIntervalSince1970 - (TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1e6)
+    }
 }

@@ -66,6 +66,13 @@ std::atomic_bool g_enabled{false};
 dispatch_semaphore_t g_tick = dispatch_semaphore_create(0);
 // The window in the background (dusk_visionos_set_paused): begin_frame holds the game there.
 std::atomic_bool g_held{false};
+// The window's 2D/3D choice (dusk_visionos_set_window_3d): in 2D the window shows the game's own
+// frame, and none of the 3D's work is done (no mirror recording, no scene, depth or base copies).
+// Read once a frame, at its start.
+std::atomic_bool g_flat{false};
+// The window shows the game's own frame (dusk_visionos_set_window_game_frame): its depth of field
+// is drawn. Read once a frame, at its start.
+std::atomic_bool g_gameFrameShown{false};
 // Bumped whenever any slot's surfaces are (re)made: the app drops its textures over them.
 std::atomic<uint64_t> g_surfaceGeneration{1};
 
@@ -120,6 +127,8 @@ bool g_sceneThisFrame = false;
 bool g_scenePushed = false;  // this frame's scene task is on its way for g_frameSlot
 bool g_basePushed = false;   // and its base task (the picture before the screen effects)
 bool g_mirrorBegun = false;  // a scene-mirror frame was opened this frame, and must be closed
+bool g_frameFlat = false;    // this frame is 2D (g_flat at its start)
+bool g_frameShown = false;   // the window shows this frame as it is (g_gameFrameShown at its start)
 uint32_t g_gameFrame = 0;     // this frame's number (24 bits), shared by its window frame and mirror frame
 CameraInfo g_camera;
 
@@ -578,21 +587,25 @@ void begin_frame() {
     g_sceneThisFrame = false;
     g_scenePushed = false;
     g_basePushed = false;
+    g_frameFlat = g_flat.load(std::memory_order_relaxed);
+    g_frameShown = g_gameFrameShown.load(std::memory_order_relaxed);
     g_gameFrame = (g_gameFrame + 1) & 0xFFFFFFu;
     // The Sense controllers, if any, as a gamepad (no controller tracking outside a Full Space).
     sense_pad::update();
 #if TARGET_OS_SIMULATOR
     RunTestCommands();
 #endif
-    // The scene mirror records the frame's draws from here to before_hud().
-    if (aurora::mirror::enabled()) {
+    // The scene mirror records the frame's draws from here to before_hud(); in 2D it isn't asked
+    // to (it keeps what it knows, so 3D comes back without sending it all again).
+    if (aurora::mirror::enabled() && !g_frameFlat) {
         GXAuroraMirrorMark(AURORA_MIRROR_MARK_BEGIN, static_cast<float>(g_gameFrame));
         g_mirrorBegun = true;
     }
 }
 
 void note_scene(const view_class* view) {
-    if (!enabled() || view == nullptr) {
+    // In 2D the frame has no scene for the window: the finished frame is all it takes.
+    if (!enabled() || view == nullptr || g_frameFlat) {
         return;
     }
     g_sceneThisFrame = true;
@@ -630,6 +643,10 @@ void note_scene(const view_class* view) {
 
 bool mirroring() {
     return g_mirrorBegun;
+}
+
+bool game_frame_shown() {
+    return g_frameShown;
 }
 
 void scene_drawn() {
@@ -844,6 +861,14 @@ void dusk_visionos_set_mirror_enabled(bool enabled) {
 
 void dusk_visionos_set_mirror_front_allowance(float widths, float min_view_tangent) {
     aurora::mirror::set_front_allowance(widths, min_view_tangent);
+}
+
+void dusk_visionos_set_window_3d(bool three_d) {
+    g_flat.store(!three_d, std::memory_order_relaxed);
+}
+
+void dusk_visionos_set_window_game_frame(bool shown) {
+    g_gameFrameShown.store(shown, std::memory_order_relaxed);
 }
 
 static_assert(sizeof(dusk_visionos_mirror_vertex) == sizeof(aurora::mirror::Vertex));

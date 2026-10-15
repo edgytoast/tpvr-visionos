@@ -2732,8 +2732,11 @@ int mDoGph_Painter() {
                 // viewer's eyes do the focusing, and as a picture laid over the scene it blurs near
                 // and far together, which ghosted around faces in cutscenes as the viewer moved.
                 // Its frame and depth copies stay: the invisible lists next (water's refraction)
-                // sample them.
-                const bool copiesOnly = dusk::visionos::window::mirroring();
+                // sample them. While the window shows the game's own frame (on the way to or from
+                // 2D) it's drawn: the window's scene and base copies both come after it, so the
+                // HUD and the glow found from them don't take it in.
+                const bool copiesOnly = dusk::visionos::window::mirroring() &&
+                                        !dusk::visionos::window::game_frame_shown();
 #else
                 const bool copiesOnly = false;
 #endif

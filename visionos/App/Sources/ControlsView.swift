@@ -117,6 +117,7 @@ struct ControlsView: View {
     // The controls each drawing calls out: the ones that do something in that view.
     private static func gamepadControls(window: Bool) -> [String] {
         ["leftTrigger", "rightShoulder", "rightTrigger", "dpad", "leftStick", "view", "menu", "y", "x", "b", "a", "rightStick"]
+            + (window ? ["leftShoulder"] : [])
     }
 
     private static func senseControls(window: Bool) -> [String] {
@@ -290,7 +291,11 @@ struct ControlsView: View {
                     button(9, "Midna", "RB / R1", "rightShoulder"),
                     button(10, "Item ring and map", "D-pad: up or down for the ring, left or right for the map", "dpad"),
                     button(11, "Collection", "Menu / Options: gear and quest status", "menu"),
-                    button(12, "Settings", "View / Create opens Dusklight's menu", "view")]
+                    button(12, "Settings", "View / Create opens Dusklight's menu", "view"),
+                    // Neither is a game button in Dusklight's standard mapping: together they switch
+                    // the window (WindowDepthToggle.swift).
+                    button(13, "2D or 3D", "L1 + R3 together (LB + a right stick click), or the button above the window's corner",
+                           "leftShoulder", also: ["rightStick": "2D or 3D (click + left shoulder)"])]
         }
     }
 
@@ -306,9 +311,9 @@ struct ControlsView: View {
         case (.gamepad, false):
             "In Full and Progressive a gamepad plays the original game's buttons while you look around Hyrule. Sense controllers or your hands swing the sword for real."
         case (.sense, true):
-            "The Window view plays like the original game, and your Sense controllers act as one gamepad: R2 and Options together open Dusklight's menu. Look at the window to give it your controller."
+            "The Window view plays like the original game, and your Sense controllers act as one gamepad: R2 and Options together open Dusklight's menu. Look at the window to give it your controller. The button above its corner shows Hyrule in 3D or, as the original, in 2D."
         case (.gamepad, true):
-            "The Window view plays like the original game, and it needs a controller: visionOS gives apps no hand tracking outside Full and Progressive. Look at the window to give it your controller."
+            "The Window view plays like the original game, and it needs a controller: visionOS gives apps no hand tracking outside Full and Progressive. Look at the window to give it your controller. Hyrule shows in 3D or, as the original, in 2D."
         }
         // Top-aligned, so the chips stay put when the note under a tap is a line longer.
         return HStack(alignment: .top, spacing: 10) {
