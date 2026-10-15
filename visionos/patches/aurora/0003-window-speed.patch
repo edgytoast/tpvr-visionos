@@ -1,0 +1,190 @@
+From: edgytoast <146565462+edgytoast@users.noreply.github.com>
+Subject: [PATCH] Window speed: the FIFO's waits in the kernel, the mirror's lists grown geometrically
+
+From the Wind Waker port's 0106. visionOS's libc++ has no native atomic wait (its wait polls,
+oversleeping by up to half its wait, up to 64 ms at a time), so on visionOS the FIFO worker and
+drain() spin 50 us, then sleep on the address (os_sync_wait_on_address), woken only when they say
+they're asleep; AURORA_FIFO_KERNEL_WAIT=0 waits as before. The mirror's merge grows each material's index
+list geometrically instead of to the exact size per draw, and its finishing worker runs at
+user-interactive QoS.
+
+diff --git a/lib/gx/fifo.cpp b/lib/gx/fifo.cpp
+index bcaba60..7be3d1b 100644
+--- a/lib/gx/fifo.cpp
++++ b/lib/gx/fifo.cpp
+@@ -5,12 +5,22 @@
+ 
+ #include <algorithm>
+ #include <atomic>
++#include <cstdlib>
+ #include <cstring>
+ #include <limits>
+ #include <mutex>
+ 
+ #include <tracy/Tracy.hpp>
+ 
++#if defined(__APPLE__)
++#include <TargetConditionals.h>
++#endif
++#if defined(__APPLE__) && TARGET_OS_VISION
++#include <os/os_sync_wait_on_address.h>
++#include <sched.h>
++#include <time.h>
++#endif
++
+ namespace aurora::gx::fifo {
+ namespace detail {
+ uint8_t* sBufferData = nullptr;
+@@ -37,6 +47,26 @@ std::atomic<uint32_t> sWorkerWake{0};
+ thread::Thread sWorkerThread;
+ std::atomic<DrawDoneCallback> sDrawDoneCallback{nullptr};
+ 
++#if defined(__APPLE__) && TARGET_OS_VISION
++// visionos/patches/aurora/0003 (the Wind Waker port's 0106): the worker and drain() wait in the
++// kernel. visionOS's libc++ has no native atomic wait (its notify is a no-op and its wait polls,
++// sleeping half as long as it has waited so far, up to 64 ms at a time), so a drain woke late by
++// up to half its wait, and the worker, idle while the game ran its logic, took up to milliseconds
++// to see the next draw. Each side spins briefly first (draws come every few microseconds while the
++// game draws), then sleeps on the address (os_sync_wait_on_address); the other wakes it only when
++// it says it's asleep. visionOS only: other Apple systems' libc++ waits in the kernel already.
++std::atomic<uint32_t> sWorkerSleeping{0};
++std::atomic<uint32_t> sDrainSleeping{0};
++constexpr uint64_t kSpinNanos = 50'000;
++
++uint64_t now_nanos() noexcept { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
++// A test switch: AURORA_FIFO_KERNEL_WAIT=0 waits as before (std::atomic's wait), to compare.
++const bool kKernelWait = [] {
++  const char* value = std::getenv("AURORA_FIFO_KERNEL_WAIT");
++  return value == nullptr || std::strcmp(value, "0") != 0;
++}();
++#endif
++
+ void dispatch_draw_done() noexcept {
+   if (const auto callback = sDrawDoneCallback.load(std::memory_order_acquire); callback != nullptr) {
+     callback();
+@@ -44,6 +74,15 @@ void dispatch_draw_done() noexcept {
+ }
+ 
+ void wake_worker() noexcept {
++#if defined(__APPLE__) && TARGET_OS_VISION
++  if (kKernelWait) {
++    sWorkerWake.fetch_add(1, std::memory_order_seq_cst);
++    if (sWorkerSleeping.load(std::memory_order_seq_cst) != 0) {
++      os_sync_wake_by_address_any(&sWorkerWake, sizeof(uint32_t), OS_SYNC_WAKE_BY_ADDRESS_NONE);
++    }
++    return;
++  }
++#endif
+   sWorkerWake.fetch_add(1, std::memory_order_release);
+   sWorkerWake.notify_all();
+ }
+@@ -68,6 +107,15 @@ void process_to(uint64_t target, std::memory_order order) noexcept {
+       dispatch_draw_done();
+     }
+     processed += result.bytesProcessed;
++#if defined(__APPLE__) && TARGET_OS_VISION
++    if (kKernelWait) {
++      sProcessed.store(processed, std::memory_order_seq_cst);
++      if (sDrainSleeping.load(std::memory_order_seq_cst) != 0) {
++        os_sync_wake_by_address_all(&sProcessed, sizeof(uint64_t), OS_SYNC_WAKE_BY_ADDRESS_NONE);
++      }
++      continue;
++    }
++#endif
+     sProcessed.store(processed, order);
+     sProcessed.notify_all();
+   }
+@@ -87,7 +135,33 @@ void worker_main(std::stop_token token) noexcept {
+     if (token.stop_requested()) {
+       break;
+     }
++#if defined(__APPLE__) && TARGET_OS_VISION
++    if (!kKernelWait) {
++      sWorkerWake.wait(event, std::memory_order_acquire);
++      continue;
++    }
++    // A moment's spin (the next draw is usually microseconds away), then asleep until woken.
++    const uint64_t spinUntil = now_nanos() + kSpinNanos;
++    bool more = false;
++    while (now_nanos() < spinUntil) {
++      if (sPublished.load(std::memory_order_acquire) != processed || token.stop_requested()) {
++        more = true;
++        break;
++      }
++      sched_yield();
++    }
++    if (more) {
++      continue;
++    }
++    sWorkerSleeping.store(1, std::memory_order_seq_cst);
++    if (sWorkerWake.load(std::memory_order_seq_cst) == event &&
++        sPublished.load(std::memory_order_seq_cst) == processed && !token.stop_requested()) {
++      os_sync_wait_on_address(&sWorkerWake, event, sizeof(uint32_t), OS_SYNC_WAIT_ON_ADDRESS_NONE);
++    }
++    sWorkerSleeping.store(0, std::memory_order_seq_cst);
++#else
+     sWorkerWake.wait(event, std::memory_order_acquire);
++#endif
+   }
+ }
+ 
+@@ -250,6 +324,22 @@ void drain() {
+     wake_worker();
+ 
+     uint64_t processed = sProcessed.load(std::memory_order_acquire);
++#if defined(__APPLE__) && TARGET_OS_VISION
++    if (processed < target && kKernelWait) {
++      const uint64_t spinUntil = now_nanos() + kSpinNanos;
++      while (processed < target && now_nanos() < spinUntil) {
++        sched_yield();
++        processed = sProcessed.load(std::memory_order_acquire);
++      }
++      if (processed < target) {
++        sDrainSleeping.store(1, std::memory_order_seq_cst);
++        while ((processed = sProcessed.load(std::memory_order_seq_cst)) < target) {
++          os_sync_wait_on_address(&sProcessed, processed, sizeof(uint64_t), OS_SYNC_WAIT_ON_ADDRESS_NONE);
++        }
++        sDrainSleeping.store(0, std::memory_order_seq_cst);
++      }
++    }
++#endif
+     if (processed < target) {
+       do {
+         sProcessed.wait(processed, std::memory_order_acquire);
+diff --git a/lib/gx/mirror.cpp b/lib/gx/mirror.cpp
+index 5910998..c467fca 100644
+--- a/lib/gx/mirror.cpp
++++ b/lib/gx/mirror.cpp
+@@ -48,6 +48,7 @@
+ 
+ #if defined(__APPLE__)
+ #include <dispatch/dispatch.h>
++#include <pthread/qos.h>
+ #endif
+ 
+ namespace aurora::gx::mirror {
+@@ -2181,7 +2182,11 @@ void merge_jobs() {
+       g_decalRanges.emplace_back(base, static_cast<uint32_t>(g_building.vertices.size()));
+     }
+     auto& indices = g_groups[job.group].indices;
+-    indices.reserve(indices.size() + job.triangles.size());
++    // Room grown geometrically (0003): reserved to the exact size each time, a material drawn in
++    // many draws copied its whole list for every one of them.
++    if (const size_t needed = indices.size() + job.triangles.size(); indices.capacity() < needed) {
++      indices.reserve(std::max(needed, indices.capacity() * 2));
++    }
+     const size_t before = indices.size();
+     for (size_t t = 0; t + 2 < job.triangles.size(); t += 3) {
+       const uint32_t a = job.triangles[t], b = job.triangles[t + 1], c = job.triangles[t + 2];
+@@ -2896,6 +2901,11 @@ void finish(Job& job) {
+ }
+ 
+ void worker_main() {
++#if defined(__APPLE__)
++  // At the default QoS it lost the cores to the game and took several times its work in wall
++  // time, dropping mirror frames (the Wind Waker port measured 30 ms for 3 ms of work at sea).
++  pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
++#endif
+   Job work;
+   while (true) {
+     {

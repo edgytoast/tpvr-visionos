@@ -86,6 +86,12 @@ git submodule update --recursive extern/aurora extern/borealis
 
 apply_series() {
     local dir="$1" target="$2"
+    # The whole series already in place: nothing to do. (Checked whole first: a later patch can
+    # change a file an earlier one adds, which then neither applies nor reverses on its own.)
+    if matches "${dir}" "${target}"; then
+        echo "already applied: ${dir} (${target})"
+        return
+    fi
     shopt -s nullglob
     # Absolute paths: `git -C <submodule> apply` opens a relative patch path from inside the
     # submodule, where it doesn't exist (a fresh clone stopped here).
