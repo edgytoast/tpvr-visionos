@@ -91,6 +91,7 @@ enum class SlotState { Free, Writing, Ready, Reading };
 struct CameraInfo {
     float tanHalfX = 0, tanHalfY = 0, focus = 0, nearZ = 0, farZ = 0;
     float subject = 0;  // the player's nearest view depth (0: none), for the mirror (AURORA_MIRROR_MARK_SUBJECT)
+    float sill = 0;     // where the picture's foot meets his ground (0: none), for it too (AURORA_MIRROR_MARK_SILL)
 };
 
 // A frame on its way to the app. While Writing it belongs to the game thread (which fills the
@@ -638,6 +639,25 @@ void note_scene(const view_class* view) {
                             std::fabs(up) <= 1.25f * g_camera.tanHalfY * depth);
         }
         g_camera.subject = seen && std::isfinite(nearest) ? std::max(nearest - 50.f, 0.f) : 0.f;
+        // Where the middle of the picture's foot meets the ground he stands on (taken as level, at
+        // his feet), as a view depth: the window keeps the ground there at or behind its glass, so it
+        // doesn't come out in front of it (AURORA_MIRROR_MARK_SILL). Only with him in the picture
+        // (a film's camera elsewhere has other ground), and the foot looking down at the ground.
+        g_camera.sill = 0;
+        if (seen) {
+            const float fx = m[0][0] * at.x + m[0][1] * at.y + m[0][2] * at.z + m[0][3];
+            const float fy = m[1][0] * at.x + m[1][1] * at.y + m[1][2] * at.z + m[1][3];
+            const float fz = m[2][0] * at.x + m[2][1] * at.y + m[2][2] * at.z + m[2][3];
+            const float ux = m[0][1], uy = m[1][1], uz = m[2][1];  // the world's up, in view space
+            // Along (0, -tanY, -1) per unit of depth: down towards the ground?
+            const float down = -uy * g_camera.tanHalfY - uz;
+            if (down < -1e-3f) {
+                const float depth = (ux * fx + uy * fy + uz * fz) / down;
+                g_camera.sill = std::isfinite(depth) && depth > 0.f ? depth : 0.f;
+            }
+        }
+    } else {
+        g_camera.sill = 0;
     }
 }
 
@@ -660,6 +680,7 @@ void scene_drawn() {
             g_mirrorBegun = false;
             if (g_sceneThisFrame) {
                 GXAuroraMirrorMark(AURORA_MIRROR_MARK_SUBJECT, g_camera.subject);
+                GXAuroraMirrorMark(AURORA_MIRROR_MARK_SILL, g_camera.sill);
             }
             GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
                                g_camera.focus);
@@ -694,6 +715,7 @@ void before_hud() {
                 g_mirrorBegun = false;
                 if (g_sceneThisFrame) {
                     GXAuroraMirrorMark(AURORA_MIRROR_MARK_SUBJECT, g_camera.subject);
+                    GXAuroraMirrorMark(AURORA_MIRROR_MARK_SILL, g_camera.sill);
                 }
                 GXAuroraMirrorMark(g_sceneThisFrame ? AURORA_MIRROR_MARK_END : AURORA_MIRROR_MARK_NO_SCENE,
                                    g_camera.focus);

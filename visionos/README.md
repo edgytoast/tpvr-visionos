@@ -156,9 +156,16 @@ The app takes a few environment variables for headless runs (pass each as
   at the glass and squashes what's nearer into a band behind it, as before (the
   band bent the ground near the camera); `TPVR_TEST_WINDOW_SIZE=<factor>` opens
   the window that much larger (past about 1.28 m wide, the near cut moves towards
-  the glass); `AURORA_MIRROR_NEAR=raw` leaves what the mirror has nearer
-  than the glass as it is (no compression, no near cut: the window's foot shows
-  the sky, as before the strip fix); `AURORA_MIRROR_LOOKUPS=0` averages the
+  the glass); what the mirror has nearer than the glass keeps its shape and is
+  cut where it would come out past the window's allowance: `AURORA_MIRROR_NEAR=ease`
+  compresses it into the allowance instead, as before 2026-10-17 (the ground at the
+  window's foot creased and swam), and `=raw` leaves it all (visionOS cuts it about
+  0.47 m out); the glass comes no farther than where the ground at Link's feet
+  meets the picture's foot, so that ground never comes out in front of it
+  (`AURORA_MIRROR_GLASS=focus` keeps the glass at the camera's focus alone, as before);
+  `AURORA_MIRROR_PLANE_SECONDS=<s>` sets how slowly the glass's distance,
+  and with it the world's scale, follows the camera's focus (1 by default, 0 at once,
+  as before); `AURORA_MIRROR_LOOKUPS=0` averages the
   textures a draw projects onto the scene (TP's cloud shadows) instead of reading
   them at each vertex; `AURORA_MIRROR_CLAMP_ENDS=1` fits the TEV's clamps through
   T 0 and 1 again (the ranch's ground lost a fifth of its red); `AURORA_MIRROR_LOG=3`

@@ -191,6 +191,21 @@ owns the swapchain images and Dawn imports them.
       way, telephoto shots included. `minViewTangent`'s squash of a narrow view's depths (to the
       picture from 0.7's camera) flattened close-ups' faces; such a shot's camera now sits farther
       out, as a real window's would. The relief (the fallback) keeps it.
+- [x] The ground at the window's foot true and still (2026-10-17, Trevor on the headset: "the floor
+      still ain't right, it's bendy... the ground on the bottom of the camera moving so strangely
+      that it fucks with spatial reasoning"; things cut by the near plane he can live with). The
+      compression of what's nearer than the glass into the window's allowance bent everything
+      nearer than the glass, needed or not, creased the ground where it began, and the crease
+      followed Link and the camera. Now nothing is bent: what would come out past the allowance is
+      cut. Cut alone left sky under the ground's cut edge along the window's foot for anyone
+      farther away than the camera's place (5% of the window's height straight on in the
+      Simulator), so the glass comes no farther than where the picture's foot meets the ground at
+      Link's feet (AURORA_MIRROR_MARK_SILL, from note_scene; at least half the focus): that ground
+      lies on the glass, as through a real window, and never in front. At the ranch the glass goes
+      from 493 to 333 units: the picture from the camera's place is the same, Link sits deeper. The
+      glass's distance, the world's scale with it, follows over a second, so the camera closing on
+      Link and backing off moves the world rather than rescaling it (Trevor: "a little fast and
+      jittery").
 - [x] The window's lighting as the game's (2026-10-10, Trevor: "the lighting is clearly much
       better in the actual 2D game... like shaders/RTX turned off"). Three gaps, against the
       game's own frames from the same game frame (TPVR_TEST_DUMP_AT):

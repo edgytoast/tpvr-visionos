@@ -202,8 +202,9 @@ typedef struct dusk_visionos_mirror_frame {
 // Whether the window wants the mirror (set before or while it shows). Turning it on sends every
 // texture again.
 void dusk_visionos_set_mirror_enabled(bool enabled);
-// How far in front of its glass the window lets the scene come out, in window widths, and the
-// narrowest half-view tangent it shows as is (aurora::mirror::set_front_allowance).
+// How far in front of its glass the window lets the scene come out, in window widths (what would
+// come out farther is cut), and the narrowest half-view tangent it shows as is (0: every view's own;
+// aurora::mirror::set_front_allowance).
 void dusk_visionos_set_mirror_front_allowance(float widths, float min_view_tangent);
 // The window's 2D/3D choice (visionos/App/Sources/WindowDepthToggle.swift): in 2D (false) the game
 // hands over only its finished frame, with no scene for the mirror or the window. From the next frame.
