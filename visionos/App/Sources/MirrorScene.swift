@@ -123,8 +123,6 @@ final class MirrorScene {
     private(set) var whole = false
     /// The view distance the glass is at (game units), as last placed.
     private(set) var plane: Float = 1
-    /// How much depths are compressed for a narrow view (1 for a normal one), as last placed.
-    private(set) var depthScale: Float = 1
     private static let cullTest = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_CULL"] ?? ""
     private static let addRed = ProcessInfo.processInfo.environment["TPVR_TEST_MIRROR_ADD_RED"] == "1"
 
@@ -330,24 +328,23 @@ final class MirrorScene {
         return true
     }
 
-    /// View space into window units: the window spans the camera's view at the frame's `plane` (a
-    /// little short of its focus; what's nearer comes out in front of it), so the camera sits
-    /// 1 / (2 tan) window widths in front of the glass. A narrower view than
-    /// ReliefParams.minViewTangent (a cutscene's telephoto shot) has its depths compressed to the
-    /// picture it would have from a camera that close, which is the same picture; left as it was,
-    /// its camera sat two window widths out and anyone nearer saw past the edges of what the game
-    /// drew.
+    /// View space into window units, one scale every way: the window spans the camera's view at the
+    /// frame's `plane` (a little short of its focus; what's nearer comes out in front of it), so the
+    /// camera sits 1 / (2 tan) window widths in front of the glass, telephoto shots included. True
+    /// shapes and eyes that agree come before the 2D framing (Trevor, 2026-10-16, on the Wind Waker
+    /// port's depth stretched for a farther viewer: "Link's head is an egg shape"): a narrow view's
+    /// depths were squashed here (to the picture from 0.7's camera), which flattened close-ups'
+    /// faces too. Its camera now sits farther out, as a real window's would: nearer than that, you
+    /// see past the edges of what the game drew.
     private func place(_ frame: dusk_visionos_mirror_frame) {
         let plane = Self.glassPlane(frame)
         let tan = frame.tan_half_x
-        let depthScale = tan / max(tan, ReliefParams.minViewTangent)
         self.plane = plane
-        self.depthScale = depthScale
         let scale = 1 / (2 * plane * tan)
         // The glow layer reaches past the view by glowReach (Pipelines' GlowReach).
         setConstants(SIMD2(1 / tan, 1 / max(frame.tan_half_y, 1e-3)) / Self.glowReach)
-        root.scale = SIMD3(scale, scale, scale * depthScale)
-        root.position = [0, 0, scale * depthScale * plane]
+        root.scale = SIMD3(repeating: scale)
+        root.position = [0, 0, scale * plane]
         let far = max(-frame.bounds_min.2, plane) * 1.05
         let wide = 2 * far * max(tan, ReliefParams.minViewTangent) * 8
         backdrop.position = [0, 0, -far]
@@ -542,8 +539,7 @@ final class MirrorScene {
 
     /// The vertex at `vertex` moved `amount` of the way along its line of sight onto the glass, at
     /// view depth `plane` (WindowDepth's flattening): from the game camera's place the picture is the
-    /// same at any amount (and with place()'s depth compression too: it scales depths about the
-    /// camera). Flat, it keeps its order in depth in a thin band about the glass (`flatBand` of the
+    /// same at any amount. Flat, it keeps its order in depth in a thin band about the glass (`flatBand` of the
     /// glass's distance either side: what's nearer than the glass in front of it, the sky at the
     /// back): laid on one plane, everything at one depth, the first part drawn hid the rest (the
     /// Wind Waker port's sky took the whole picture).

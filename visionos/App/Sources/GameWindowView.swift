@@ -255,7 +255,8 @@ final class GameScreen {
         }
         if bounds.extents != loggedExtents {
             loggedExtents = bounds.extents
-            dusk_visionos_set_mirror_front_allowance(frontAllowance / max(bounds.extents.x, 0.01), ReliefParams.minViewTangent)
+            // The camera where its own view puts it (no narrowest view: MirrorScene.place).
+            dusk_visionos_set_mirror_front_allowance(frontAllowance / max(bounds.extents.x, 0.01), 0)
             print(String(format: "[TPVR] window: %.3f x %.3f x %.3f m, from z %.3f to %.3f in the view's scene",
                          bounds.extents.x, bounds.extents.y, bounds.extents.z, bounds.min.z, bounds.max.z))
         }
@@ -440,8 +441,7 @@ final class GameScreen {
                 layer = effectsTexture.replace(using: commands)
                 // Laid out as the mirror is: the glass spans the camera's view at the mirror's plane.
                 var params = EffectsGridParams(tanHalf: [frame.tan_half_x, frame.tan_half_y], planeDistance: mirror.plane,
-                                               columns: UInt32(effectsGrid.x), rows: UInt32(effectsGrid.y), radius: 8,
-                                               depthScale: mirror.depthScale)
+                                               columns: UInt32(effectsGrid.x), rows: UInt32(effectsGrid.y), radius: 8)
                 pipelines.effectsGrid(commands, distance: distance, params: &params,
                                       positions: effectsMesh.replace(bufferIndex: 0, using: commands))
             }
@@ -818,7 +818,6 @@ private struct EffectsGridParams {
     var columns: UInt32
     var rows: UInt32
     var radius: UInt32
-    var depthScale: Float
 }
 
 private struct GlowFlags {
@@ -1186,12 +1185,11 @@ private struct Pipelines {
         glow.write(effect, id);
     }
 
-    struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; float depthScale; };
+    struct EffectsGridParams { float2 tanHalf; float planeDistance; uint columns, rows, radius; };
 
     // The screen effects' layer, laid out as the scene mirror is (the glass spans the camera's view
-    // at planeDistance, depths times depthScale): each vertex at the nearest distance within
-    // `radius` pixels, so a glow just outside a figure stays on the figure; never in front of the
-    // glass.
+    // at planeDistance): each vertex at the nearest distance within `radius` pixels, so a glow just
+    // outside a figure stays on the figure; never in front of the glass.
     kernel void WindowEffectsGrid(texture2d<float, access::read> distance [[texture(0)]],
                                   device packed_float3* positions [[buffer(0)]],
                                   constant EffectsGridParams& p [[buffer(1)]],
@@ -1217,7 +1215,7 @@ private struct Pipelines {
         const float tanX = mix(-p.tanHalf.x, p.tanHalf.x, u), tanY = mix(p.tanHalf.y, -p.tanHalf.y, v);
         const float scale = 1.0 / (2.0 * p.planeDistance * p.tanHalf.x);
         positions[id.y * (p.columns + 1) + id.x] = packed_float3(scale * tanX * nearest, scale * tanY * nearest,
-                                                                 scale * p.depthScale * (p.planeDistance - nearest));
+                                                                 scale * (p.planeDistance - nearest));
     }
 
     // The HUD is whatever the game drew over its scene: pixels the 2D pass changed, as the least

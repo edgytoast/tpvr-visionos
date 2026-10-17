@@ -186,6 +186,11 @@ owns the swapchain images and Dawn imports them.
       Ordon Ranch with a goat beside the camera). `minViewTangent` (0.7) doesn't come into it: TP's
       gameplay cameras are 0.72 wide (0.71 indoors), and it squashes depth linearly, which bends
       nothing.
+- [x] True shapes before the 2D framing (2026-10-16, Trevor's rule after the Wind Waker port's
+      depth stretch: "Link's head is an egg shape"): the mirror is laid out with one scale every
+      way, telephoto shots included. `minViewTangent`'s squash of a narrow view's depths (to the
+      picture from 0.7's camera) flattened close-ups' faces; such a shot's camera now sits farther
+      out, as a real window's would. The relief (the fallback) keeps it.
 - [x] The window's lighting as the game's (2026-10-10, Trevor: "the lighting is clearly much
       better in the actual 2D game... like shaders/RTX turned off"). Three gaps, against the
       game's own frames from the same game frame (TPVR_TEST_DUMP_AT):
